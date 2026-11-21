@@ -106,14 +106,38 @@ FunctionEnd
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
 
+; ── Progress reporting ────────────────────────────────────────────────────────
+; NSIS installs file by file, and the stock instfiles page prints one
+; `Extract: <path>` line per file in the status strip. The payload is ~100k
+; files (Next server, node_modules, the vendored Python tree), so that reads as
+; a frozen installer printing paths forever — the single most common "is it
+; stuck?" report. Keep the per-file list in the DETAILS pane (where it is useful
+; for support) and report coarse phases in the status strip instead. This
+; changes what is displayed, not how long the work takes.
+!macro BeginPhase TEXT
+  DetailPrint "${TEXT}"
+  SetDetailsPrint listonly
+!macroend
+!macro EndPhase TEXT
+  SetDetailsPrint both
+  DetailPrint "${TEXT}"
+!macroend
+
 Section "Black Eclipse" SecMain
   SetOutPath "$INSTDIR"
   ; Replace the payload atomically enough: remove the old application tree first
   ; so removed files from a previous version cannot linger. NEVER touch the data
-  ; directory, which is a sibling of $INSTDIR, not inside it.
+  ; directory, which is a sibling of $INSTDIR, not inside it. Removing the old
+  ; tree is also file-by-file, so it gets a phase of its own instead of a silent
+  ; pause before the bar appears to move.
+  !insertmacro BeginPhase "Removing the previous version..."
   RMDir /r "$INSTDIR\app"
   RMDir /r "$INSTDIR\runtime"
+  !insertmacro EndPhase "Previous version removed"
+
+  !insertmacro BeginPhase "Installing application files (this can take a few minutes)..."
   File /r "${SRCDIR}\*.*"
+  !insertmacro EndPhase "Application files installed"
 
   WriteRegStr HKCU "Software\BlackEclipse" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\BlackEclipse" "Version" "${APP_VERSION}"
@@ -144,7 +168,9 @@ Section "Black Eclipse" SecMain
   ; platform. The list is generated at build time (a pack such as winsdk has no
   ; Linux wheel), so NSIS does not hard-code it.
   SetOutPath "$INSTDIR\app\scripts\vendor\python\Lib\site-packages"
+  !insertmacro BeginPhase "Installing the offline feature packs..."
   !include "${PACKSINCLUDE}"
+  !insertmacro EndPhase "Offline feature packs installed"
 !endif
 
   ; Start Menu
@@ -207,6 +233,10 @@ FunctionEnd
 Section "Uninstall"  ; Stop a running instance so files are not locked.
   nsExec::Exec 'taskkill /IM "Black Eclipse.exe" /F'
 
+  ; Same reason as install: the removal is file by file (~100k), so report a
+  ; phase instead of streaming every deleted path through the status strip.
+  !insertmacro BeginPhase "Removing application files..."
+
   Delete "$SMPROGRAMS\Black Eclipse\Black Eclipse.lnk"
   Delete "$SMPROGRAMS\Black Eclipse\Uninstall Black Eclipse.lnk"
   RMDir "$SMPROGRAMS\Black Eclipse"
@@ -220,6 +250,7 @@ Section "Uninstall"  ; Stop a running instance so files are not locked.
   Delete "$INSTDIR\Black Eclipse.exe"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"
+  !insertmacro EndPhase "Application files removed"
 
   ; Deliberately NOT deleted: "$LOCALAPPDATA\BlackEclipse\data"
   ; Reinstalling keeps the user's database, journals and settings.

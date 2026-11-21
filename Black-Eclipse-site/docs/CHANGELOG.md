@@ -123,6 +123,31 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 - **chore(oss): regenerate `sbom.cdx.json` + `THIRD-PARTY-NOTICES.md`** for the
   current lockfiles. no doc change — generated artifacts.
 
+- **fix(installer): the Windows setup window showed one `Extract:` line per
+  file instead of phases.** NSIS writes the payload file by file (~100k files:
+  Next server, `node_modules`, vendored Python), and the stock instfiles page
+  printed every path in the status strip, which reads as a hung installer and is
+  the main "why is setup so slow?" report. `desktop/installer/BlackEclipse.nsi`
+  now reports three coarse phases in the status strip — removing the previous
+  version, installing application files, offline packs — and keeps the per-file
+  list in the **Show details** pane via `SetDetailsPrint listonly`. Removing the
+  previous tree also gets a phase instead of a silent pause, and the uninstaller
+  reports the same way. This changes what is displayed, not how long the
+  file-by-file install takes. Verified the script compiles with `makensis`
+  against a stub payload. Docs updated: `docs/install.md` (what the setup window
+  shows and why the list is long).
+
+- **chore(installer): measured the archive-extraction alternative and kept the
+  NSIS path.** A synthetic payload shaped like ours (19,602 files, 144 MB; 400
+  dirs of tiny modules plus one 120 MB blob) was timed installing silently three
+  times each way: stock `File /r` took 28.1 / 45.8 / 26.1 s, a single 7-Zip
+  archive extracted with `7za` took 131.9 / 27.1 / 21.0 s. The spread, not the
+  median, is the finding: per-file writes and Defender scanning dominate and are
+  noisy, so the ~17% best case does not justify a vendored third-party `7za`
+  binary plus a progress bar that stalls inside one `nsExec` call. The real lever
+  stays the payload's ~100k file count, not the decompressor. no doc change —
+  measurement only, nothing shipped from it.
+
 ## 2026-11-20
 
 - **fix(updates): the CLI manifest fetch bypasses the CDN edge cache.** Same

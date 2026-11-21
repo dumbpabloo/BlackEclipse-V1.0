@@ -1,7 +1,7 @@
 ---
 title: Install
 status: Current
-last-verified: 2026-11-19
+last-verified: 2026-11-21
 ---
 
 # Install
@@ -52,6 +52,13 @@ Windows installs per-user to `%LOCALAPPDATA%\Programs\BlackEclipse` (no
 administrator prompt). Linux installs the `.deb` through `apt-get`/`dpkg`, and
 macOS copies `Black Eclipse.app` to `/Applications` — both paths work in the
 scripts but are dormant until those artifacts are published.
+
+The Windows setup window reports a few **coarse phases** — removing the previous
+version, installing application files, offline packs — instead of one line per
+file. The file-by-file list still exists behind **Show details**, and it is long
+by nature: the payload is roughly 100,000 files (the Next server, `node_modules`
+and the vendored Python tree). An install or update therefore takes minutes and
+the progress bar is the honest signal; it is not stuck.
 
 ## What the scripts verify - and what they do not
 
