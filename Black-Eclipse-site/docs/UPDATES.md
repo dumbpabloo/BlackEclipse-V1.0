@@ -183,7 +183,7 @@ would fail with "Could not reach the update service", which is worse than an
 honest "not published yet".
 
 Because the manifest is a release asset, it must be re-signed and re-uploaded for
-**every** release. The current published one describes v0.4.15 — bump, re-sign,
+**every** release. The current published one describes v0.4.23 - bump, re-sign,
 re-upload, then publish the draft, in that order.
 
 > Keeping the **source** private forever means there is nothing for `black update`
