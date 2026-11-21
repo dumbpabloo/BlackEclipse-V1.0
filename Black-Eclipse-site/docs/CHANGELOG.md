@@ -148,6 +148,16 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
   stays the payload's ~100k file count, not the decompressor. no doc change —
   measurement only, nothing shipped from it.
 
+- **release: v0.4.23.** Same application code as v0.4.22; the only change is
+  the Windows installer's progress reporting (coarse phases in the status strip,
+  the per-file list behind **Show details**), so a downloader no longer sees
+  setup print every extracted path. Version bumped in `package.json`,
+  `pyproject.toml` and `python/harness/__init__.py` — the first release where
+  all three agree (v0.4.22 left the harness at 0.4.21). The tag drives
+  `desktop-release.yml` (Windows slim + offline installers, packs, and the
+  signed prebuilt build); the draft release is published and `stable.json`
+  signed + uploaded only after the assets are verified.
+
 ## 2026-11-20
 
 - **fix(updates): the CLI manifest fetch bypasses the CDN edge cache.** Same
