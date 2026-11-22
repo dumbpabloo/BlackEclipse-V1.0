@@ -135,12 +135,12 @@ Updates are **published**: the repository is
 `"published": true`. A live check verifies the newest signed manifest and offers
 it as soon as it is newer than the running build.
 
-**v0.4.25 is published** (2026-11-22, signed with key id `47e545f302249385`) and
-carries both `builds` (`any` — `BlackEclipse-Build-0.4.24.zip`, 67 MB, buildId
-`ILX78pWqul1B1zj5iDdrT`) and `installers` (`win32-x64`), so a checkout updates by
+**v0.4.26 is published** (2026-11-22, signed with key id `47e545f302249385`) and
+carries both `builds` (`any` — `BlackEclipse-Build-0.4.26.zip`, 80 MB, buildId
+`0WON5LtNn3FoxiJCt1MF-`) and `installers` (`win32-x64`), so a checkout updates by
 download + verified promotion and a packaged install by the signed installer.
 The public `stable.json` verifies against the committed key and
-`node scripts/update.js --check` reports `latest signed release: v0.4.24`.
+`node scripts/update.js --check` reports `latest signed release: v0.4.26`.
 **Every later release must sign `--build-*`** (see *Release builds* and
 *Publishing a release*); the release workflow builds and attaches the archive
 but never holds the signing key, so **sign and upload `stable.json` while the
@@ -181,7 +181,7 @@ would fail with "Could not reach the update service", which is worse than an
 honest "not published yet".
 
 Because the manifest is a release asset, it must be re-signed and re-uploaded for
-**every** release. The current published one describes v0.4.25 - bump, re-sign,
+**every** release. The current published one describes v0.4.26 - bump, re-sign,
 re-upload, then publish the draft, in that order.
 
 > Keeping the **source** private forever means there is nothing for `black update`

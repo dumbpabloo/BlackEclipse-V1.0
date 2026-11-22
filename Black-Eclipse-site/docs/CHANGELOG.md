@@ -6,6 +6,15 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-22
 
+- **release: v0.4.26 is published.** `desktop-release` built the Windows installer, the offline `-full` installer
+  and the `any` build artifact; `stable.json` was signed locally with key id `47e545f302249385`
+  (commit `f36ed0af`, buildId `0WON5LtNn3FoxiJCt1MF-`, build sha256 `2440c63f…`), uploaded while the release was
+  still a draft, and only then published. `node scripts/update.js --check` reports
+  `latest signed release: v0.4.26` and `npm run check:downloads` passes against the corrected repository.
+  The PyPI half is still skipped: the repo has no `PYPI_API_TOKEN`, so `publish-harness` builds and verifies
+  the wheel/sdist and skips the upload.
+  docs updated: `docs/UPDATES.md`.
+
 - **release: v0.4.26 - the parity work is finally in a tagged release.** The `v0.4.25` tag pointed at `main`
   (`bc14abb6`), which did **not** contain the 14 `coding-parity` commits (Vibe-Trading parity + trade safety
   stack, coding gaps #14-#18, Trust Mode autoland, the dependency audit). `main` fast-forwarded to
