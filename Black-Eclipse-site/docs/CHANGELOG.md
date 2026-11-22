@@ -6,6 +6,11 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-22
 
+- **release: v0.4.24.** Version bumped in `package.json`, `pyproject.toml` and `harness.__version__`; `scripts/release-check.js`
+  reports package 0.4.24 / API 1.0.0. Tag and release assets are produced by the desktop workflow; the signed
+  `release/stable.json` is uploaded after the draft exists.
+  docs updated: `docs/CHANGELOG.md`.
+
 - **fix(updates): point the published manifest at the real repository.** `config/updates.json` said
   `dumbpabloo/black-eclipse` while the remote is `dumbpabloo/BlackEclipse-V1.0`; every manifest URL would resolve to the
   wrong repo. Corrected; `src/lib/updates` tests pass (36). Release publishing itself still needs an authenticated GitHub
