@@ -6,6 +6,28 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-22
 
+- **fix(desktop): resolve the Python runtime and harness source from the project root, not the process cwd.** A pinned
+  desktop release runs Next with a cwd inside `releases/stable/<build>`, so `findPython()` looked for
+  `scripts/vendor/python` there and reported “Python with agent dependencies not found”; the spawn also looked for
+  `python/harness/main.py` under the wrong root. Added `findProjectRoot()` (walks cwd + module dir up to the checkout) and
+  used it for the vendored interpreter, the spawn app dir and the harness source-mtime check. 5 runtime-config tests pass;
+  front door now serves 200 (`/api/harness/agents`).
+  docs updated: `docs/CHANGELOG.md`.
+
+- **feat(comparison): the CROSS-MODEL condition ran - Eclipse leads on a second model too
+  (`glm-5.3-flash`): 0.8333 vs 0.7847**, honesty 1.000 vs 0.917, grounding tied. With the
+  DeepSeek set (0.8264 vs 0.7998) and the 8-task extension (0.8490 vs 0.8073), the
+  direction now holds across two live models.
+  - **Fairness defect fixed first:** Eclipse's default run wall clock is **120 s**; two glm
+    runs died at the deadline while the reference has no wall clock. The comparison gives
+    Eclipse 420 s (still bounded) and both tasks were re-run (0.2500 -> 0.5000 and
+    0.2500 -> 0.8750). Without this the table would have measured a timeout, not a harness.
+  - **§7.1/§7.2 updated:** the claim now says "leads on both models tested", and the
+    "cross-model absent" text is corrected. Still not "best in the world": two flash models,
+    one machine, a rubric that does not score P&L.
+  Tests: rubric/register + line-ending/changelog guards (run after the doc edits).
+  Docs: `docs/harness/vibe-trading-analysis.md` §7.1 and §7.2 (round 7).
+
 - **docs(trade): autonomous LIVE trading is documented as ENABLED and earned - the old
   "P5 not enabled / mandates are demo-only" text was stale.** No gate was removed: the
   chain is L2 authority -> proof (out-of-sample + 30 demo fills over 14 days) -> ramp
