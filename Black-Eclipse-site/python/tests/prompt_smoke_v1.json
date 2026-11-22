@@ -1,0 +1,108 @@
+{
+  "datasetName": "prompt-smoke",
+  "datasetVersion": "1.0.0",
+  "schemaVersion": 1,
+  "reviewed": true,
+  "reviewer": "eclipse-prompt-smoke",
+  "reviewedAt": "2026-11-22",
+  "notes": "Short user-style prompts run through the REAL graph with the deterministic ScriptedModel. They exercise the answer path, memory tools, filesystem tools and the mock service seam. No production data.",
+  "metadata": {
+    "tiers": {"0": "deterministic"},
+    "oracleExempt": true,
+    "oracleReason": "prompt smoke: behaviour and tool contract, not recomputed finance values",
+    "contamination": {"source": "authored", "authoredAt": "2026-11-22"}
+  },
+  "tasks": [
+    {
+      "id": "prompt.answer.001",
+      "version": 1,
+      "name": "Answer a direct prompt",
+      "description": "The smallest prompt turn: produce the requested token.",
+      "category": "core",
+      "difficulty": "easy",
+      "input": {"prompt": "Reply with the single word PLUGIN_READY."},
+      "expected_output": {"equals": "PLUGIN_READY"},
+      "graders": [{"name": "exact"}],
+      "limits": {"max_turns": 4, "max_tool_calls": 4},
+      "metadata": {
+        "tier": 0, "suites": ["prompt-smoke"], "split": "validation",
+        "agent_script": [{"type": "final", "content": "PLUGIN_READY"}]
+      }
+    },
+    {
+      "id": "prompt.memory.001",
+      "version": 1,
+      "name": "Remember and recall a value",
+      "description": "A prompt that must store then read a memory, then answer with it.",
+      "category": "tools",
+      "difficulty": "medium",
+      "input": {"prompt": "Store answer=plugin in memory, read it back, then answer with it."},
+      "environment": {"type": "memory"},
+      "initial_state": {"memory": {}},
+      "expected_state": {"memory": {"answer": "plugin"}},
+      "expected_tools": ["eval_memory_write", "eval_memory_read"],
+      "required_tools": ["eval_memory_write", "eval_memory_read"],
+      "expected_output": {"contains": ["plugin"]},
+      "graders": [{"name": "tool"}, {"name": "memory"}, {"name": "exact"}],
+      "metadata": {
+        "tier": 0, "suites": ["prompt-smoke"], "split": "validation",
+        "expected_tool_calls": [
+          {"name": "eval_memory_write", "args": {"key": "answer", "value": "plugin"}},
+          {"name": "eval_memory_read", "args": {"key": "answer"}}
+        ],
+        "agent_script": [
+          {"type": "tool", "calls": [{"name": "eval_memory_write", "args": {"key": "answer", "value": "plugin"}}]},
+          {"type": "tool", "calls": [{"name": "eval_memory_read", "args": {"key": "answer"}}]},
+          {"type": "final", "content": "The stored answer is plugin."}
+        ]
+      }
+    },
+    {
+      "id": "prompt.files.001",
+      "version": 1,
+      "name": "Write and read a note",
+      "description": "A prompt that writes a file and reads it back in the sandbox.",
+      "category": "tools",
+      "difficulty": "medium",
+      "input": {"prompt": "Write 'hello plugin' to note.txt, then read it back."},
+      "environment": {"type": "filesystem"},
+      "expected_state": {"files": {"note.txt": {"contains": "hello plugin"}}},
+      "expected_tools": ["eval_fs_write", "eval_fs_read"],
+      "required_tools": ["eval_fs_write", "eval_fs_read"],
+      "graders": [{"name": "tool"}, {"name": "state"}],
+      "metadata": {
+        "tier": 0, "suites": ["prompt-smoke"], "split": "validation",
+        "expected_tool_calls": [
+          {"name": "eval_fs_write", "args": {"path": "note.txt", "content": "hello plugin"}}
+        ],
+        "agent_script": [
+          {"type": "tool", "calls": [{"name": "eval_fs_write", "args": {"path": "note.txt", "content": "hello plugin"}}]},
+          {"type": "tool", "calls": [{"name": "eval_fs_read", "args": {"path": "note.txt"}}]},
+          {"type": "final", "content": "Wrote and read note.txt."}
+        ]
+      }
+    },
+    {
+      "id": "prompt.service.001",
+      "version": 1,
+      "name": "Ask a service for a quote",
+      "description": "A prompt that calls the deterministic quote service and reports the price.",
+      "category": "tools",
+      "difficulty": "medium",
+      "input": {"prompt": "Get the quote for ACME from the quote service and report its price."},
+      "environment": {"type": "mock_services", "services": {"quote": {"symbol": "ACME", "price": 123.45}}},
+      "expected_tools": ["eval_service_call"],
+      "required_tools": ["eval_service_call"],
+      "expected_output": {"contains": ["123.45"]},
+      "graders": [{"name": "tool"}, {"name": "exact"}],
+      "metadata": {
+        "tier": 0, "suites": ["prompt-smoke"], "split": "validation",
+        "expected_tool_calls": [{"name": "eval_service_call", "args": {"service": "quote"}}],
+        "agent_script": [
+          {"type": "tool", "calls": [{"name": "eval_service_call", "args": {"service": "quote", "request": {"symbol": "ACME"}}}]},
+          {"type": "final", "content": "ACME trades at 123.45."}
+        ]
+      }
+    }
+  ]
+}
