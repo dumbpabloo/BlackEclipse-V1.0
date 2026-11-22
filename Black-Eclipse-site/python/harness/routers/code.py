@@ -20,7 +20,7 @@ from ..code.land import LandPlan, plan_land_checks, run_land_plan
 from ..code.session import SessionError, SessionStore, apply_budget, resolve_budget
 from ..code.tasks import DEFAULT_AUTONOMY, TaskStore
 from ..deps import require_operator, service
-from ..schemas import RunInput, RunRequest
+from ..schemas import RunImage, RunInput, RunRequest
 from ..schemas import ModelSettings as _ModelSettings
 
 router = APIRouter(tags=["code"])
@@ -54,6 +54,9 @@ class CreateTaskRequest(BaseModel):
     # What "done" means, in the caller's words. Recorded with the budget so a
     # resumed session can restate its contract.
     acceptance: list[str] = Field(default_factory=list, max_length=20)
+    # Gap #7b: reference images attached to a coding task (screenshots, designs,
+    # error captures). The SAME bounded RunImage the chat path uses.
+    images: list[RunImage] = Field(default_factory=list, max_length=4)
 
 
 class CodeIntentRequest(BaseModel):
@@ -85,12 +88,15 @@ class PromoteRequest(BaseModel):
     previewDigest: str = Field(min_length=8, max_length=128)  # noqa: N815
     # Phase 22 / S5 slice 2: the files the reviewer kept. Empty = all of them.
     include: list[str] = Field(default_factory=list)
+    # Gap #7: the hunks the reviewer kept, as "path#hN". Empty = every hunk.
+    hunks: list[str] = Field(default_factory=list)
 
 
 class PreviewRequest(BaseModel):
-    """Narrow the preview to the files the reviewer kept. Empty = all."""
+    """Narrow the preview to the files (and hunks) the reviewer kept."""
 
     include: list[str] = Field(default_factory=list)
+    hunks: list[str] = Field(default_factory=list)
 
 
 class PostLandingRequest(BaseModel):
@@ -223,7 +229,7 @@ async def create_task(body: CreateTaskRequest, _: bool = Depends(require_operato
         raise HTTPException(status_code=400, detail="modelSettings is required")
     request = RunRequest(
         runId=run_id,
-        input=RunInput(query=body.query),
+        input=RunInput(query=body.query, images=body.images or None),
         agentId="code-agent",
         modelSettings=_ModelSettings(**body.modelSettings),
         autonomy=autonomy,
@@ -309,6 +315,22 @@ def get_task(task_id: str) -> dict[str, Any]:
     if view is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return {"success": True, "task": view, "session": _sessions().view(task_id)}
+
+
+@router.get("/code/tasks/{task_id}/todos")
+def get_task_todos(task_id: str) -> dict[str, Any]:
+    """The coding plan the model recorded for this run (gap #8)."""
+    from ..code import todos as todo_mod  # noqa: PLC0415
+
+    if service.get_run(task_id) is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    items = todo_mod.load(service.store, task_id)
+    return {
+        "success": True,
+        "todos": [t.to_dict() for t in items],
+        "summary": todo_mod.summarize(items),
+        "version": todo_mod.version(items),
+    }
 
 
 def _land_preview(task_id: str) -> tuple[dict[str, Any], Path]:
@@ -465,8 +487,115 @@ def task_checks(task_id: str) -> dict[str, Any]:
 
 
 @router.get("/code/tasks/{task_id}/diff")
-def task_diff(task_id: str) -> dict[str, Any]:
-    """The worktree diff for a task's disposable copy, when one is bound."""
+def task_diff(task_id: str, mode: str = "working", base: Optional[str] = None) -> dict[str, Any]:
+    """The change for a task's disposable copy, from a chosen source.
+
+    `working` = the workspace vs `base` (default HEAD); `committed` = the stored
+    base revision vs HEAD (what was committed inside the workspace); `revision`
+    = the workspace vs a caller-supplied `base` (a branch or revision); `turn` =
+    the latest turn snapshot vs the workspace, so a reviewer can see exactly what
+    the last turn changed.
+    """
+    created = _tasks().latest_created(task_id)
+    workspace_id = ((created or {}).get("payload") or {}).get("workspaceId")
+    if not workspace_id:
+        raise HTTPException(status_code=404, detail="No workspace bound to this task")
+    if mode not in ("working", "committed", "revision", "turn"):
+        raise HTTPException(status_code=400, detail="mode must be working, committed, revision or turn")
+    try:
+        from ..code import worktree  # noqa: PLC0415
+
+        if mode == "turn":
+            return {"success": True, "diff": _turn_diff(task_id, workspace_id)}
+        if mode == "revision" and not base:
+            raise ValueError("a revision comparison needs a base revision")
+        base_rev = base
+        if mode == "committed" and not base_rev:
+            record = service.code_store.get_workspace(workspace_id) or {}
+            base_rev = str(record.get("baseRevision") or "HEAD")
+        return {
+            "success": True,
+            "diff": worktree.diff(
+                workspace_id, base_rev,
+                mode="committed" if mode == "committed" else "working",
+            ),
+        }
+    except Exception as exc:  # noqa: BLE001 - a diff failure is an honest 400
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _turn_diff(task_id: str, workspace_id: str) -> dict[str, Any]:
+    """The change since the newest snapshot recorded for this task's run.
+
+    A snapshot is taken before a turn writes, so diffing the newest one against
+    the workspace is "what the last turn changed". No snapshot means an honest
+    unavailable result, never an empty diff that implies nothing changed.
+    """
+    import hashlib  # noqa: PLC0415
+
+    from ..code import checkpoints, worktree  # noqa: PLC0415
+
+    target = worktree.workspace_path(workspace_id)
+    latest = None
+    for item in checkpoints.list_checkpoints(target, limit=30):
+        if str(item.get("runId") or "") == task_id:
+            latest = item
+            break
+    empty = {
+        "available": False,
+        "strategy": "turn",
+        "mode": "turn",
+        "workspaceRoot": str(target),
+        "reason": "NO_TURN_SNAPSHOT",
+        "unified": "",
+        "truncated": False,
+        "added": [],
+        "modified": [],
+        "deleted": [],
+        "filesChanged": 0,
+        "additions": 0,
+        "deletions": 0,
+        "digest": "",
+    }
+    if latest is None:
+        return empty
+    checkpoint_id = str(latest.get("id") or "")
+    result = checkpoints.diff(target, checkpoint_id)
+    changes = checkpoints.change_paths(target, checkpoint_id)
+    added = [c["path"] for c in changes if c.get("status") == "A"]
+    deleted = [c["path"] for c in changes if c.get("status") == "D"]
+    modified = [c["path"] for c in changes if c.get("status") not in ("A", "D")]
+    unified = str(result.get("unified") or "")
+    additions = sum(1 for line in unified.splitlines() if line.startswith("+") and not line.startswith("+++"))
+    deletions = sum(1 for line in unified.splitlines() if line.startswith("-") and not line.startswith("---"))
+    return {
+        "available": True,
+        "strategy": "turn",
+        "mode": "turn",
+        "workspaceRoot": str(target),
+        "base": str(latest.get("turnKey") or checkpoint_id),
+        "checkpointId": checkpoint_id,
+        "unified": unified,
+        "truncated": bool(result.get("truncated")),
+        "added": added,
+        "modified": modified,
+        "deleted": deleted,
+        "filesChanged": len(added) + len(modified) + len(deleted),
+        "additions": additions,
+        "deletions": deletions,
+        "digest": hashlib.sha256(unified.encode("utf-8")).hexdigest(),
+    }
+
+
+@router.get("/code/tasks/{task_id}/image")
+def task_image(task_id: str, path: str, side: str = "after") -> dict[str, Any]:
+    """One bounded picture from the task's disposable copy, for the review diff.
+
+    `side=after` reads the workspace file; `side=before` reads the base revision.
+    The path is confined by `worktree.read_image` (no absolute/`..`, resolved
+    inside the workspace) and the bytes are checked by magic number, so this is
+    not a general file-read door.
+    """
     created = _tasks().latest_created(task_id)
     workspace_id = ((created or {}).get("payload") or {}).get("workspaceId")
     if not workspace_id:
@@ -474,8 +603,8 @@ def task_diff(task_id: str) -> dict[str, Any]:
     try:
         from ..code import worktree  # noqa: PLC0415
 
-        return {"success": True, "diff": worktree.diff(workspace_id)}
-    except Exception as exc:  # noqa: BLE001 - a diff failure is an honest 400
+        return {"success": True, "image": worktree.read_image(workspace_id, path, side=side)}
+    except Exception as exc:  # noqa: BLE001 - a missing/invalid picture is an honest 400
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -688,8 +817,9 @@ def promote_preview(
     try:
         preview = promotion.build_preview(task_id, code_store=service.code_store)
         include = (body.include if body else []) or []
-        if include:
-            preview = promotion.filter_preview(preview, include)
+        hunks = (body.hunks if body else []) or []
+        if include or hunks:
+            preview = promotion.filter_preview(preview, include, hunks=hunks)
     except promotion.PromotionError as exc:
         raise HTTPException(status_code=400, detail=exc.code) from exc
     verdict = selfhost.classify_landing([str(f.get("path") or "") for f in preview.get("files", [])])
@@ -711,7 +841,7 @@ def promote_preview(
             ),
             risk="high",
         )
-    view = {k: v for k, v in preview.items() if k != "worktreeRoot"}
+    view = promotion.public_preview(preview)
     return {"success": True, "preview": view, "approval": approval, "landing": verdict.to_dict()}
 
 
@@ -731,8 +861,8 @@ def promote_apply(
     # the confirmed set stale and the promotion is refused (nothing is written).
     try:
         preview = promotion.build_preview(task_id, code_store=service.code_store)
-        if body.include:
-            preview = promotion.filter_preview(preview, body.include)
+        if body.include or body.hunks:
+            preview = promotion.filter_preview(preview, body.include, hunks=body.hunks)
     except promotion.PromotionError as exc:
         raise HTTPException(status_code=400, detail=exc.code) from exc
     if preview["previewDigest"] != body.previewDigest:
@@ -791,6 +921,44 @@ def promote_apply(
         "landing": verdict.to_dict(),
         "postLanding": post_landing,
     }
+
+
+@router.post("/code/tasks/{task_id}/autoland")
+def autoland_task(
+    task_id: str, full: bool = False, _: bool = Depends(require_operator),
+) -> dict[str, Any]:
+    """Trust Mode: land in one call, verify, and undo on a failed check.
+
+    The operator has already granted trust for this action (the front door's
+    single "Let Eclipse change this project" switch). This route still applies
+    the same path safety, digest, backup and rollback rules as the reviewed
+    path; the only difference is that no second confirmation is required.
+    """
+    from ..code import autoland, promotion  # noqa: PLC0415
+
+    if service.get_run(task_id) is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    try:
+        result = autoland.autoland(
+            task_id, code_store=service.code_store, full=full,
+        )
+    except promotion.PromotionError as exc:
+        raise HTTPException(status_code=400, detail=exc.code) from exc
+    try:
+        service.run_lineage().save_checkpoint(
+            task_id,
+            "land.promoted" if result.get("ok") else "land.rolled_back",
+            {
+                "auto": True,
+                "previewDigest": (result.get("preview") or {}).get("previewDigest"),
+                "rollbackId": result.get("rollbackId"),
+                "checks": result.get("checks"),
+                "rolledBack": result.get("rolledBack"),
+            },
+        )
+    except Exception:  # noqa: BLE001 - metrics never block the outcome
+        pass
+    return {"success": True, **result}
 
 
 @router.post("/code/promotions/{rollback_id}/rollback")

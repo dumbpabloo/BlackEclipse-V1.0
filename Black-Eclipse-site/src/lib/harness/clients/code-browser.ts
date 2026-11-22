@@ -6,11 +6,11 @@
 // component — importing the server client pulls `child_process` into the browser
 // bundle and the page fails to compile.
 
-import type { Autonomy, BudgetProfile, CodeApproval, CodePlan, CodePreview, CodeScorecard, CodeSession, CodeTask, CodeTaskDiff, LandCheck, LandCheckResult, LandPlan, LandResult, ProjectBrief, ProjectTarget, PreviewTarget, TaskStatus, CreateTaskInput, PromotionFile, PromotionPreview, PromotionLanding, PostLandingRecord } from './code-client';
+import type { Autonomy, BudgetProfile, CodeApproval, CodePlan, CodePreview, CodeScorecard, CodeSession, CodeTask, CodeTaskDiff, CodeTodo, CodeTodoView, LandCheck, LandCheckResult, LandPlan, LandResult, ProjectBrief, ProjectTarget, PreviewTarget, TaskStatus, CreateTaskInput, PromotionFile, PromotionHunk, PromotionPreview, PromotionLanding, PostLandingRecord } from './code-client';
 
 // Re-export the wire types so a component imports everything from ONE client-safe
 // module (a type-only re-export is erased at compile time — no server code ships).
-export type { Autonomy, BudgetProfile, CodeApproval, CodePlan, CodePreview, CodeScorecard, CodeSession, CodeTask, CodeTaskDiff, LandCheck, LandCheckResult, LandPlan, LandResult, ProjectBrief, ProjectTarget, PreviewTarget, TaskStatus, CreateTaskInput, PromotionFile, PromotionPreview, PromotionLanding, PostLandingRecord };
+export type { Autonomy, BudgetProfile, CodeApproval, CodePlan, CodePreview, CodeScorecard, CodeSession, CodeTask, CodeTaskDiff, CodeTodo, CodeTodoView, LandCheck, LandCheckResult, LandPlan, LandResult, ProjectBrief, ProjectTarget, PreviewTarget, TaskStatus, CreateTaskInput, PromotionFile, PromotionHunk, PromotionPreview, PromotionLanding, PostLandingRecord };
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
@@ -75,6 +75,10 @@ export async function getCodeScorecard(days = 30, target: ProjectTarget = {}): P
   if (target.rootId) query.set('rootId', target.rootId);
   const body = await api<{ scorecard: CodeScorecard }>(`/api/code/scorecard?${query.toString()}`);
   return body.scorecard;
+}
+
+export async function getCodeTodos(id: string): Promise<CodeTodoView> {
+  return api(`/api/code/tasks/${encodeURIComponent(id)}/todos`, { method: 'GET' });
 }
 
 // ── Running the user's project (Phase 24 / P2) ───────────────────────────────
@@ -166,12 +170,46 @@ export async function decideCodeApproval(id: string, approve: boolean, reason = 
 }
 
 /** The change a task made, in everyday words plus the raw text behind "details". */
-export async function getCodeTaskDiff(id: string): Promise<CodeTaskDiff | null> {
+export async function getCodeTaskDiff(
+  id: string,
+  mode: 'working' | 'committed' | 'revision' | 'turn' = 'working',
+  base?: string,
+): Promise<CodeTaskDiff | null> {
   try {
-    const body = await api<{ diff: CodeTaskDiff }>(`/api/code/tasks/${encodeURIComponent(id)}/diff`);
+    const query = new URLSearchParams({ mode });
+    if (base) query.set('base', base);
+    const body = await api<{ diff: CodeTaskDiff }>(
+      `/api/code/tasks/${encodeURIComponent(id)}/diff?${query.toString()}`,
+    );
     return body.diff ?? null;
   } catch {
     // A task with no bound work area has no diff; that is not an error.
+    return null;
+  }
+}
+
+/** One bounded picture from the task's change, for the review diff. */
+export interface CodeTaskImage {
+  path: string;
+  mime: string;
+  size: number;
+  /** Base64, so the only transport is the JSON route. */
+  bytes: string;
+}
+
+export async function getCodeTaskImage(
+  id: string,
+  path: string,
+  side: 'before' | 'after' = 'after',
+): Promise<CodeTaskImage | null> {
+  try {
+    const query = new URLSearchParams({ path, side });
+    const body = await api<{ image: CodeTaskImage }>(
+      `/api/code/tasks/${encodeURIComponent(id)}/image?${query.toString()}`,
+    );
+    return body.image ?? null;
+  } catch {
+    // A removed, oversized or non-image file has no preview; the viewer says so.
     return null;
   }
 }
@@ -182,24 +220,33 @@ export async function getCodeTaskDiff(id: string): Promise<CodeTaskDiff | null> 
 
 /** Preview exactly what a task's change would put into the real project. */
 export async function previewPromotion(
-  taskId: string, include: string[] = [],
+  taskId: string, include: string[] = [], hunks: string[] = [],
 ): Promise<{ preview: PromotionPreview; approval: { id: string; status: string } | null; landing?: PromotionLanding }> {
   return api(`/api/code/tasks/${encodeURIComponent(taskId)}/promote/preview`, {
     method: 'POST',
-    body: JSON.stringify({ include }),
+    body: JSON.stringify({ include, hunks }),
   });
 }
 
 /** Confirm a previewed change and put it into the real project. */
+export async function autolandTask(
+  taskId: string, full = false,
+): Promise<{ ok: boolean; applied: boolean; rolledBack: boolean; rollbackId?: string | null; checks?: Record<string, unknown> }> {
+  return api(`/api/code/tasks/${encodeURIComponent(taskId)}/autoland${full ? '?full=true' : ''}`, {
+    method: 'POST',
+  });
+}
+
 export async function applyPromotion(
   taskId: string,
   approvalId: string,
   previewDigest: string,
   include: string[] = [],
+  hunks: string[] = [],
 ): Promise<{ ok: boolean; filesChanged: number; rollbackId?: string | null; landing?: PromotionLanding }> {
   const body = await api<{ promotion: { ok: boolean; filesChanged: number; rollbackId?: string | null; landing?: PromotionLanding } }>(
     `/api/code/tasks/${encodeURIComponent(taskId)}/promote`,
-    { method: 'POST', body: JSON.stringify({ approvalId, previewDigest, include }) },
+    { method: 'POST', body: JSON.stringify({ approvalId, previewDigest, include, hunks }) },
   );
   return body.promotion;
 }

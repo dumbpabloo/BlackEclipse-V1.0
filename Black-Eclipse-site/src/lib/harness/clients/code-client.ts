@@ -60,6 +60,8 @@ export interface CreateTaskInput {
   budgetProfile?: BudgetProfile;
   /** What "done" means, in the caller's words; recorded with the session. */
   acceptance?: string[];
+  /** Gap #7b: bounded reference images (screenshots/designs) for the task. */
+  images?: import("@/lib/harness/types").RunImageInput[];
 }
 
 export type BudgetProfile = "small" | "standard" | "deep";
@@ -236,6 +238,26 @@ export async function getCodeScorecard(
   return request(`/code/scorecard?${query.toString()}`, { method: "GET" });
 }
 
+/** Gap #8: the coding plan the model recorded for this run. Read-only. */
+export interface CodeTodo {
+  content: string;
+  status: "pending" | "in_progress" | "completed" | "cancelled";
+}
+
+export interface CodeTodoView {
+  todos: CodeTodo[];
+  summary: {
+    total: number;
+    counts: Record<string, number>;
+    active: string[];
+  };
+  version: string;
+}
+
+export async function getCodeTodos(id: string): Promise<CodeTodoView> {
+  return request(`/code/tasks/${encodeURIComponent(id)}/todos`, { method: "GET" });
+}
+
 /** Phase 22 / S4: the ordered checks a change must pass. Read-only. */
 export async function getLandPlan(id: string): Promise<LandPlan> {
   const body = await request<{ plan: LandPlan }>(
@@ -370,6 +392,14 @@ export interface CodeTaskDiff {
   added: string[];
   modified: string[];
   deleted: string[];
+  /** Which source produced this change: working | committed | turn. */
+  mode?: string;
+  base?: string;
+  /** Absolute workspace folder, for "reveal in file manager". */
+  workspaceRoot?: string;
+  /** Present when the requested source has no data (e.g. no turn snapshot). */
+  reason?: string;
+  truncated?: boolean;
 }
 
 /** The change a task made, in everyday words plus the raw text behind "details". */
@@ -396,11 +426,26 @@ export async function resumeCodeTask(id: string): Promise<unknown> {
 // approval; `applyPromotion` writes them — only if neither copy changed since the
 // preview. The runtime owns the decision; this module only carries it.
 
+export interface PromotionHunk {
+  id: string;
+  header: string;
+  beforeStart: number;
+  beforeLines: number;
+  afterStart: number;
+  afterLines: number;
+  preview: { kind: "add" | "remove"; text: string }[];
+}
+
 export interface PromotionFile {
   path: string;
   op: "create" | "overwrite" | "delete";
   beforeHash: string | null;
   afterHash: string | null;
+  /** Gap #7: per-file change slices a reviewer can accept independently. */
+  hunks?: PromotionHunk[];
+  /** Present on a partially accepted file: the hunk IDs that will land. */
+  selectedHunks?: string[];
+  partial?: boolean;
 }
 
 export interface PromotionPreview {
@@ -433,12 +478,29 @@ export interface PromotionLanding {
 
 /** Preview exactly what a task's change would put into the real project. */
 export async function previewPromotion(
-  taskId: string, include: string[] = [],
+  taskId: string, include: string[] = [], hunks: string[] = [],
 ): Promise<{ preview: PromotionPreview; approval: PromotionApproval | null; landing?: PromotionLanding }> {
   return request(`/code/tasks/${encodeURIComponent(taskId)}/promote/preview`, {
     method: "POST",
-    body: JSON.stringify({ include }),
+    body: JSON.stringify({ include, hunks }),
     timeoutMs: 60_000,
+  });
+}
+
+/** Trust Mode: apply, verify and auto-undo in one call. */
+export interface AutolandResult {
+  ok: boolean;
+  applied: boolean;
+  rolledBack: boolean;
+  rollbackId?: string | null;
+  checks?: { ok?: boolean; failed?: string[]; error?: string } & Record<string, unknown>;
+  preview?: PromotionPreview;
+}
+
+export async function autolandTask(taskId: string, full = false): Promise<AutolandResult> {
+  return request(`/code/tasks/${encodeURIComponent(taskId)}/autoland${full ? "?full=true" : ""}`, {
+    method: "POST",
+    timeoutMs: full ? 900_000 : 180_000,
   });
 }
 
@@ -448,12 +510,13 @@ export async function applyPromotion(
   approvalId: string,
   previewDigest: string,
   include: string[] = [],
+  hunks: string[] = [],
 ): Promise<{ ok: boolean; filesChanged: number; previewDigest: string; rollbackId?: string | null; landing?: PromotionLanding }> {
   const body = await request<{ promotion: { ok: boolean; filesChanged: number; previewDigest: string; rollbackId?: string | null }; landing?: PromotionLanding }>(
     `/code/tasks/${encodeURIComponent(taskId)}/promote`,
     {
       method: "POST",
-      body: JSON.stringify({ approvalId, previewDigest, include }),
+      body: JSON.stringify({ approvalId, previewDigest, include, hunks }),
       timeoutMs: 120_000,
     },
   );
