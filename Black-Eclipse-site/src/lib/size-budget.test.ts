@@ -80,7 +80,15 @@ const RATCHET: Record<string, number> = {
   // and the live-run label.
   // Re-pinned 1355->1358 for the multi-goal strip's queued/running/loading copy.
   // +1 for the re-judge action.
-  "src/lib/i18n/dictionaries/en.ts": 1359,
+  // Re-pinned 1359->1367 (2026-11-21) for the Code-screen plan/image/undo copy
+  // (`code.plan.*`, `code.chat.attachImage`, `code.checkpoints.undoTurn`,
+  // `code.promote.hunk`). Re-pinned 1367->1373 for the line-anchored review
+  // comments (`code.review.anchorHint`/`linePlaceholder`/`saveLine`/`remove`/
+  // `anchoredCount`/`seeLine`). Re-pinned 1373->1380 for the split/file-tree/
+  // image copy (`code.diff.*`). Re-pinned 1380->1381 for the picture-loading
+  // copy, then 1381->1385 for the before/after labels, then 1385->1393 for the
+  // source modes. May only shrink.
+  "src/lib/i18n/dictionaries/en.ts": 1394,
   // The canonical command catalog crossed the hard ceiling when the P2
   // read-only workspace commands (alerts/news/theses/journal/jobs/artifacts/
   // sessions/git/stop) landed. Re-pinned 1379->1411 for `/history`, the
