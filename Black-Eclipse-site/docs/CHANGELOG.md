@@ -6,6 +6,11 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-22
 
+- **release: v0.4.25.** Ships the desktop runtime-resolution fix (vendored Python and `python/harness` now resolve
+  from the project root, not the pinned-release cwd). Version bumped in `package.json`, `pyproject.toml` and
+  `harness.__version__`; `release-check` reports package 0.4.25 / API 1.0.0.
+  docs updated: `docs/CHANGELOG.md`.
+
 - **fix(desktop): resolve the Python runtime and harness source from the project root, not the process cwd.** A pinned
   desktop release runs Next with a cwd inside `releases/stable/<build>`, so `findPython()` looked for
   `scripts/vendor/python` there and reported “Python with agent dependencies not found”; the spawn also looked for
