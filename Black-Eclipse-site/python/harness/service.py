@@ -86,6 +86,14 @@ class AgenticService:
     def __init__(self, store: Optional[AgentMemoryStore] = None) -> None:
         self.store = store or AgentMemoryStore()
         self.registry = ToolRegistry()
+        # Kernel seam (off by default): scoped services + read-only inspection.
+        from .kernel.services.runtime import kernel_runtime  # noqa: PLC0415
+        from .kernel.inspect_tools import register_inspect_tool  # noqa: PLC0415
+
+        kernel_runtime.configure(self.registry)
+        kernel_runtime.attach_sessions(self.store)
+        self.kernel_runtime = kernel_runtime
+        register_inspect_tool(self.registry)
         # The legacy JDdS-only tools remain for compatibility; the Phase-2
         # retrieval tools are the provider-agnostic path the agent should prefer.
         register_finance_tools(self.registry)
@@ -270,6 +278,9 @@ class AgenticService:
         except Exception:  # noqa: BLE001 - migration must not block boot
             log.warning("legacy skill import skipped", exc_info=True)
         self.skill_registry = SkillRegistry(self.skill_store)
+        from .kernel.services.runtime import kernel_runtime  # noqa: PLC0415
+
+        kernel_runtime.attach_skills(self.skill_registry)
         from .skills.install import installed_skills_home  # noqa: PLC0415
 
         self.skills_home = installed_skills_home()
@@ -382,9 +393,9 @@ class AgenticService:
         # Its events ride the process-wide bus. Built before any run so the
         # `code_*` tools resolve a shared runtime. A failure is a diagnostic.
         try:
-            from .code.intel.runtime import build_code_intel_runtime  # noqa: PLC0415
+            from .code.intel.runtime import build_code_intel_runtime, set_code_intel_runtime  # noqa: PLC0415
 
-            self.code_intel = build_code_intel_runtime(on_event=self._publish_code_intel_event)
+            self.code_intel = build_code_intel_runtime(on_event=self._publish_code_intel_event); set_code_intel_runtime(self.code_intel)
         except Exception:  # noqa: BLE001 - CIUE must never block boot
             self.code_intel = None
             log.warning("code intelligence runtime unavailable", exc_info=True)
@@ -629,6 +640,9 @@ class AgenticService:
         from .ui.bootstrap import install_ui_layer  # noqa: PLC0415
 
         install_ui_layer(self)
+        from .kernel.services.wiring import install_kernel_surfaces  # noqa: PLC0415
+
+        install_kernel_surfaces(self)
         # Eclipse SDK: the user-facing composition surface over the UI and
         # Portfolio services (declarative widgets, composed pages, fund
         # portfolios, design + passphrase locks). It owns no second engine; the

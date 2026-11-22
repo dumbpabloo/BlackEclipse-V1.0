@@ -63,7 +63,7 @@ from .routers.computer import router as computer_router
 from .routers.events import router as events_router
 from .routers.evaluation import router as evaluation_router
 from .routers.eval_gates import router as eval_gates_router
-from .routers.evolution import router as evolution_router
+from .routers.evolution import router as evolution_router; from .routers.dynamic import router as dynamic_router; from .routers.kernel_ui import router as kernel_ui_router
 from .routers.evolution_corpus import router as evolution_corpus_router
 from .routers.execution import router as execution_router
 from .routers.fabric import router as fabric_router
@@ -148,7 +148,7 @@ app.include_router(computer_router)
 app.include_router(events_router)
 app.include_router(evaluation_router)
 app.include_router(eval_gates_router)
-app.include_router(evolution_router)
+app.include_router(evolution_router); app.include_router(dynamic_router); app.include_router(kernel_ui_router)
 app.include_router(evolution_corpus_router)
 app.include_router(execution_router)
 app.include_router(fabric_router)

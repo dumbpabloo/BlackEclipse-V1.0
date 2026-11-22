@@ -42,7 +42,7 @@ from .errors import (
 from .events import PluginEventBridge
 from .hooks import HookOutcome, HookRegistry
 from .http import PluginHttp
-from .loader import checksum, discover, find_manifest_file, instantiate, read_manifest
+from .loader import checksum, discover, evict_modules, find_manifest_file, instantiate, module_names_under, read_manifest
 from .manifest import ECLIPSE_VERSION, PluginManifest
 from .model import PluginRecord, PluginState, TrustLevel, assert_transition, can_transition
 from .paths import bundled_root as _bundled_root, ensure_dir, plugin_data_dir, plugins_root as _plugins_root
@@ -331,6 +331,70 @@ class PluginManager:
     async def stop(self, plugin_id: str) -> dict[str, Any]:
         return await self.disable(plugin_id)
 
+    async def reload(self, plugin_id: str, *, operator: bool = False) -> dict[str, Any]:
+        """Re-import an installed plugin's code in place (operator/dev only).
+
+        Exact unload first (workers, contributions, UI, storage), then evict the
+        plugin's modules and re-import. Bundled and signed/verified plugins are
+        refused: their code is pinned, so a change is an update, not a reload.
+        A failed re-import leaves the plugin unloaded and `FAILED` (never a
+        half-mounted tree).
+        """
+        if not operator:
+            raise PluginError("PLUGIN_RELOAD_OPERATOR", "reload requires an explicit operator action")
+        async with self._lock:
+            record = self.store.get_plugin(plugin_id)
+            if record is None:
+                raise NotFound(plugin_id)
+            if plugin_id not in self._active:
+                raise PluginError("PLUGIN_NOT_RUNNING", "only a running plugin can be reloaded")
+            directory = self.directory_of(plugin_id)
+            if directory is None:
+                raise PluginError("PLUGIN_RELOAD_FAILED", "installation directory is missing")
+            if self._is_bundled(directory):
+                raise PluginError("PLUGIN_RELOAD_BUNDLED", "bundled plugins are shipped code; update the app instead")
+            if record.trust in (TrustLevel.TRUSTED, TrustLevel.VERIFIED) or record.verification in (
+                "signed", "trusted-publisher",
+            ):
+                raise PluginError(
+                    "PLUGIN_RELOAD_TRUSTED",
+                    "a signed or verified plugin cannot be hot-reloaded; install a new signed update",
+                )
+            manifest = self.manifest_of(plugin_id)
+            if manifest is None:
+                raise ManifestError(f"manifest for {plugin_id!r} is missing or invalid")
+            if manifest.id != plugin_id:
+                raise PluginError("PLUGIN_ID_MISMATCH", f"manifest id {manifest.id!r} != {plugin_id!r}")
+            previous = record.checksum
+            evicted = module_names_under(directory)
+            await self._unload(plugin_id)
+            record.last_error = None
+            try:
+                await self._load(record, manifest, verify_integrity=False)
+            except Exception as exc:  # noqa: BLE001 - observable failure, exact unload already done
+                self.store.set_state(plugin_id, PluginState.FAILED, enabled=False, last_error=str(exc))
+                self.store.bump_health(plugin_id, crashes=1)
+                self.store.record_history(plugin_id, "reload", "failed")
+                self.store.log(plugin_id, "error", f"reload failed: {exc}")
+                self._publish("plugin.failed", {"pluginId": plugin_id, "error": str(exc), "reload": True})
+                raise
+            record.checksum = checksum(directory)
+            record.verification = "unsigned"
+            record.last_error = None
+            self.store.upsert_plugin(record)
+            self.store.set_state(plugin_id, PluginState.RUNNING, enabled=True, health="unknown")
+            self.store.record_history(plugin_id, "reload", "ok")
+            self.store.log(plugin_id, "info", f"reloaded from {directory}")
+            self._publish("plugin.reloaded", {"pluginId": plugin_id, "version": manifest.version})
+            return {
+                "ok": True,
+                "reloaded": True,
+                "changed": record.checksum != previous,
+                "evictedModules": evicted,
+                "plugin": self.store.get_plugin(plugin_id).to_dict(),
+                "contributions": self.contributions.descriptors(plugin_id),
+            }
+
     # ── update / rollback / repair ───────────────────────────────────────────
 
     async def update(self, plugin_id: str, source: Any, *, operator: bool = False) -> dict[str, Any]:
@@ -492,14 +556,16 @@ class PluginManager:
 
     # ── load / unload internals ──────────────────────────────────────────────
 
-    async def _load(self, record: PluginRecord, manifest: PluginManifest) -> _Loaded:
+    async def _load(self, record: PluginRecord, manifest: PluginManifest,
+                    *, verify_integrity: bool = True) -> _Loaded:
         directory = self.directory_of(record.plugin_id)
         if directory is None:
             raise PluginError("PLUGIN_LOAD_FAILED", "installation directory is missing")
-        integrity = self.check_integrity(record.plugin_id)
-        if not integrity.get("ok"):
-            raise PluginError("PLUGIN_INTEGRITY_FAILED",
-                              f"checksum mismatch for {record.plugin_id}: {integrity.get('detail')}")
+        if verify_integrity:
+            integrity = self.check_integrity(record.plugin_id)
+            if not integrity.get("ok"):
+                raise PluginError("PLUGIN_INTEGRITY_FAILED",
+                                  f"checksum mismatch for {record.plugin_id}: {integrity.get('detail')}")
         permissions = GrantedPermissions.from_declared(record.plugin_id, manifest.permissions)
         ctx = self._build_context(record, manifest, permissions)
         storage = ctx.storage
@@ -522,6 +588,7 @@ class PluginManager:
                     await instance.close()
                 except Exception:  # noqa: BLE001
                     pass
+            evict_modules(directory)
             raise
         for desc in registered:
             self.store.register_contribution(record.plugin_id, desc["kind"], desc["name"], desc.get("meta"))
@@ -545,6 +612,9 @@ class PluginManager:
         loaded = self._active.pop(plugin_id, None)
         if loaded is None:
             self.contributions.unregister_all(plugin_id)
+            directory = self.directory_of(plugin_id)
+            if directory is not None:
+                evict_modules(directory)
             return
         for task in loaded.workers:
             task.cancel()
@@ -570,6 +640,13 @@ class PluginManager:
             loaded.storage.close()
         except Exception:  # noqa: BLE001
             pass
+        # Module isolation: a disabled plugin leaves no importable modules behind,
+        # so re-enabling (or a different version) cannot see stale code.
+        directory = self.directory_of(plugin_id)
+        if directory is not None:
+            evicted = evict_modules(directory)
+            if evicted:
+                self.store.log(plugin_id, "info", f"unloaded modules: {', '.join(evicted)}")
 
     def _build_context(self, record: PluginRecord, manifest: PluginManifest,
                        permissions: GrantedPermissions) -> PluginContext:

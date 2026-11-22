@@ -1395,6 +1395,69 @@ lifespan exit (the pool reconnects lazily if the runtime restarts).
 
 ## Extension points
 
+### Plugin kernel and composition (default boot composition)
+
+`docs/harness/plugin-kernel-plan.md` specifies an additive kernel under
+`python/harness/kernel/`: a context/service repository with `inject` coeffects,
+revertible effects, per-agent scopes, profiles/bundles/ordered patches, a
+reconciling supervisor and a read-only `eclipse kernel dump|diff|doctor`. The
+first three phases exist and are covered by `python/tests/test_kernel_*.py`
+(118 kernel tests). The kernel is the **default boot composition**:
+`service.py` configures the runtime and `graph.py` resolves agents, prompt
+sections and a per-run tool view through it. `ECLIPSE_KERNEL=off` restores the
+original path byte-for-byte (rollback switch); `ECLIPSE_KERNEL=shadow` loads and
+validates composition, services and evolution proposals without changing live
+behavior (`KernelRuntime.active` is false and evolution apply is refused).
+Default-on was validated by a full Python suite under the kernel (3,340 passed,
+19 skipped, 0 failed). `sessions` is a read-only provider over
+`AgentMemoryStore` and `policy` is the kernel-facing view of the ONE
+`code.policy` authority (surface autonomy narrowing delegates through it when
+the kernel is active). Bundle resolution enforces declared platforms,
+kernel ranges, required bundles (including cycle refusal) and Ed25519 signatures
+over the declaration plus patch digests (`ECLIPSE_KERNEL_TRUSTED_KEYS`,
+`ECLIPSE_KERNEL_REQUIRE_SIGNATURE`). Hot reload is opt-in
+(`ECLIPSE_KERNEL_WATCH=1`): a digest poll reloads the profile and a broken edit
+keeps the previous generation. The flag-off path remains the parity oracle, and
+the enabled empty-profile path is proven byte-identical. The analysis behind it
+(DSH's model, strengths and weaknesses) is
+`docs/harness/deepseek-harness-analysis.md`.
+The shared evolution **asset contract** has a first slice in
+`python/harness/evolution/` (closed kinds/ops, candidate state machine,
+prompt-section and agent-preset adapters, exact rollback, the existing
+`evaluate_candidate` gate wired to measured statuses, a hash-chained
+intent/snapshot journal, TTL/caps and regression rollback, plus a recurrence
+observer -> bounded deterministic proposer with shadow mode); tool policy is
+consumed by surface resolution, model routes by the graph's same-provider
+selection, and composition rows by the live supervisor.
+`POST /evolution/assets/{id}/evaluate` is the HTTP measured landing path: it
+refuses without baseline aggregates, runs the deterministic suite on a private
+store, and records `measured_ok` / `measured_bad` / `unmeasured`. Plugin UI
+contributions render through declarative kernel UI slots
+(`kernel/services/ui.py`, `/kernel/ui/slots*`) with no HTML accepted.
+Phase 4 adds executable plugin contributions: with the flag on, plugin-declared
+agents, skills and prompt sections mount through the kernel services, gated by
+`agents.contribute`/`skills.contribute`/`prompts.contribute`, cross-checked
+against `provides`, and unwound on unload. `harness_inspect` is a read-only
+native tool over the same tree. Plugin code can be re-imported in place with
+`PluginManager.reload` (operator-only; exact unload first, `loader.evict_modules`
+then re-import; bundled/signed/verified plugins are refused), and the opt-in
+`HARNESS_PLUGIN_HOT_RELOAD=1` watcher polls active plugin digests. A failed
+re-import leaves the plugin unloaded and `FAILED`, never half-mounted. Unload is
+also the isolation boundary: every module under the plugin root is evicted, so a
+disable/re-enable re-executes the source and cannot serve stale code; host
+modules are untouched, and untrusted plugins still run in the separate-process
+sandbox.
+Profile/ordered-patch composition is applied at boot by
+`kernel/profile_boot.py` after plugin startup: the same `load_profile` loader as
+`eclipse kernel dump`, mounted through the supervisor, with an absent profile as
+a no-op and a failed row restoring the previous generation. `builtin:` rows can
+replace the live `tools`, `prompt` and `agents` services with an exact undo.
+`kernel/services/wiring.py` binds plugin-contributed research/data providers,
+workflows, models and UI panels to the real registries/stores at boot.
+`harness/dynamic/` adds session-scoped versioned packages in the existing code
+sandbox (define/run/update/stop/undefine, approval, TTL, call/wall-clock caps);
+stopping or undefining kills the process tree and removes the package.
+
 ### MCP boundary and source strategy (Phase 5)
 
 MCP is a **user-directed interoperability layer** around the existing Python

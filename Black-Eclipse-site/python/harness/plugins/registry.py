@@ -15,6 +15,7 @@ permission is routed through Eclipse's existing effect authorizer unchanged.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from typing import Any, Callable, Optional
 
@@ -59,6 +60,7 @@ class ContributionRegistry:
         # plugin_id -> registered surface (for teardown)
         self._by_plugin: dict[str, dict[str, list[str]]] = {}
         self._descriptors: dict[str, list[dict[str, Any]]] = {}
+        self._kernel_undos: dict[str, list[Callable[[], Any]]] = {}
 
     # ── registration ─────────────────────────────────────────────────────────
 
@@ -69,10 +71,18 @@ class ContributionRegistry:
         by_kind = self._group(contributions)
         self._assert_matches(manifest, by_kind)
         self._assert_event_permissions(manifest, by_kind)
+        runtime = _kernel_runtime()
+        undos: list[Callable[[], Any]] = []
+        if runtime is not None:
+            self._assert_services(manifest, instance, runtime)
+            self._assert_contribution_permissions(manifest, by_kind)
+            self._assert_executable_instance(instance, by_kind)
+            runtime.declare_provides(manifest.id, [item.key for item in manifest.provides])
 
         registered: list[dict[str, Any]] = []
         surface: dict[str, list[str]] = {"tools": [], "events": [], "hooks": [], "commands": [], "ui": [],
-                                          "workers": [], "webhooks": [], "skills": [], "research_providers": [],
+                                          "workers": [], "webhooks": [], "skills": [], "prompts": [],
+                                          "models": [], "research_providers": [],
                                           "data_providers": [], "agents": [], "workflows": []}
 
         for item in by_kind.get("tool", []):
@@ -102,6 +112,15 @@ class ContributionRegistry:
 
         for item in by_kind.get("ui", []):
             surface["ui"].append(item["id"])
+            if runtime is not None:
+                from ..kernel.services.ui import slot_for_ui_kind  # noqa: PLC0415
+
+                undos.append(runtime.register_slot(
+                    slot_for_ui_kind(str(item.get("ui_kind") or "")),
+                    item["id"], item["handler"],
+                    title=str(item.get("title") or ""), plugin_id=manifest.id,
+                ))
+                undos.append(self._register_extra(runtime, manifest, "ui", item["id"], item))
             registered.append({"kind": "ui", "name": item["id"], "meta": {"uiKind": item.get("ui_kind"),
                                                                           "title": item.get("title")}})
         for item in by_kind.get("worker", []):
@@ -114,21 +133,59 @@ class ContributionRegistry:
                                "meta": {"direction": item.get("direction", "inbound")}})
         for item in by_kind.get("skill", []):
             surface["skills"].append(item["name"])
+            if runtime is not None:
+                try:
+                    undos.append(self._register_skill(runtime, manifest, item))
+                except Exception as exc:  # noqa: BLE001
+                    raise ContributionError(
+                        f"skill {item['name']!r} could not be mounted: {type(exc).__name__}: {exc}",
+                    ) from exc
             registered.append({"kind": "skill", "name": item["name"],
                                "meta": {"description": item.get("description", ""), "path": item.get("path")}})
 
         for item in by_kind.get("research_provider", []):
             surface["research_providers"].append(item["name"])
+            if runtime is not None:
+                undos.append(self._register_extra(runtime, manifest, "research_provider", item["name"], item))
             registered.append({"kind": "research_provider", "name": item["name"]})
         for item in by_kind.get("data_provider", []):
             surface["data_providers"].append(item["name"])
+            if runtime is not None:
+                undos.append(self._register_extra(runtime, manifest, "data_provider", item["name"], item))
             registered.append({"kind": "data_provider", "name": item["name"]})
         for item in by_kind.get("agent", []):
             surface["agents"].append(item["id"])
+            if runtime is not None:
+                try:
+                    undos.append(self._register_agent(runtime, manifest, item))
+                except Exception as exc:  # noqa: BLE001 - a failed mount is a rejection
+                    raise ContributionError(
+                        f"agent {item['id']!r} could not be mounted: {type(exc).__name__}: {exc}",
+                    ) from exc
             registered.append({"kind": "agent", "name": item["id"]})
+        for item in by_kind.get("prompt", []):
+            surface["prompts"].append(item["id"])
+            if runtime is not None:
+                try:
+                    undos.append(self._register_prompt(runtime, manifest, item))
+                except Exception as exc:  # noqa: BLE001
+                    raise ContributionError(
+                        f"prompt {item['id']!r} could not be mounted: {type(exc).__name__}: {exc}",
+                    ) from exc
+            registered.append({"kind": "prompt", "name": item["id"]})
         for item in by_kind.get("workflow", []):
             surface["workflows"].append(item["id"])
+            if runtime is not None:
+                undos.append(self._register_extra(runtime, manifest, "workflow", item["id"], item))
             registered.append({"kind": "workflow", "name": item["id"]})
+        for item in by_kind.get("model", []):
+            surface["models"].append(item["name"])
+            if runtime is not None:
+                undos.append(self._register_extra(runtime, manifest, "model", item["name"], item))
+            registered.append({"kind": "model", "name": item["name"]})
+
+        if runtime is not None:
+            self._kernel_undos[manifest.id] = undos
 
         # Non-executable descriptors (skills/providers/agents/workers/webhooks/ui)
         # are exposed for discovery/UI; the executable ones are host-driven.
@@ -137,6 +194,17 @@ class ContributionRegistry:
         return registered
 
     def unregister_all(self, plugin_id: str) -> None:
+        for undo in reversed(self._kernel_undos.pop(plugin_id, [])):
+            try:
+                undo()
+            except Exception:  # noqa: BLE001 - teardown continues
+                pass
+        try:
+            runtime = _kernel_runtime()
+            if runtime is not None:
+                runtime.clear_provides(plugin_id)
+        except Exception:  # noqa: BLE001
+            pass
         surface = self._by_plugin.pop(plugin_id, None)
         self._descriptors.pop(plugin_id, None)
         if not surface:
@@ -215,6 +283,138 @@ class ContributionRegistry:
             grouped.setdefault(c.get("kind", ""), []).append(c)
         return grouped
 
+    # -- executable contributions (Phase 4) ----------------------------------
+
+    @staticmethod
+    def _call_sync(handler: Callable[..., Any], what: str) -> Any:
+        result = handler()
+        if inspect.isawaitable(result):
+            raise ContributionError(f"{what} handler must be synchronous when the kernel mounts it")
+        return result
+
+    def _register_agent(self, runtime: Any, manifest: PluginManifest, item: dict[str, Any]) -> Callable[[], Any]:
+        from ..schemas import AgentConfig  # noqa: PLC0415 - leaf schema
+
+        value = self._call_sync(item["handler"], "agent")
+        if value is None:
+            raise ContributionError(f"agent {item['id']!r} handler returned nothing")
+        if isinstance(value, AgentConfig):
+            agent = value
+        elif isinstance(value, dict):
+            agent = AgentConfig(**value)
+        else:
+            raise ContributionError(f"agent {item['id']!r} must return AgentConfig or a mapping")
+        if agent.id != item["id"]:
+            raise ContributionError(
+                f"agent contribution {item['id']!r} returned id {agent.id!r}",
+            )
+        return runtime.register_agent(manifest.id, agent)
+
+    def _register_skill(self, runtime: Any, manifest: PluginManifest, item: dict[str, Any]) -> Callable[[], Any]:
+        text = self._call_sync(item["handler"], "skill")
+        if not isinstance(text, str) or not text.strip():
+            text = str(item.get("instructions") or "")
+        if not text.strip():
+            raise ContributionError(f"skill {item['name']!r} provided no instructions")
+        return runtime.register_skill(
+            manifest.id,
+            skill_id=item["name"],
+            name=item["name"],
+            description=str(item.get("description") or item["name"]),
+            instructions=text,
+        )
+
+    def _register_prompt(self, runtime: Any, manifest: PluginManifest, item: dict[str, Any]) -> Callable[[], Any]:
+        from ..kernel.services.prompt import PromptSection  # noqa: PLC0415
+
+        text = self._call_sync(item["handler"], "prompt")
+        if not isinstance(text, str) or not text.strip():
+            raise ContributionError(f"prompt section {item['id']!r} provided no text")
+        section = PromptSection(
+            id=item["id"],
+            text=text,
+            order=int(item.get("order", 100)),
+            scope=str(item.get("scope") or ""),
+            label=f"plugin:{manifest.id}",
+        )
+        return runtime.register_prompt(
+            manifest.id, section, scope=str(item.get("scope") or ""),
+        )
+
+    def _register_extra(
+        self, runtime: Any, manifest: PluginManifest, kind: str, name: str, item: dict[str, Any],
+    ) -> Callable[[], Any]:
+        if kind == "ui":
+            value: Any = item["handler"]
+        else:
+            value = self._call_sync(item["handler"], kind)
+            if value is None:
+                return lambda: None
+        return runtime.register_extra(kind, name, value, plugin_id=manifest.id)
+
+    @staticmethod
+    def _assert_services(manifest: PluginManifest, instance: Any, runtime: Any) -> None:
+        declared = {item.key for item in manifest.provides}
+        actual = set()
+        if hasattr(instance, "provided_services"):
+            actual = set(instance.provided_services())
+        if declared != actual:
+            missing = sorted(declared - actual)
+            extra = sorted(actual - declared)
+            problems = []
+            if missing:
+                problems.append(f"declared but not provided: {', '.join(missing)}")
+            if extra:
+                problems.append(f"provided but not declared: {', '.join(extra)}")
+            raise ContributionError("; ".join(problems) or "provided-service mismatch")
+        missing = [
+            item.key for item in manifest.requires
+            if not item.optional and not runtime.has_service(item.key)
+        ]
+        if missing:
+            raise PluginError(
+                "PLUGIN_SERVICE_MISSING",
+                f"required service(s) unavailable: {', '.join(missing)}",
+            )
+
+    @staticmethod
+    def _assert_executable_instance(instance: Any, by_kind: dict[str, list[dict[str, Any]]]) -> None:
+        if not any(by_kind.get(kind) for kind in (
+            "agent", "skill", "prompt", "model", "workflow",
+            "research_provider", "data_provider", "ui",
+        )):
+            return
+        try:
+            from .sandbox import SandboxedPlugin  # noqa: PLC0415
+
+            sandboxed = isinstance(instance, SandboxedPlugin)
+        except Exception:  # noqa: BLE001
+            sandboxed = False
+        if sandboxed:
+            raise ContributionError(
+                "agent/skill/prompt contributions require a trusted in-process plugin; "
+                "sandboxed plugins may contribute tools, commands, hooks, events, workers and UI",
+            )
+
+    @staticmethod
+    def _assert_contribution_permissions(manifest: PluginManifest, by_kind: dict[str, list[dict[str, Any]]]) -> None:
+        required = {
+            "agent": "agents.contribute",
+            "skill": "skills.contribute",
+            "prompt": "prompts.contribute",
+            "model": "models.contribute",
+            "workflow": "workflow.execute",
+            "research_provider": "research.execute",
+            "data_provider": "research.execute",
+            "ui": "ui",
+        }
+        for kind, permission in required.items():
+            if by_kind.get(kind) and permission not in manifest.permissions:
+                raise ContributionError(
+                    f"plugin contributes {kind} without the {permission!r} permission",
+                    detail={"permission": permission},
+                )
+
     def _assert_matches(self, manifest: PluginManifest, by_kind: dict[str, list[dict[str, Any]]]) -> None:
         declared = manifest.contributes.all_contribution_names()
         problems: list[str] = []
@@ -226,7 +426,7 @@ class ContributionRegistry:
             if kind == "hooks":
                 continue  # hooks are cross-checked in their own block below
             impl = names(self._impl_kind(kind),
-                         "id" if kind in ("ui", "agents", "webhooks", "workflows") else "name")
+                         "id" if kind in ("ui", "agents", "webhooks", "workflows", "prompts") else "name")
             missing = sorted(set(declared_names) - impl)
             extra = sorted(impl - set(declared_names))
             if missing:
@@ -272,9 +472,11 @@ class ContributionRegistry:
     @staticmethod
     def _impl_kind(manifest_kind: str) -> str:
         return {
-            "tools": "tool", "skills": "skill", "hooks": "hook", "commands": "command",
+            "tools": "tool", "skills": "skill", "prompts": "prompt", "models": "model",
+            "hooks": "hook", "commands": "command",
             "ui": "ui", "workers": "worker", "webhooks": "webhook", "agents": "agent",
             "research_providers": "research_provider", "data_providers": "data_provider",
+            "workflows": "workflow",
         }.get(manifest_kind, manifest_kind)
 
 
@@ -283,6 +485,15 @@ async def _safe_emit(emitter: Any, event_type: str, data: dict[str, Any]) -> Non
         await emitter.emit(event_type, data)
     except Exception:  # noqa: BLE001 - telemetry must never break a tool
         pass
+
+
+def _kernel_runtime() -> Any:
+    try:
+        from ..kernel.services.runtime import kernel_runtime  # noqa: PLC0415
+
+        return kernel_runtime if kernel_runtime.active else None
+    except Exception:  # noqa: BLE001 - the plugin platform must work without the kernel
+        return None
 
 
 __all__ = ["ContributionRegistry", "ContributionError", "tool_name_for", "TOOL_PREFIX"]

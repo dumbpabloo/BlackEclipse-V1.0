@@ -1,0 +1,58 @@
+id: kernel-demo
+name: Kernel Demo
+version: 1.0.0
+publisher: black-eclipse
+category: examples
+tags: [reference, kernel, demo]
+description: >-
+  Exercises the Phase-4 executable contribution surfaces: an agent, a skill and
+  a prompt section mounted through the kernel, plus provides/requires metadata.
+
+runtime:
+  type: python
+  entrypoint: plugin:KernelDemo
+
+permissions:
+  - agents.contribute
+  - skills.contribute
+  - prompts.contribute
+  - models.contribute
+  - workflow.execute
+  - research.execute
+  - ui
+
+provides:
+  - key: demo.agent
+    version: 1
+requires:
+  - key: tools
+
+contributes:
+  agents:
+    - id: demo-agent
+      description: A small agent contributed by the kernel demo.
+  skills:
+    - name: demo.procedure
+      description: A reusable procedure contributed by the kernel demo.
+  prompts:
+    - id: demo.guidance
+      scope: demo-agent
+      order: 50
+  workflows:
+    - id: demo-flow
+  models:
+    - name: demo-model
+      provider: demo
+  research_providers:
+    - name: demo-research
+      kinds: [demo]
+  data_providers:
+    - name: demo-data
+      kinds: [demo]
+  ui:
+    - kind: panel
+      id: demo-panel
+      title: Demo
+
+storage:
+  kv: false

@@ -145,7 +145,13 @@ def _import_from_path(plugin_id: str, path: Path, *, name: str) -> Any:
             raise LoadError("PLUGIN_IMPORT_FAILED", f"cannot load {path}")
         module = importlib.util.module_from_spec(spec)
         sys.modules[mod_name] = module
-        spec.loader.exec_module(module)
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            # A half-imported module must not poison the cache: the next load
+            # (after the source is fixed) has to re-execute from scratch.
+            sys.modules.pop(mod_name, None)
+            raise
         return module
     finally:
         if added:
@@ -153,6 +159,40 @@ def _import_from_path(plugin_id: str, path: Path, *, name: str) -> Any:
                 sys.path.remove(root_str)
             except ValueError:
                 pass
+
+
+def module_names_under(root: Path) -> list[str]:
+    """Imported module names whose file lives under ``root`` (non-destructive)."""
+    try:
+        resolved = Path(root).resolve()
+    except OSError:
+        return []
+    found: list[str] = []
+    for name, module in list(sys.modules.items()):
+        file_path = getattr(module, "__file__", None)
+        if not file_path:
+            continue
+        try:
+            path = Path(file_path).resolve()
+        except (OSError, ValueError):
+            continue
+        if path == resolved or resolved in path.parents:
+            found.append(name)
+    return sorted(found)
+
+
+def evict_modules(root: Path) -> list[str]:
+    """Remove every imported module whose file lives under ``root``.
+
+    This is the code half of a hot reload: the next ``instantiate`` re-executes
+    the entrypoint *and* any sibling module the plugin imported. Returns the
+    evicted module names (for evidence/tests).
+    """
+    removed = module_names_under(root)
+    for name in removed:
+        sys.modules.pop(name, None)
+    importlib.invalidate_caches()
+    return removed
 
 
 def discover(root: Path) -> list[Path]:
@@ -171,6 +211,8 @@ __all__ = [
     "instantiate",
     "checksum",
     "discover",
+    "evict_modules",
+    "module_names_under",
     "find_manifest_file",
     "LoadError",
     "MANIFEST_FILES",

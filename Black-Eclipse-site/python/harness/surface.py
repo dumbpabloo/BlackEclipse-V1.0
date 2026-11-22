@@ -103,6 +103,9 @@ class SurfaceResolution:
     added: tuple[str, ...] = ()
     #: Tools the autonomy profile removed, from either half. Named, never silent.
     policyRemoved: tuple[str, ...] = ()  # noqa: N815
+    #: Tools the CODING profile preset removed (runtime/container/cloud/browser/
+    #: computer/orchestration/package). Reachable only by explicit operator enable.
+    presetRemoved: tuple[str, ...] = ()  # noqa: N815
     #: Tools an operator-disabled store removed, from either half.
     disabled: tuple[str, ...] = ()
     #: Base tools this resolution does not carry AND cannot explain. This is
@@ -131,6 +134,9 @@ class SurfaceResolution:
             "addedSchemaChars": self.addedSchemaChars,
             "added": list(self.added),
             "policyRemoved": list(self.policyRemoved),
+            "presetRemoved": list(self.presetRemoved[:50]),
+            "presetRemovedCount": len(self.presetRemoved),
+            "presetRemovedTruncated": max(0, len(self.presetRemoved) - 50),
             "disabled": list(self.disabled),
             "removed": list(self.removed),
             "maxAddedSchemaChars": MAX_SURFACE_ADDED_SCHEMA_CHARS,
@@ -143,7 +149,7 @@ class SurfaceResolution:
         return (
             f"surface={self.surfaceId} added={len(self.added)} "
             f"bound={self.boundTools} policyRemoved={len(self.policyRemoved)} "
-            f"disabled={len(self.disabled)}"
+            f"presetRemoved={len(self.presetRemoved)} disabled={len(self.disabled)}"
         )
 
 
@@ -189,6 +195,25 @@ def _declared_allowlist(agent: AgentConfig, registry: ToolRegistry) -> Optional[
     return allowed
 
 
+def _narrow_to_coding_surface(
+    agent: AgentConfig, allowed: Optional[set[str]], autonomy: Optional[str],
+) -> tuple[Optional[set[str]], set[str]]:
+    """Apply the coding preset for the code-agent profile.
+
+    Returns `(kept, removed)`. Only the code agent is narrowed here: the chat
+    half is narrowed in `chat_code_allowlist`, and a finance run with no coding
+    autonomy keeps its full surface.
+    """
+    if allowed is None or agent.id != "code-agent" or not autonomy:
+        return allowed, set()
+    from .code.policy import coding_surface, coding_surface_enabled  # noqa: PLC0415
+
+    if not coding_surface_enabled():
+        return allowed, set()
+    preset = set(coding_surface(autonomy))
+    return allowed & preset, allowed - preset
+
+
 def effective_allowlist(
     agent: AgentConfig, registry: ToolRegistry, autonomy: Optional[str] = None,
 ) -> Optional[set[str]]:
@@ -212,9 +237,16 @@ def effective_allowlist(
     if allowed is None:
         return None
     if autonomy is not None:
-        from .code.policy import allowed_tools  # noqa: PLC0415
+        from .kernel.services.runtime import kernel_runtime  # noqa: PLC0415
 
-        allowed = set(allowed_tools(autonomy, tuple(sorted(allowed))))
+        authority = kernel_runtime.policy_authority if kernel_runtime.active else None
+        if authority is not None:
+            allowed = set(authority.allowed_tools(autonomy, tuple(sorted(allowed))))
+        else:
+            from .code.policy import allowed_tools  # noqa: PLC0415
+
+            allowed = set(allowed_tools(autonomy, tuple(sorted(allowed))))
+    allowed, _removed = _narrow_to_coding_surface(agent, allowed, autonomy)
     return allowed
 
 
@@ -246,9 +278,12 @@ def chat_code_allowlist(
 
     if agent.id != "eclipse-agent" or not autonomy:
         return None
-    from .code.policy import allowed_tools  # noqa: PLC0415
+    from .code.policy import allowed_tools, coding_surface, coding_surface_enabled  # noqa: PLC0415
 
-    return set(allowed_tools(autonomy, tuple(CHAT_CODE_TOOLS)))
+    narrowed = set(allowed_tools(autonomy, tuple(CHAT_CODE_TOOLS)))
+    if coding_surface_enabled():
+        narrowed &= set(coding_surface(autonomy))
+    return narrowed
 
 
 def surface_disabled_tools(settings: Optional[dict[str, Any]]) -> set[str]:
@@ -361,6 +396,19 @@ def resolve_surface_detail(
                 allowed_tools(effective_autonomy, tuple(sorted(surface_declared)))
             )
 
+    preset_removed: set[str] = set()
+    if effective_autonomy is not None:
+        from .code.policy import (  # noqa: PLC0415
+            coding_surface, coding_surface_enabled,
+        )
+
+        if coding_surface_enabled():
+            preset = set(coding_surface(effective_autonomy))
+            if agent.id == "code-agent" and declared is not None:
+                preset_removed |= declared - preset
+            if surface is not None:
+                preset_removed |= set(_chat_code_declared_tools()) - preset
+
     if surface is None:
         allowed = base
         surface_id = SURFACE_BASE
@@ -388,6 +436,24 @@ def resolve_surface_detail(
     else:
         allowed = {name for name in allowed if name not in disabled}
 
+    # Kernel tool policy: an operator/evolution overlay can deny names or narrow
+    # to an allow-list. A denial is explained as policy removal, not unexplained.
+    from .kernel.services.runtime import kernel_runtime  # noqa: PLC0415
+
+    overlay = kernel_runtime.tool_policy_for(agent.id) if kernel_runtime.active else None
+    if overlay:
+        denied = set(overlay.get("deny") or ())
+        keep = set(overlay.get("allow") or ())
+        if allowed is None:
+            allowed = set(registry.names())
+        removed_by_overlay = (allowed & denied)
+        allowed -= denied
+        if keep:
+            removed_by_overlay |= (allowed - keep)
+            allowed &= keep
+        policy_removed = set(policy_removed) | removed_by_overlay
+        disabled = set(disabled) | denied | (removed_by_overlay if keep else set())
+
     registered = set(registry.names())
     bound = registered & allowed if allowed is not None else registered
     added_chars = _schema_chars(registry, set(added) & registered) if added else 0
@@ -396,7 +462,7 @@ def resolve_surface_detail(
     # disabled store. Anything else is UNEXPLAINED and is reported as such -
     # it must always be empty.
     carried = base if base is not None else set()
-    unexplained = (carried - set(allowed or ())) - policy_removed - set(disabled)
+    unexplained = (carried - set(allowed or ())) - policy_removed - preset_removed - set(disabled)
 
     return SurfaceResolution(
         agentId=agent.id,
@@ -407,6 +473,7 @@ def resolve_surface_detail(
         surface=surface_set,
         added=added,
         policyRemoved=tuple(sorted(policy_removed)),
+        presetRemoved=tuple(sorted(preset_removed)),
         disabled=tuple(sorted(disabled)),
         removed=tuple(sorted(unexplained)),
         boundTools=len(bound),
@@ -421,6 +488,8 @@ def resolve_surface_run(
     autonomy: Optional[str] = None,
     *,
     apply_code_surface: bool = True,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> tuple[SurfaceResolution, str]:
     """Resolve ONE run's surface AND its byte-stable system prompt.
 
@@ -441,6 +510,14 @@ def resolve_surface_run(
         memory_enabled=bool(settings.get("memory_enabled", True)),
         session_history_enabled=bool(settings.get("session_history_enabled", True)),
     )
+    # Gap #13: one audited base prompt, plus the resolved model family's short
+    # tool-use guidance. Finance turns are untouched.
+    from .prompt_variants import apply_coding_variant  # noqa: PLC0415
+
+    prompt = apply_coding_variant(
+        prompt, provider=provider, model=model,
+        agent_id=agent.id, autonomy=autonomy,
+    )
     return resolution, prompt
 
 
@@ -449,6 +526,9 @@ def resolve_surface(
     registry: ToolRegistry,
     settings: Optional[dict[str, Any]],
     autonomy: Optional[str] = None,
+    *,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> tuple[Optional[set[str]], str]:
     """Resolve `(allowlist, system_prompt)` for ONE run from policy.
 
@@ -458,7 +538,9 @@ def resolve_surface(
     `resolve_surface_detail` is the same resolution with the reasoning
     attached; this function is the narrow view of it.
     """
-    resolution, prompt = resolve_surface_run(agent, registry, settings, autonomy)
+    resolution, prompt = resolve_surface_run(
+        agent, registry, settings, autonomy, provider=provider, model=model,
+    )
     return (set(resolution.allowed) if resolution.allowed is not None else None), prompt
 
 

@@ -202,6 +202,15 @@ async def _boot() -> None:
             await brokers.start_reconciler()
         except Exception:  # noqa: BLE001 - never block boot
             log.warning("broker reconciler did not start", exc_info=True)
+        # Portfolio supervisor: OPT-IN (TRADING_SUPERVISOR_SECONDS, default 0).
+        # Each pass records the day/week equity baseline and pauses bots that
+        # have lost the right to keep trading. It closes nothing.
+        try:
+            from .trade.supervisor_api import start_supervisor_loop
+
+            await start_supervisor_loop(brokers)
+        except Exception:  # noqa: BLE001 - never block boot
+            log.warning("trading supervisor did not start", exc_info=True)
     # Advisory outcome scoring: a bounded interval that records how past
     # recommendations turned out. It never issues advice and never touches an
     # approval gate. Disabled with HARNESS_ADVISORY_AUTO_EVALUATE=0.
@@ -264,6 +273,11 @@ async def _boot() -> None:
     from .plugins.bootstrap import start_plugins
 
     await start_plugins(service)
+    # Phase 2 composition: mount the active profile's ordered rows through the
+    # kernel supervisor. No profile / kernel off is a no-op; a failed row is
+    # restored and reported without stopping the app.
+    from .kernel.profile_boot import start_profile
+    service._kernel_profile_status = await start_profile(service)
     # Parallel execution & DAG orchestration: register the tools and recover any
     # execution left mid-flight by a previous process. Best-effort, never a boot
     # blocker.
@@ -346,6 +360,9 @@ async def _shutdown() -> None:
     await stop_auto_loop(service)
     from .plugins.bootstrap import stop_plugins
 
+    # Unmount profile rows before the plugins/services they may depend on.
+    from .kernel.profile_boot import stop_profile
+    await stop_profile(service)
     await stop_plugins(service)
     # Flush + close telemetry sinks FIRST so terminal-job/plugin events reach a
     # live exporter before the bus is torn down.
