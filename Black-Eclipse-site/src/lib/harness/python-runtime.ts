@@ -23,7 +23,7 @@ import {
   writeSync,
 } from "fs";
 import path from "path";
-import { findPython } from "@/lib/scraper/fetchers/python";
+import { findProjectRoot, findPython } from "@/lib/scraper/fetchers/python";
 import { resolveLLMProviderId } from "@/lib/agent/presets";
 import {
   PYTHON_CHART_PACKAGES,
@@ -373,7 +373,7 @@ function harnessSourceMtimeMs(): number {
   // top-level-only scan missed every edit there, so a running runtime was never
   // detected as stale and kept serving old code after a change.
   try {
-    const root = path.join(process.cwd(), "python", "harness");
+    const root = path.join(findProjectRoot(), "python", "harness");
     let newest = 0;
     const walk = (dir: string, depth: number): void => {
       if (depth > 6) return;
@@ -630,7 +630,7 @@ async function ensurePythonRuntimeUncached(): Promise<boolean> {
   }
 
   g.__harnessPyStart = (async () => {
-    const projectRoot = process.cwd();
+    const projectRoot = findProjectRoot();
     const appDir = path.join(projectRoot, "python");
     if (!existsSync(path.join(appDir, "harness", "main.py"))) {
       console.error("[harness] python/harness/main.py not found — runtime unavailable");

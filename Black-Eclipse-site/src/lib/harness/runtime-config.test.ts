@@ -9,7 +9,7 @@ import {
   PYTHON_RUNTIME_PACKAGES,
   chartEngineReadiness,
 } from "@/lib/harness/runtime-config";
-import { findPython } from "@/lib/scraper/fetchers/python";
+import { findProjectRoot, findPython } from "@/lib/scraper/fetchers/python";
 
 const execFileAsync = promisify(execFile);
 
@@ -123,4 +123,15 @@ describe("chart engine dependency contract", () => {
     },
     120_000,
   );
+});
+
+describe("project-root discovery", () => {
+  it("finds the checkout from a nested pinned-release cwd", () => {
+    const root = fs.mkdtempSync(path.join(require("os").tmpdir(), "be-root-"));
+    fs.mkdirSync(path.join(root, "python", "harness"), { recursive: true });
+    fs.writeFileSync(path.join(root, "python", "harness", "main.py"), "");
+    const nested = path.join(root, "releases", "stable", "build", ".next", "server");
+    fs.mkdirSync(nested, { recursive: true });
+    expect(findProjectRoot(nested)).toBe(root);
+  });
 });

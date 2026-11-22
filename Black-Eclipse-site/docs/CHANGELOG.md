@@ -6,6 +6,49 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-22
 
+- **fix(desktop): resolve the Python runtime and harness source from the project root, not the process cwd.** A pinned
+  desktop release runs Next with a cwd inside `releases/stable/<build>`, so `findPython()` looked for
+  `scripts/vendor/python` there and reported “Python with agent dependencies not found”; the spawn also looked for
+  `python/harness/main.py` under the wrong root. Added `findProjectRoot()` (walks cwd + module dir up to the checkout) and
+  used it for the vendored interpreter, the spawn app dir and the harness source-mtime check. 5 runtime-config tests pass;
+  front door now serves 200 (`/api/harness/agents`).
+  docs updated: `docs/CHANGELOG.md`.
+
+- **feat(comparison): the CROSS-MODEL condition ran - Eclipse leads on a second model too
+  (`glm-5.3-flash`): 0.8333 vs 0.7847**, honesty 1.000 vs 0.917, grounding tied. With the
+  DeepSeek set (0.8264 vs 0.7998) and the 8-task extension (0.8490 vs 0.8073), the
+  direction now holds across two live models.
+  - **Fairness defect fixed first:** Eclipse's default run wall clock is **120 s**; two glm
+    runs died at the deadline while the reference has no wall clock. The comparison gives
+    Eclipse 420 s (still bounded) and both tasks were re-run (0.2500 -> 0.5000 and
+    0.2500 -> 0.8750). Without this the table would have measured a timeout, not a harness.
+  - **§7.1/§7.2 updated:** the claim now says "leads on both models tested", and the
+    "cross-model absent" text is corrected. Still not "best in the world": two flash models,
+    one machine, a rubric that does not score P&L.
+  Tests: rubric/register + line-ending/changelog guards (run after the doc edits).
+  Docs: `docs/harness/vibe-trading-analysis.md` §7.1 and §7.2 (round 7).
+
+- **docs(trade): autonomous LIVE trading is documented as ENABLED and earned - the old
+  "P5 not enabled / mandates are demo-only" text was stale.** No gate was removed: the
+  chain is L2 authority -> proof (out-of-sample + 30 demo fills over 14 days) -> ramp
+  (probe 25% / build 50% / scale 100% from real live fills) -> armed live connection ->
+  pinned live mandate (<= 24 h) -> supervisor day/week stops, with the per-order stop,
+  position cap, cooldown and money guardrails still active. The Graph Studio node remains
+  paper-only (no live adapter) and a live graph is still refused.
+  Docs: `docs/trading.md` (roadmap P5 row, the new "Autonomous live trading is enabled"
+  checklist, honest-boundaries bullet).
+
+- **test: the current tree is CERTIFIED green after the 20-task set and the RUN_TIMEOUT
+  fix.** `npm run test` exit 0:
+  `Test Files 566 passed | 1 skipped`, `Tests 5226 passed | 1 skipped`;
+  Python `3341 + 3468 + 3330 + 3391 passed` (four shards, **0 failed**, 1,174 files);
+  `eval gates: ALL PASS` (`task_success 0.997`, `hallucination_rate 0.0`,
+  `safety_score 1.0`; construction/capability/corpus/rsl gates PASS).
+  This supersedes test12: it covers the 8-task extension and `RUN_TIMEOUT` in
+  `HarnessErrorCode`. The claim is unchanged and narrow (§7.1): ahead on this rubric, one
+  model, one machine - **not** "best in the world"; profitability is unmeasured.
+  no doc change beyond this entry - certification is not an architecture or contract change.
+
 - **release: v0.4.24.** Version bumped in `package.json`, `pyproject.toml` and `harness.__version__`; `scripts/release-check.js`
   reports package 0.4.24 / API 1.0.0. Tag and release assets are produced by the desktop workflow; the signed
   `release/stable.json` is uploaded after the draft exists.

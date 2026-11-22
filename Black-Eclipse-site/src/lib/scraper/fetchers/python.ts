@@ -5,6 +5,7 @@
 // name throws ENOENT, so every bridge call must go through this resolver.
 
 import { execFile } from "child_process";
+import { existsSync } from "fs";
 import path from "path";
 import { promisify } from "util";
 
@@ -22,8 +23,35 @@ const CANDIDATES = process.platform === "win32" ? ["python", "python3", "py"] : 
 // looked for a SYSTEM python3 with `langgraph` and never found it: the release
 // smoke reported "Python with agent dependencies not found" while the app's own
 // interpreter sat unused in scripts/vendor/python/bin/python3.
-const VENDOR_PYTHON = path.join(
-  process.cwd(),
+/**
+ * The checkout/payload root, independent of the process cwd.
+ *
+ * A pinned desktop release runs `next start` (or the standalone server) with a
+ * cwd that can be the release directory, not the repo: resolving the vendored
+ * interpreter from `process.cwd()` then reports "Python with agent dependencies
+ * not found" even though `scripts/vendor/python` exists one level up. Walk the
+ * cwd and this module's own directory up to a root that contains either the
+ * vendored interpreter or `python/harness/main.py`.
+ */
+export function findProjectRoot(start = process.cwd()): string {
+  const anchors = [start, __dirname];
+  for (const anchor of anchors) {
+    let current = path.resolve(anchor);
+    for (let depth = 0; depth < 12; depth += 1) {
+      const vendor = path.join(current, "scripts", "vendor", "python");
+      const harness = path.join(current, "python", "harness", "main.py");
+      if (existsSync(harness) || existsSync(vendor)) return current;
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  }
+  return start;
+}
+
+const VENDOR_ROOT = findProjectRoot();
+const VENDOR_INTERPRETER = path.join(
+  VENDOR_ROOT,
   "scripts",
   "vendor",
   "python",
@@ -57,8 +85,8 @@ export async function findPython(mod?: string): Promise<PythonInfo> {
   if (hit && Date.now() - hit.at < ttl) return hit.value;
 
   // Vendored embedded Python is the primary choice on Windows.
-  if (VENDOR_PYTHON && (mod ? await canRun(VENDOR_PYTHON, mod) : true)) {
-    const result: PythonInfo = { cmd: VENDOR_PYTHON };
+  if (VENDOR_INTERPRETER && (mod ? await canRun(VENDOR_INTERPRETER, mod) : true)) {
+    const result: PythonInfo = { cmd: VENDOR_INTERPRETER };
     store.__pyCache.set(key, { value: result, at: Date.now() });
     return result;
   }
