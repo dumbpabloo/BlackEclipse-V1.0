@@ -75,13 +75,27 @@ export function CheckpointPanel({ rootId }: { rootId?: string | null }) {
     <section className="glass-card rounded-xl p-3">
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-[12px] font-medium text-white/80">{t('code.checkpoints.title')}</h3>
-        <button
-          type="button"
-          onClick={() => void refresh()}
-          className="rounded-lg border border-white/10 px-2 py-1 text-[11px] text-white/60 hover:text-white"
-        >
-          {t('code.checkpoints.refresh')}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={busy || !items.length}
+            onClick={async () => {
+              if (await confirmDialog({ title: t('code.checkpoints.undoTurnConfirm'), tone: 'danger' })) {
+                void restore(items[0].id, true);
+              }
+            }}
+            className="rounded-lg border border-amber-400/30 px-2 py-1 text-[11px] text-amber-200/80 hover:text-amber-100 disabled:opacity-50"
+          >
+            {t('code.checkpoints.undoTurn')}
+          </button>
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            className="rounded-lg border border-white/10 px-2 py-1 text-[11px] text-white/60 hover:text-white"
+          >
+            {t('code.checkpoints.refresh')}
+          </button>
+        </div>
       </div>
       <ul className="mt-2 space-y-1">
         {items.map((item) => (

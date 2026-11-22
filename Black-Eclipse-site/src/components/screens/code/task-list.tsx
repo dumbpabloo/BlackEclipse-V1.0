@@ -51,6 +51,8 @@ export function TaskList({ tasks, selectedId, onSelect, onChanged, workspaceRoot
   const [rows, setRows] = useState<Record<string, RowState>>({});
   const [draft, setDraft] = useState('');
   const [starting, setStarting] = useState(false);
+  const [images, setImages] = useState<import('@/lib/harness/types').RunImageInput[]>([]);
+  const [imageError, setImageError] = useState<string | null>(null);
 
   // Name the project explicitly when one is chosen; otherwise the runtime binds
   // its own server-resolved default (the historical behaviour).
@@ -102,13 +104,43 @@ export function TaskList({ tasks, selectedId, onSelect, onChanged, workspaceRoot
     }
   };
 
+  const attachImages = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setImageError(null);
+    const next = [...images];
+    for (const file of Array.from(files)) {
+      if (next.length >= 4) break;
+      if (!file.type.startsWith('image/')) continue;
+      if (file.size > 2 * 1024 * 1024) {
+        setImageError(t('code.chat.imageTooLarge'));
+        continue;
+      }
+      try {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(file);
+        });
+        next.push({ dataUrl, caption: file.name, mime: file.type });
+      } catch {
+        setImageError(t('code.chat.imageFailed'));
+      }
+    }
+    setImages(next);
+  };
+
   const startNew = async () => {
     const query = draft.trim();
     if (!query || starting) return;
     setStarting(true);
     try {
-      await createCodeTask({ query, autonomy: 'edit_verify', modelSettings: {}, ...project });
+      await createCodeTask({
+        query, autonomy: 'edit_verify', modelSettings: {}, ...project,
+        images: images.length ? images : undefined,
+      });
       setDraft('');
+      setImages([]);
       onChanged?.();
     } catch {
       // Leave the draft in place so the user can retry.
@@ -126,14 +158,46 @@ export function TaskList({ tasks, selectedId, onSelect, onChanged, workspaceRoot
         placeholder={t('code.chat.newPlaceholder')}
         className="w-full rounded-lg bg-background/60 px-2.5 py-1.5 text-[13px] text-foreground outline-none"
       />
-      <button
-        type="button"
-        disabled={!draft.trim() || starting}
-        onClick={() => void startNew()}
-        className="glass-button mt-1.5 rounded-lg px-2.5 py-1 text-[11px] text-foreground disabled:opacity-50"
-      >
-        {t('code.chat.buildThis')}
-      </button>
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        <label className="glass-button cursor-pointer rounded-lg px-2.5 py-1 text-[11px] text-foreground">
+          {t('code.chat.attachImage')}
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            multiple
+            className="hidden"
+            onChange={(e) => { void attachImages(e.target.files); e.currentTarget.value = ''; }}
+          />
+        </label>
+        <button
+          type="button"
+          disabled={!draft.trim() || starting}
+          onClick={() => void startNew()}
+          className="glass-button rounded-lg px-2.5 py-1 text-[11px] text-foreground disabled:opacity-50"
+        >
+          {t('code.chat.buildThis')}
+        </button>
+      </div>
+      {images.length > 0 && (
+        <ul className="mt-1 flex flex-wrap gap-1">
+          {images.map((image, index) => (
+            <li key={`${index}:${image.caption}`} className="flex items-center gap-1 rounded-md bg-background/60 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={image.dataUrl} alt={image.caption || ''} className="h-6 w-6 rounded object-cover" />
+              <span className="max-w-[8rem] truncate">{image.caption}</span>
+              <button
+                type="button"
+                onClick={() => setImages(images.filter((_, i) => i !== index))}
+                className="text-muted-foreground/70 hover:text-foreground"
+                aria-label={t('code.chat.removeImage')}
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {imageError && <div className="mt-1 text-[10px] text-destructive">{imageError}</div>}
     </div>
   );
 

@@ -62,6 +62,8 @@ import { ClarificationCard } from './clarification-card';
 import { MessageQueue } from './message-queue';
 import { GoalBar } from './goal-bar';
 import { useMessageQueue } from '@/lib/chat/use-message-queue';
+import { useEditorContext } from '@/lib/chat/use-editor-context';
+import { clearEditorContext, editorContextLabel, formatEditorContext } from '@/lib/chat/editor-context';
 
 const STORAGE_KEY = 'be_chat_dock_v1';
 /** Stable workspace-folder id for the dock, so its runs also persist output. */
@@ -173,6 +175,7 @@ export function ChatDock({
   // Prompts submitted while this dock's agent is replying. They run in order
   // once the current answer finishes; each can be edited/reordered/promoted.
   const messageQueue = useMessageQueue();
+  const editorContext = useEditorContext();
   // Manual expand/collapse of the transcript (independent of focus, so the user
   // can scroll back through an answer without the panel collapsing).
   const [expanded, setExpanded] = useState(false);
@@ -472,10 +475,14 @@ export function ChatDock({
   const startTurn = async (
     history: { role: 'user' | 'assistant'; content: string }[],
     userText: string,
-    opts?: { resumeRunId?: string },
+    opts?: { resumeRunId?: string; context?: string },
   ) => {
     setQuery('');
     setExpanded(true);
+
+    // Gap #17: the editor snapshot travels with the HARNESS turn as reference
+    // material, while the visible user bubble stays the user's own words.
+    const harnessText = opts?.context ? `${userText}\n\n${opts.context}` : userText;
 
     const userMsg: Message = { id: newId(), role: 'user', content: userText };
     const assistantId = newId();
@@ -531,7 +538,7 @@ export function ChatDock({
     try {
       const finalTurn = await agentRun.start({
         history,
-        userText,
+        userText: harnessText,
         chatId: sessionIdRef.current,
         model: chatModel.displayModel || undefined,
         reasoningEffort: reasoningEffort.effort,
@@ -578,18 +585,25 @@ export function ChatDock({
 
   const send = async () => {
     const text = query.trim();
-    if (!text) return;
+    const context = editorContext ? formatEditorContext(editorContext) : undefined;
+    if (!text && !context) return;
+    const question = text || 'Explain the selected code.';
     // Busy means "queue it", never "drop it". The queue drains automatically as
-    // each reply completes, in the order the prompts were typed.
+    // each reply completes, in the order the prompts were typed. A queued prompt
+    // carries the editor snapshot inline because the queue has no hidden field;
+    // the drain then sends exactly what the bubble shows.
     if (busy || messageQueue.sizeFor(sessionIdRef.current) > 0) {
-      if (messageQueue.enqueue(text, undefined, sessionIdRef.current)) {
+      const queued = context ? `${question}\n\n${context}` : question;
+      if (messageQueue.enqueue(queued, undefined, sessionIdRef.current)) {
         setQuery('');
+        clearEditorContext();
         sound.tick();
       }
       return;
     }
     const history = messagesRef.current.map(m => ({ role: m.role, content: m.content }));
-    await startTurn(history, text);
+    await startTurn(history, question, context ? { context } : undefined);
+    clearEditorContext();
   };
 
   /** Run a follow-up turn from a response `controls` block (same path as send). */
@@ -661,7 +675,7 @@ export function ChatDock({
 
   // A draft is sendable whether or not a reply is running: while busy the send
   // action queues it instead of dropping it.
-  const canSend = query.trim().length > 0;
+  const canSend = query.trim().length > 0 || Boolean(editorContext);
   const canQueue = busy && canSend;
 
   /** Promote a queued prompt and interrupt the current reply so it runs next. */
@@ -797,6 +811,26 @@ export function ChatDock({
           className="rounded-[1.75rem] border border-white/12 dark:border-white/8 glass-card p-2 shadow-2xl shadow-black/50"
         >
           <div className={cn('relative', voiceActive && 'h-[84px]')}>
+            {editorContext && (
+              <div className="mx-2 mb-1 flex items-center gap-1.5 rounded-lg border border-primary/25 bg-primary/5 px-2 py-1 text-[10.5px]">
+                <span className="shrink-0 text-muted-foreground/70">Editor</span>
+                <span className="min-w-0 flex-1 truncate font-mono text-foreground/85" title={editorContextLabel(editorContext)}>
+                  {editorContextLabel(editorContext)}
+                </span>
+                {editorContext.truncated && (
+                  <span className="shrink-0 text-muted-foreground/60">shortened</span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => clearEditorContext()}
+                  className="shrink-0 rounded px-1 text-muted-foreground hover:text-foreground"
+                  aria-label="Remove editor context"
+                  title="Remove editor context"
+                >
+                  ×
+                </button>
+              </div>
+            )}
             <textarea
               ref={textareaRef}
               rows={1}
