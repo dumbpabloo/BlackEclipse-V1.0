@@ -15,6 +15,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Check, ChevronRight, Loader2 } from '@/lib/icons';
 import { cn } from '@/lib/utils';
 import type { ActivityItem, ResponseStatus } from '@/lib/agent/response-model';
+import { categoryCounts, changedFiles, groupActivities, type ActivityCategory } from '@/lib/agent/activity-groups';
 import { ActivityItemRow } from './activity-item';
 
 export interface ActivityFeedProps {
@@ -52,6 +53,9 @@ export function ActivityFeed({ activities, status, compact = false, autoExpand =
     }
     return activities[activities.length - 1];
   }, [activities]);
+  const groups = useMemo(() => groupActivities(activities), [activities]);
+  const counts = useMemo(() => categoryCounts(activities), [activities]);
+  const filesChanged = useMemo(() => changedFiles(activities), [activities]);
 
   // Expanded by default (the steps stay visible). While the agent works we keep
   // it open; a user who collapses it keeps that choice for the turn.
@@ -72,9 +76,21 @@ export function ActivityFeed({ activities, status, compact = false, autoExpand =
   const summary = (() => {
     const parts: string[] = [`${activities.length} step${activities.length === 1 ? '' : 's'}`];
     if (sources > 0) parts.push(`${sources} source${sources === 1 ? '' : 's'}`);
+    if (filesChanged.length > 0) parts.push(`${filesChanged.length} file${filesChanged.length === 1 ? '' : 's'}`);
     if (failures > 0) parts.push(`${failures} failed`);
     return parts.join(' · ');
   })();
+
+  const CATEGORY_LABEL: Record<ActivityCategory, string> = {
+    context: 'Context',
+    read: 'Reading',
+    file: 'Changes',
+    events: 'Running',
+    subagent: 'Delegated',
+    other: 'Steps',
+  };
+  const countOf = (category: ActivityCategory) =>
+    counts.find((entry) => entry.category === category)?.count ?? 0;
 
   return (
     <div className={cn('w-full', compact ? 'mb-2 text-[11px]' : 'mb-3')}>
@@ -110,13 +126,42 @@ export function ActivityFeed({ activities, status, compact = false, autoExpand =
           id={feedId}
           className={cn(compact ? 'space-y-0.5' : 'space-y-1')}
         >
-          {activities.map((item) => (
-            <ActivityItemRow
-              key={item.id}
-              item={item}
-              compact={compact}
-              latest={working && latest?.id === item.id}
-            />
+          {filesChanged.length > 0 && (
+            <div className="mb-1 flex flex-wrap items-center gap-1 rounded-md border border-border/30 bg-background/30 px-1.5 py-1">
+              <span className="text-[9.5px] uppercase tracking-wide text-muted-foreground/60">
+                Changed this turn
+              </span>
+              {filesChanged.slice(0, 8).map((path) => (
+                <span
+                  key={path}
+                  title={path}
+                  className="max-w-[13rem] truncate rounded border border-border/30 px-1 py-0.5 font-mono text-[10px] text-foreground/80"
+                >
+                  {path.slice(path.lastIndexOf('/') + 1)}
+                </span>
+              ))}
+              {filesChanged.length > 8 && (
+                <span className="text-[10px] text-muted-foreground/60">+{filesChanged.length - 8} more</span>
+              )}
+            </div>
+          )}
+          {groups.map((group, groupIndex) => (
+            <div key={`${group.category}:${groupIndex}`} className={cn(groupIndex > 0 && 'pt-0.5')}>
+              {groups.length > 1 && (
+                <div className="flex items-center gap-1.5 px-0.5 pb-0.5 text-[9.5px] uppercase tracking-wide text-muted-foreground/55">
+                  <span>{CATEGORY_LABEL[group.category]}</span>
+                  <span className="text-muted-foreground/40">{countOf(group.category)}</span>
+                </div>
+              )}
+              {group.items.map((item) => (
+                <ActivityItemRow
+                  key={item.id}
+                  item={item}
+                  compact={compact}
+                  latest={working && latest?.id === item.id}
+                />
+              ))}
+            </div>
           ))}
         </div>
       )}
