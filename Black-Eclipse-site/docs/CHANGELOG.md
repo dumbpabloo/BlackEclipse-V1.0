@@ -6,6 +6,21 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-22
 
+- **security: dependency audit cleared - npm 40 -> 0 and pip 103 pypdf advisories -> 0.**
+  - `npm audit fix` (non-breaking) took 40 -> 12; the rest were fixed with explicit
+    bounds: `nodemailer` 9 -> 10.6.1, `katex` 0.16 -> 0.19.1, and overrides for
+    `postcss` 8.5.33 (Next's nested copy), `effect` 3.22.5, `minimatch` 11.0.9 and the
+    mermaid-nested `katex`. `jose` (imported by `src/lib/auth/token.ts`) was only a
+    transitive leftover and is now a declared dependency, so a lockfile update cannot
+    silently remove it.
+  - Python: `pypdf` was pinned `<6`; it now requires `>=6.21.4,<8` (7.1.1 installed) and
+    every requirements file audits clean (`pip-audit`).
+  - Regenerated `python/requirements.lock`, `sbom.cdx.json` and `THIRD-PARTY-NOTICES.md`.
+  Verification: `npm audit` 0; `pip-audit` no known vulnerabilities (all five requirement
+  files); `npx tsc --noEmit` 0; `next build` (forced) succeeded in 1047 s; vitest
+  **5,227 passed**; PDF/report Python suites **168 passed**.
+  no doc change - dependency and lockfile updates only; no API or contract changed.
+
 - **release: the parity + autonomous-trade safety work and the comparison evidence land
   together.** This commit carries the Vibe-Trading parity register and alpha zips (32/32,
   101/158/191), the trade stack (plan/sizing, account-fit risk, supervisor, proof gate,

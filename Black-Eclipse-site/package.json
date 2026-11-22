@@ -163,15 +163,16 @@
     "echarts-gl": "^2.1.0",
     "flexsearch": "^0.7.31",
     "immer": "^11.1.18",
+    "jose": "^6.2.18",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8",
-    "katex": "^0.16.47",
+    "katex": "^0.19.1",
     "lowlight": "^3.3.0",
     "mermaid": "^12.1.0",
     "monaco-editor": "^0.57.0",
     "next": "15.5.29",
     "node-cron": "^4.6.0",
-    "nodemailer": "^9.1.1",
+    "nodemailer": "^10.6.1",
     "ogl": "^1.0.11",
     "pdfjs-dist": "^4.10.38",
     "playwright": "^1.62.1",
@@ -187,7 +188,13 @@
   },
   "overrides": {
     "dompurify": "3.4.18",
-    "proxy-addr": "2.0.8"
+    "proxy-addr": "2.0.8",
+    "postcss": "8.5.33",
+    "effect": "3.22.5",
+    "minimatch": "11.0.9",
+    "mermaid": {
+      "katex": "0.19.1"
+    }
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",

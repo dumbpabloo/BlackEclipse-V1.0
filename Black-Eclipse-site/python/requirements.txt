@@ -130,7 +130,7 @@ plotly>=5.20
 # a missing pypdf makes `document_edit` report an honest PDF_LIBRARY_MISSING
 # for PDF operations while DOCX/XLSX/PPTX editing keeps working. pypdf is the
 # BSD-licensed rewrite backend; OOXML editing needs no extra dependency.
-pypdf>=4.2,<6
+pypdf>=6.21.4,<8
 
 # Vision / Multimodal subsystem.
 # * pypdfium2: self-contained PDFium binding (no system binary) used to render
