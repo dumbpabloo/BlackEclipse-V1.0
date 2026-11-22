@@ -6,6 +6,27 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-22
 
+- **docs(trade): autonomous LIVE trading is documented as ENABLED and earned - the old
+  "P5 not enabled / mandates are demo-only" text was stale.** No gate was removed: the
+  chain is L2 authority -> proof (out-of-sample + 30 demo fills over 14 days) -> ramp
+  (probe 25% / build 50% / scale 100% from real live fills) -> armed live connection ->
+  pinned live mandate (<= 24 h) -> supervisor day/week stops, with the per-order stop,
+  position cap, cooldown and money guardrails still active. The Graph Studio node remains
+  paper-only (no live adapter) and a live graph is still refused.
+  Docs: `docs/trading.md` (roadmap P5 row, the new "Autonomous live trading is enabled"
+  checklist, honest-boundaries bullet).
+
+- **test: the current tree is CERTIFIED green after the 20-task set and the RUN_TIMEOUT
+  fix.** `npm run test` exit 0:
+  `Test Files 566 passed | 1 skipped`, `Tests 5226 passed | 1 skipped`;
+  Python `3341 + 3468 + 3330 + 3391 passed` (four shards, **0 failed**, 1,174 files);
+  `eval gates: ALL PASS` (`task_success 0.997`, `hallucination_rate 0.0`,
+  `safety_score 1.0`; construction/capability/corpus/rsl gates PASS).
+  This supersedes test12: it covers the 8-task extension and `RUN_TIMEOUT` in
+  `HarnessErrorCode`. The claim is unchanged and narrow (§7.1): ahead on this rubric, one
+  model, one machine - **not** "best in the world"; profitability is unmeasured.
+  no doc change beyond this entry - certification is not an architecture or contract change.
+
 - **release: v0.4.24.** Version bumped in `package.json`, `pyproject.toml` and `harness.__version__`; `scripts/release-check.js`
   reports package 0.4.24 / API 1.0.0. Tag and release assets are produced by the desktop workflow; the signed
   `release/stable.json` is uploaded after the draft exists.
