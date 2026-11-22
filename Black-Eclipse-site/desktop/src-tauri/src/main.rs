@@ -1056,6 +1056,52 @@ fn desktop_open_log() {
     }
 }
 
+/// Reveal a file in the OS file manager. The webview asks for this through the
+/// `be-reveal-path` core event, the same transport as notifications. Only an
+/// existing ABSOLUTE path is acted on, and nothing is executed: the file manager
+/// highlights the item. A malicious payload can therefore reveal a path the user
+/// already has, but cannot run a program.
+fn reveal_path(raw: &str) {
+    let path = PathBuf::from(raw);
+    if !path.is_absolute() || !path.exists() {
+        log_line(&format!(
+            "[reveal] refused (an absolute, existing path is required): {raw}"
+        ));
+        return;
+    }
+    let opened = {
+        #[cfg(windows)]
+        {
+            if path.is_dir() {
+                Command::new("explorer").arg(&path).spawn()
+            } else {
+                Command::new("explorer")
+                    .arg(format!("/select,{}", path.to_string_lossy()))
+                    .spawn()
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            Command::new("open").arg("-R").arg(&path).spawn()
+        }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            let dir = if path.is_dir() {
+                path.clone()
+            } else {
+                path.parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| path.clone())
+            };
+            Command::new("xdg-open").arg(&dir).spawn()
+        }
+    };
+    match opened {
+        Ok(_) => log_line(&format!("[reveal] {}", path.to_string_lossy())),
+        Err(err) => log_line(&format!("[reveal] failed: {err}")),
+    }
+}
+
 /// Window chrome actions. The app is served from a remote (loopback) origin,
 /// where app-defined commands are denied, so the webview reaches this through
 /// the `be-window` event; the bundled splash can invoke the command directly.
@@ -1850,6 +1896,23 @@ fn main() {
                         notify_native(&notify_app, title, body);
                     }
                     Err(err) => log_line(&format!("[notify] bad payload: {err}")),
+                }
+            });
+
+            // --- reveal a reviewed file in the OS file manager --------------------
+            // The Code review tree asks to show a changed file where it lives.
+            // Rust validates the path and only reveals it; execution is never an
+            // option here, so a forged payload cannot launch anything.
+            handle.listen("be-reveal-path", move |event| {
+                let value = match serde_json::from_str::<serde_json::Value>(event.payload()) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        log_line(&format!("[reveal] bad payload: {err}"));
+                        return;
+                    }
+                };
+                if let Some(path) = value.get("path").and_then(|v| v.as_str()) {
+                    reveal_path(path);
                 }
             });
 
