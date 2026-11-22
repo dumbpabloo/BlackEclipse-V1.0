@@ -1,15 +1,15 @@
 {
   "name": "black-eclipse",
-  "version": "0.4.25",
+  "version": "0.4.26",
   "private": true,
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dumbpabloo/black-eclipse.git"
+    "url": "git+https://github.com/dumbpabloo/BlackEclipse-V1.0.git"
   },
   "homepage": "https://dumbpabloo.github.io/black-eclipse/",
   "bugs": {
-    "url": "https://github.com/dumbpabloo/black-eclipse/issues"
+    "url": "https://github.com/dumbpabloo/BlackEclipse-V1.0/issues"
   },
   "bin": {
     "black": "bin/black.js",

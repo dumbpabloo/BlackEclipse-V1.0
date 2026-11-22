@@ -57,7 +57,7 @@ rewritten history; the previous private one remains as
 `BlackEclipse-V1.0-archive` — **private, and it must stay that way**, because it
 still holds every leaking PR ref and the 720 MB draft release. (The account and
 the repository were renamed since: the live home is
-`dumbpabloo/black-eclipse`.)
+`dumbpabloo/BlackEclipse-V1.0`.)
 A fresh clone of the new repository shows zero `refs/pull/*`, zero `.db` paths in
 history, no reachable 38 MB blob, and noreply-only authors.
 
@@ -257,7 +257,7 @@ Repository content:
       (`repository`, `homepage`, `bugs`), the README download/release links,
       `.github/ISSUE_TEMPLATE/config.yml`, and the API URL in
       `repository-guards.md`; the current links all name
-      `dumbpabloo/black-eclipse`.
+      `dumbpabloo/BlackEclipse-V1.0`.
 
 GitHub settings (all free once public):
 

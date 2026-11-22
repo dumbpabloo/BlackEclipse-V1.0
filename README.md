@@ -4,9 +4,9 @@
 
 **Research. Analyze. Build. Automate. Trade.**
 
-[![Download for Windows](.github/assets/download-windows.svg)](https://github.com/dumbpabloo/black-eclipse/releases/latest/download/BlackEclipse-Setup.exe)
+[![Download for Windows](.github/assets/download-windows.svg)](https://github.com/dumbpabloo/BlackEclipse-V1.0/releases/latest/download/BlackEclipse-Setup.exe)
 
-<sub>The Windows installer is unsigned — [verify the SHA-256](#install) before running. macOS and Linux builds are not published yet. [All releases](https://github.com/dumbpabloo/black-eclipse/releases).</sub>
+<sub>The Windows installer is unsigned — [verify the SHA-256](#install) before running. macOS and Linux builds are not published yet. [All releases](https://github.com/dumbpabloo/BlackEclipse-V1.0/releases).</sub>
 
 ![Core license: MIT](https://img.shields.io/badge/core%20license-MIT-green)
 ![Pine engine: AGPL-3.0-only](https://img.shields.io/badge/pine%20engine-AGPL--3.0--only-orange)
@@ -206,8 +206,8 @@ The six steps below are the reason the pieces exist in one place.
 ## Install
 
 **The desktop app** — Windows 10/11 (x64):
-[Download for Windows](https://github.com/dumbpabloo/black-eclipse/releases/latest/download/BlackEclipse-Setup.exe) ·
-[all releases](https://github.com/dumbpabloo/black-eclipse/releases).
+[Download for Windows](https://github.com/dumbpabloo/BlackEclipse-V1.0/releases/latest/download/BlackEclipse-Setup.exe) ·
+[all releases](https://github.com/dumbpabloo/BlackEclipse-V1.0/releases).
 
 macOS and Linux builds are not published yet. The build pipeline keeps producing
 them on request; there is no download button until one has been built,
@@ -217,7 +217,7 @@ Or from a terminal — the same artifact, verified and installed:
 
 ```powershell
 # Windows (per-user, no administrator prompt)
-irm https://raw.githubusercontent.com/dumbpabloo/black-eclipse/main/Black-Eclipse-site/scripts/install-release.ps1 -OutFile install-release.ps1
+irm https://raw.githubusercontent.com/dumbpabloo/BlackEclipse-V1.0/main/Black-Eclipse-site/scripts/install-release.ps1 -OutFile install-release.ps1
 ./install-release.ps1
 ```
 
@@ -284,7 +284,7 @@ A mismatch means the download is not the artifact we published — delete it.
 
 ```bash
 # PyPI release is pending; install from source today:
-pip install "git+https://github.com/dumbpabloo/black-eclipse.git#subdirectory=Black-Eclipse-site"
+pip install "git+https://github.com/dumbpabloo/BlackEclipse-V1.0.git#subdirectory=Black-Eclipse-site"
 ```
 
 **Troubleshooting** (the first three failures, in order):
@@ -406,7 +406,7 @@ extend and customize their own financial AI environments.
 - [**Security**](SECURITY.md) — private advisories, never a public issue
 - [**Code of conduct**](CODE_OF_CONDUCT.md)
 - [**Trademark**](TRADEMARK.md) — the code is MIT; the name is not
-- [**Issues**](https://github.com/dumbpabloo/black-eclipse/issues) — bug reports, feature requests, and questions
+- [**Issues**](https://github.com/dumbpabloo/BlackEclipse-V1.0/issues) — bug reports, feature requests, and questions
 
 ### Licensing, precisely
 

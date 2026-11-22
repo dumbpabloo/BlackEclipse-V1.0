@@ -465,7 +465,7 @@ jobs:
 
             | Platform | File |
             |---|---|
-            | **Windows 10/11** | [BlackEclipse-Setup.exe](https://github.com/dumbpabloo/black-eclipse/releases/latest/download/BlackEclipse-Setup.exe) |
+            | **Windows 10/11** | [BlackEclipse-Setup.exe](https://github.com/dumbpabloo/BlackEclipse-V1.0/releases/latest/download/BlackEclipse-Setup.exe) |
 
             This is the same file the README button serves. The versioned
             `BlackEclipse-Setup-<version>*.exe` is an identical copy.

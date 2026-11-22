@@ -6,6 +6,27 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-22
 
+- **release: v0.4.26 - the parity work is finally in a tagged release.** The `v0.4.25` tag pointed at `main`
+  (`bc14abb6`), which did **not** contain the 14 `coding-parity` commits (Vibe-Trading parity + trade safety
+  stack, coding gaps #14-#18, Trust Mode autoland, the dependency audit). `main` fast-forwarded to
+  `coding-parity` and the version is bumped in `package.json`, `pyproject.toml` and `harness.__version__`.
+  `v0.4.25` was never published as a GitHub Release; `v0.4.26` is the first tag whose tree carries the work.
+  The version is embedded in generated artifacts, so `sbom.cdx.json`, `THIRD-PARTY-NOTICES.md` and
+  `docs/harness/benchmarks.md` were regenerated (`npm run sbom`, `npm run eval:benchmarks`); the existing
+  `sbom-artifact` and `published_benchmarks` tests fail on a stale copy, which is what caught it.
+  docs updated: `docs/CHANGELOG.md`.
+
+- **fix(links): every published link named a repository that 404s.** `dumbpabloo/black-eclipse` returns **404**
+  (checked against `releases/latest/download/SHA256SUMS.txt`), while the live repository is
+  `dumbpabloo/BlackEclipse-V1.0`. Corrected the README download / all-releases / `pip install` / issues links,
+  the release body's download table, the issue-template URLs, `package.json` (`repository`, `bugs`),
+  `docs/install.md`'s `irm` command, `docs/repository-guards.md`'s ruleset API URL, the
+  OPEN-SOURCE-READINESS "live home" line, `scripts/check-downloads.js`'s default repo,
+  the `install-release.ps1`/`install-release.sh` default `Repo`, and the
+  `config/packs.json` `repository` written by `scripts/desktop-package.js` - the packed value is what an
+  installed app uses to fetch feature packs, so the wrong slug broke in-app pack downloads too.
+  docs updated: `README.md`, `docs/install.md`, `docs/repository-guards.md`, `docs/OPEN-SOURCE-READINESS.md`.
+
 - **release: v0.4.25.** Ships the desktop runtime-resolution fix (vendored Python and `python/harness` now resolve
   from the project root, not the pinned-release cwd). Version bumped in `package.json`, `pyproject.toml` and
   `harness.__version__`; `release-check` reports package 0.4.25 / API 1.0.0.

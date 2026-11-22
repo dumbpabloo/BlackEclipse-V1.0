@@ -29,7 +29,7 @@ and never read the git tree, so they are not a source install.
 
 ```powershell
 # Windows
-irm https://raw.githubusercontent.com/dumbpabloo/black-eclipse/main/Black-Eclipse-site/scripts/install-release.ps1 -OutFile install-release.ps1
+irm https://raw.githubusercontent.com/dumbpabloo/BlackEclipse-V1.0/main/Black-Eclipse-site/scripts/install-release.ps1 -OutFile install-release.ps1
 ./install-release.ps1
 ```
 
