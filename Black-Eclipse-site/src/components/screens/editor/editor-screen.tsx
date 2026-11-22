@@ -17,6 +17,7 @@ import { ChevronRight, FilePlus, FolderPlus, MessageSquare, Plus, Trash2, X } fr
 import { useT } from '@/lib/i18n/use-t';
 import { cn } from '@/lib/utils';
 import { ATTACH_PROJECT_FILE_EVENT } from '@/lib/chat/file-sources';
+import { captureEditorContext, clearEditorContext, setEditorContext } from '@/lib/chat/editor-context';
 import {
   deleteWorkspacePath,
   listTrustedRoots,
@@ -117,6 +118,26 @@ function FileWorkspace({ root }: { root: TrustedRoot }) {
   const [creating, setCreating] = useState<{ dir: string; kind: 'file' | 'folder' } | null>(null);
   const [draftName, setDraftName] = useState('');
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // Gap #17: publish the file + selection the user is looking at, bounded. The
+  // composer attaches a fresh snapshot as reference context; the store is shared
+  // within the window, so no prop threading is needed between the two surfaces.
+  const publishSelection = useCallback((el: HTMLTextAreaElement, value: string) => {
+    if (!openFile) {
+      clearEditorContext();
+      return;
+    }
+    setEditorContext(captureEditorContext({
+      path: openFile,
+      content: value,
+      selectionStart: el.selectionStart ?? 0,
+      selectionEnd: el.selectionEnd ?? 0,
+      rootId: root.id,
+      rootLabel: root.label ?? null,
+    }));
+  }, [openFile, root.id, root.label]);
+
+  useEffect(() => () => clearEditorContext(), []);
 
   const loadDir = useCallback(async (dir: string): Promise<EditorEntry[]> => {
     const result = await listWorkspaceFiles(dir);
@@ -349,7 +370,12 @@ function FileWorkspace({ root }: { root: TrustedRoot }) {
             </div>
             <textarea
               value={content}
-              onChange={(e) => setContent(e.target.value)}
+              onChange={(e) => {
+                setContent(e.target.value);
+                publishSelection(e.currentTarget, e.target.value);
+              }}
+              onSelect={(e) => publishSelection(e.currentTarget, content)}
+              onFocus={(e) => publishSelection(e.currentTarget, content)}
               spellCheck={false}
               className="min-h-0 flex-1 resize-none bg-transparent p-3 font-mono text-[12px] leading-5 text-foreground outline-none"
             />
