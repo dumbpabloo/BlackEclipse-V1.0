@@ -16,7 +16,7 @@ def test_defaults_preserve_today():
     snap = flags.snapshot(environ={})
     # W1 promoted the live gateway to the default; `off` and `shadow` remain.
     assert snap["HARNESS_MODEL_GATEWAY"] == "on"
-    assert snap["HARNESS_PARALLEL_TOOLS"] == "off"
+    assert snap["HARNESS_PARALLEL_TOOLS"] == "on"
     assert snap["HARNESS_AUTONOMY"] == "off"
     assert snap["HARNESS_EFFECT_TOKENS"] == "shadow"
     assert snap["HARNESS_SKILL_EXEC_EVAL"] == "on"
@@ -53,13 +53,13 @@ def test_int_clamps_and_invalid_falls_back():
 
 
 def test_parallel_tools_is_a_shadowable_enum():
-    assert flags.get_flag("HARNESS_PARALLEL_TOOLS", environ={}) == "off"
+    assert flags.get_flag("HARNESS_PARALLEL_TOOLS", environ={}) == "on"
     assert flags.get_flag(
         "HARNESS_PARALLEL_TOOLS", environ={"HARNESS_PARALLEL_TOOLS": "shadow"}
     ) == "shadow"
     assert flags.get_flag(
         "HARNESS_PARALLEL_TOOLS", environ={"HARNESS_PARALLEL_TOOLS": "yes"}
-    ) == "off"
+    ) == "on"
     assert flags.get_int(
         "HARNESS_TOOL_BATCH_TIMEOUT_S",
         environ={"HARNESS_TOOL_BATCH_TIMEOUT_S": "9999"},
@@ -82,7 +82,7 @@ def test_snapshot_is_sorted_and_stable():
 
 def test_snapshot_hash_changes_with_a_flag_value():
     base = flags.snapshot(environ={})
-    changed = flags.snapshot(environ={"HARNESS_PARALLEL_TOOLS": "on"})
+    changed = flags.snapshot(environ={"HARNESS_PARALLEL_TOOLS": "off"})
     assert flags.snapshot_hash(base) != flags.snapshot_hash(changed)
 
 

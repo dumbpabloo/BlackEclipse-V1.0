@@ -401,6 +401,9 @@ def list_checkpoints(root: Any, *, limit: int = 50) -> list[dict[str, Any]]:
         files = _run(root_path, ["ls-tree", "-r", "--name-only", sha])
         meta["files"] = len([x for x in files.stdout.decode("utf-8", "replace").splitlines() if x])
         out.append(meta)
+    # Refs are stamped to the SECOND; two snapshots in the same second must
+    # still list newest-first (the commit body records microseconds).
+    out.sort(key=lambda item: str(item.get("createdAt") or ""), reverse=True)
     return out
 
 

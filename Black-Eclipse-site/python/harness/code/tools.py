@@ -1042,6 +1042,7 @@ def _definition(
         effect=effect,
         deprecated=deprecated,
         replacement=replacement,
+        parallel_safe=(permission == "read" and name.startswith("workspace_")),
     )
 
 
@@ -1054,10 +1055,12 @@ def register_code_tools(registry: ToolRegistry) -> list[str]:
     # The fs subsystem's tools are registered first; handlers build a service lazily.
     from .edit_tools import register_edit_tools  # noqa: PLC0415
     from .fs_tools import register_fs_tools  # noqa: PLC0415
+    from .todo_tools import register_todo_tools  # noqa: PLC0415
     from .project_memory import register_project_memory_tools  # noqa: PLC0415
     from .checkpoint_tools import register_checkpoint_tools  # noqa: PLC0415
 
     fs_names = register_fs_tools(registry)
+    register_todo_tools(registry)
     checkpoint_names = register_checkpoint_tools(registry)
     # Round 3 / W3 (ADR-H282): the ONE text-edit tool.
     register_edit_tools(registry)
@@ -1081,14 +1084,12 @@ def register_code_tools(registry: ToolRegistry) -> list[str]:
         "Report which project Eclipse is looking at: its saved revision, current line of "
         "work, and any files that already differ from the last saved version (marked as "
         "pre-existing — this task changes nothing). Read-only.",
-        _status, 15_000,
-    ))
+        _status, 15_000,    ))
     registry.register(_definition(
         "workspace_list",
         "List a folder of the project, ignore-aware and bounded. Read-only; never opens "
         "or changes file contents.",
-        _list, 15_000,
-    ))
+        _list, 15_000,    ))
     registry.register(_definition(
         "workspace_search",
         "DEPRECATED - use search_text, which is the same search on a faster engine. "
@@ -1103,15 +1104,13 @@ def register_code_tools(registry: ToolRegistry) -> list[str]:
         "workspace_read",
         "Read a file with line numbers. Supports a continuation offset (startLine / "
         "nextStartLine). Refuses binary files, and redacts secret-shaped lines. Read-only.",
-        _read, 15_000,
-    ))
+        _read, 15_000,    ))
     registry.register(_definition(
         "workspace_docs",
         "Find ranked passages in the project's notes and documentation (docs/**). Returns "
         "bounded excerpts with their path:line range. A bounded scan per call — no index "
         "is built. Read-only.",
-        _docs, 25_000,
-    ))
+        _docs, 25_000,    ))
     registry.register(_definition(
         "workspace_patch_apply",
         "Author a change in the project (create/replace/delete/move files). Whether it lands "
@@ -1125,8 +1124,7 @@ def register_code_tools(registry: ToolRegistry) -> list[str]:
         "workspace_diff",
         "Show the changes made inside the disposable copy of the project: a unified diff "
         "plus the added/modified/deleted files and a digest. Read-only.",
-        _diff, 30_000,
-    ))
+        _diff, 30_000,    ))
     registry.register(_definition(
         "workspace_revert",
         "Undo a change previously authored in the disposable copy of the project, newest "

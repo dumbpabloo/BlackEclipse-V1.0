@@ -589,6 +589,8 @@ def _definition(name: str) -> ToolDefinition:
         risk="medium" if write else "low",
         timeout_ms=60_000 if write else 30_000,
         effect="write" if write else None,
+        # Indexing warms shared state; every other read is independent.
+        parallel_safe=(not write and name != "code_index_workspace"),
     )
 
 

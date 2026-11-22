@@ -78,6 +78,31 @@ FOCUS_READ_TOOLS = frozenset({
     "skill_list", "skill_view",
 })
 
+#: The coding counterpart of FOCUS_READ_TOOLS. A coding turn must never lose its
+#: read/search/inspect half to query ranking: a prompt like "make the failing
+#: test pass" ranks finance vocabulary poorly, and a model that must call
+#: `tool_search` before it can `read_file` burns a step on every hop. These are
+#: the tools the code profiles declare; only names already in the allowlist are
+#: kept, so a finance-only run is unaffected.
+CODE_FOCUS_READ_TOOLS = frozenset({
+    # project + repository
+    "workspace_status", "workspace_list", "workspace_read", "workspace_docs",
+    "workspace_diff", "project_rules", "git_status",
+    # filesystem inspection
+    "list_directory", "read_file", "search_text", "search_files",
+    "search_symbols", "find_references", "file_metadata", "file_hash",
+    "file_permissions", "verify_file", "validate_changes",
+    # code intelligence
+    "code_get_definition", "code_find_references", "code_find_symbol",
+    "code_search_symbols", "code_get_hover", "code_get_diagnostics",
+    "code_get_document_symbols", "code_get_imports", "code_get_exports",
+    "code_get_dependencies", "code_get_dependents", "code_get_project_structure",
+    "code_parse_file", "code_analyze_file", "code_get_relevant_context",
+    "code_intel_status", "code_find_related_tests",
+    # undo visibility
+    "checkpoint_list", "checkpoint_diff",
+})
+
 #: How many query-ranked read-only tools stay bound on top of the focus set.
 DEFAULT_MAX_READ_TOOLS = 32
 
@@ -278,6 +303,7 @@ def resolve_disclosure(
 
     kept |= CORE_TOOLS & set(allowed)
     kept |= FOCUS_READ_TOOLS & set(allowed)
+    kept |= CODE_FOCUS_READ_TOOLS & set(allowed)
     # Focus the REST of the read-only tail on this turn. The model keeps the
     # tools a data/research answer needs and reaches the long tail through the
     # existing tool_search/tool_invoke pair.
@@ -337,6 +363,7 @@ def catalogue_payload(plan: DisclosurePlan) -> str:
 __all__ = [
     "ABSOLUTE_SCHEMA_BUDGET_TOKENS",
     "CORE_TOOLS",
+    "CODE_FOCUS_READ_TOOLS",
     "DEFAULT_MAX_READ_TOOLS",
     "DisclosurePlan",
     "FOCUS_READ_TOOLS",

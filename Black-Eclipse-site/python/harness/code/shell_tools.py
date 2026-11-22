@@ -16,6 +16,7 @@ from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..tools import ToolContext
+from .. import background_jobs
 from . import policy
 from . import shell as shell_mod
 from . import terminal as terminal_mod
@@ -130,7 +131,7 @@ async def shell_run(args: dict[str, Any], ctx: ToolContext) -> tuple[str, Any]:
             snapshot(
                 getattr(resolved, "root", None) or cwd,
                 reason="before-terminal", run_id=str(getattr(ctx, "run_id", "") or ""),
-                turn_key=str(getattr(ctx, "run_id", "") or ""),
+                turn_key=str(getattr(ctx, "checkpoint_turn", None) or getattr(ctx, "run_id", "") or ""),
             )
     except CheckpointError as exc:
         from .checkpoints import checkpoint_mode  # noqa: PLC0415
@@ -214,8 +215,15 @@ async def shell_spawn(args: dict[str, Any], ctx: ToolContext) -> tuple[str, Any]
             return _command_refusal("SANDBOX_UNAVAILABLE", str(exc), command_class="shell")
         raise
     await emit_code_event(ctx, "command.started", {"commandClass": "shell", "program": verdict.program, "pid": handle.pid})
-    return (f"Spawned process {handle.pid} (status=running). Use process_output/{handle.pid} to inspect.",
-            {"status": "running", "pid": handle.pid, "command": model.command, "cwd": str(cwd)})
+    # Gap #4: the run learns about completion at its next step boundary. The
+    # model is told not to poll; `process_output` stays available for a log.
+    background_jobs.watch_process(str(getattr(ctx, "run_id", "") or ""), handle)
+    return (
+        f"Spawned process {handle.pid} (status=running). You will be notified "
+        "automatically when it finishes; do not poll process_output for it. "
+        f"Use process_output/{handle.pid} only if you need the output now.",
+        {"status": "running", "pid": handle.pid, "command": model.command, "cwd": str(cwd)},
+    )
 
 
 async def process_output(args: dict[str, Any], ctx: ToolContext) -> tuple[str, Any]:

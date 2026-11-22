@@ -142,9 +142,17 @@ def test_the_surface_adds_the_tools_the_base_lacks() -> None:
     # The added set is exactly the surface's tools the base lacked, AFTER the
     # ONE policy authority narrowed the surface - so a tool the profile bans
     # (the cluster/infra/cloud mutations) is in neither half.
+    # Gap #6: the chat code half is ALSO narrowed to the coding preset, so the
+    # added set is the preset-narrowed surface minus the base. The important
+    # property is unchanged: the base's task/research/response tools are not lost.
+    from harness.code.policy import coding_surface
+
     surface_narrowed = set(allowed_tools("edit_verify", tuple(CHAT_CODE_TOOLS)))
+    surface_narrowed &= set(coding_surface("edit_verify"))
     expected = surface_narrowed - set(resolution.base or ())
     assert set(resolution.added) == expected
+    for name in LOST_ON_A_CODING_TURN:
+        assert name in set(resolution.allowed or ()), name
     # Every added tool is a name the surface really declares.
     assert set(resolution.added) <= set(CHAT_CODE_TOOLS)
 
@@ -168,7 +176,7 @@ def test_an_ordinary_chat_turn_is_unchanged() -> None:
 def test_plan_only_removes_the_write_tools_from_both_halves() -> None:
     resolution = _resolution(autonomy="plan_only")
     allowed = set(resolution.allowed or ())
-    assert "workspace_read" in allowed
+    assert "read_file" in allowed
     assert not (set(WRITE_TOOLS) & allowed)
     # And the base's write tools are gone too, not just the surface's.
     assert "write_file" not in allowed

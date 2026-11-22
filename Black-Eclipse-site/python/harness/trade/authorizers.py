@@ -26,6 +26,13 @@ from typing import Any
 def wrap_trade_authorizer(inner: Any) -> Any:
     async def authorize(tool: Any, args: dict[str, Any], ctx: Any = None) -> bool:
         name = str(getattr(tool, "name", ""))
+        if name == "risk_supervisor_apply":
+            # A stand-down only ever REDUCES trading: it pauses future triggers
+            # and cannot open exposure, close a position or move money. Like
+            # close/modify it needs no approval card, and the periodic supervisor
+            # sweep calls the same service path without a run at all. Admission is
+            # not authority: the handler still requires a bound trade service.
+            return True
         if name in ("position_close", "position_modify"):
             # Closing or moving a bracket reduces (or re-scopes) exposure: like
             # cancelling a working order it needs no mandate and no approval card.

@@ -62,7 +62,7 @@ def workspace_info(ws: ResolvedWorkspace) -> WorkspaceInfo:
 
 def resolve(
     ws: ResolvedWorkspace, rel_path: str, *, for_write: bool = False,
-    for_change: bool = False,
+    for_change: bool = False, allow_ignored: bool = False,
 ) -> Path:
     """Resolve a model-supplied path inside the workspace.
 
@@ -80,7 +80,7 @@ def resolve(
     if len(text) > MAX_PATH_CHARS:
         raise err.FsError(err.TOO_LARGE, "That path is too long.", path=text[:80])
     try:
-        target = confine(ws, text, for_write=for_write)
+        target = confine(ws, text, for_write=for_write, allow_ignored=allow_ignored)
     except WorkspaceDenial as denial:
         raise _map_denial(denial) from denial
     if (for_write or for_change) and project_policy.is_denied(ws.root, relative(ws, target)):
@@ -126,9 +126,9 @@ def path_exists(ws: ResolvedWorkspace, rel_path: str) -> bool:
         return False
 
 
-def require_regular_file(ws: ResolvedWorkspace, rel_path: str) -> Path:
+def require_regular_file(ws: ResolvedWorkspace, rel_path: str, *, allow_ignored: bool = False) -> Path:
     """Resolve and require a regular, non-symlink file (metadata/hash/read)."""
-    target = resolve(ws, rel_path)
+    target = resolve(ws, rel_path, allow_ignored=allow_ignored)
     if target.is_dir():
         raise err.FsError(err.NOT_A_FILE, "That is a folder, not a file.", path=relative(ws, target))
     if not target.exists():

@@ -25,6 +25,7 @@ from .. import project_policy
 from . import encoding as enc
 from . import errors as err
 from . import metadata as meta
+from .. import media as media_mod
 from . import resolver as res
 from .context import FsContext
 from .diff import preview_for
@@ -186,6 +187,41 @@ def list_directory(
 # â”€â”€ read_file â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
+def read_media(ctx: FsContext, path: str) -> Optional[dict[str, Any]]:
+    """Read a recognised image/PDF as bounded media, or None for other files.
+
+    Uses the same confinement + read permission as `read_file`; a media file is
+    NOT decoded as text. Oversized media raises `TOO_LARGE`; a binary that is
+    not a recognised media type returns None so the normal read refuses it.
+    """
+    ctx.require("read", path)
+    target = res.require_regular_file(ctx.ws, path, allow_ignored=True)
+    try:
+        size = target.stat().st_size
+    except OSError:
+        return None
+    if size > media_mod.MAX_MEDIA_BYTES:
+        raise err.FsError(
+            err.TOO_LARGE,
+            f"That media file is larger than {media_mod.MAX_MEDIA_BYTES // (1024 * 1024)} MB.",
+            path=res.relative(ctx.ws, target),
+        )
+    try:
+        data = target.read_bytes()
+    except OSError:
+        return None
+    sniffed = media_mod.sniff_mime(data)
+    if sniffed is None:
+        return None
+    mime, kind = sniffed
+    rel = res.relative(ctx.ws, target)
+    return {
+        "status": "ok",
+        "path": rel,
+        "media": media_mod.media_payload(rel, data, mime, kind),
+    }
+
+
 def read_file(
     ctx: FsContext,
     path: str,
@@ -241,6 +277,46 @@ def _apply_write(
     return enc.write_text_atomic(target, text, encoding=encoding, had_bom=had_bom)
 
 
+def _finish_write(
+    ctx: FsContext, target: Path, rel: str, *,
+    before: Optional[str], written: str, nbytes: int, created: bool,
+) -> dict[str, Any]:
+    """Post-write format + verify + diagnostics, shared by write and create.
+
+    Gap #5: the project's formatter runs before the hash and diff are reported,
+    so the result describes the bytes on disk. Every step is bounded and
+    non-fatal; a formatter failure leaves the written text exactly as written.
+    """
+    from .. import formatting as fmt_mod  # noqa: PLC0415
+    from .. import post_edit  # noqa: PLC0415
+    from . import verify as verify_mod  # noqa: PLC0415
+
+    format_info = fmt_mod.maybe_format(target, rel)
+    final_text = written
+    if format_info.get("changed"):
+        try:
+            final_text = enc.read_text(target).text
+        except err.FsError:  # pragma: no cover - the write just succeeded
+            final_text = written
+    after_hash = _current_hash(target)
+    result: dict[str, Any] = {
+        "status": "ok",
+        "path": rel,
+        "written": True,
+        "bytesWritten": nbytes,
+        "created": created,
+        "sha256": after_hash,
+        **preview_for(rel, before, final_text),
+        "format": format_info,
+    }
+    result["verification"] = verify_mod.verify_mutation(
+        ctx.ws, rel, expected_hash=after_hash,
+        expect_text=None if format_info.get("changed") else (written or ""),
+    )
+    result["diagnostics"] = post_edit.diagnostics_for(ctx.ws, rel, final_text)
+    return result
+
+
 def write_file(
     ctx: FsContext,
     path: str,
@@ -281,21 +357,10 @@ def write_file(
     txn = FileTransaction(ctx.ws)
     nbytes = _apply_write(ctx, target, content, encoding=used_encoding, had_bom=had_bom, txn=txn)
     txn.commit()
-    preview = preview_for(rel, before, content)
-    after_hash = _current_hash(target)
-    result = {
-        "status": "ok",
-        "path": rel,
-        "written": True,
-        "bytesWritten": nbytes,
-        "created": not exists,
-        "sha256": after_hash,
-        **preview,
-    }
-    from . import verify as verify_mod  # noqa: PLC0415
-
-    result["verification"] = verify_mod.verify_mutation(ctx.ws, rel, expected_hash=after_hash, expect_text=content)
-    return result
+    return _finish_write(
+        ctx, target, rel, before=before, written=content,
+        nbytes=nbytes, created=not exists,
+    )
 
 
 def create_file(
@@ -322,21 +387,12 @@ def create_file(
             before = enc.read_text(target).text
         return {"status": "ok", "dryRun": True, "path": rel, "created": False, **preview_for(rel, before, content or "")}
     txn = FileTransaction(ctx.ws)
-    _apply_write(ctx, target, content or "", encoding=encoding or "utf-8", had_bom=False, txn=txn)
+    nbytes = _apply_write(ctx, target, content or "", encoding=encoding or "utf-8", had_bom=False, txn=txn)
     txn.commit()
-    after_hash = _current_hash(target)
-    result = {
-        "status": "ok",
-        "path": rel,
-        "created": True,
-        "bytesWritten": len((content or "").encode("utf-8")),
-        "sha256": after_hash,
-        **preview_for(rel, None, content or ""),
-    }
-    from . import verify as verify_mod  # noqa: PLC0415
-
-    result["verification"] = verify_mod.verify_mutation(ctx.ws, rel, expected_hash=after_hash, expect_text=content or "")
-    return result
+    return _finish_write(
+        ctx, target, rel, before=None, written=content or "",
+        nbytes=nbytes, created=True,
+    )
 
 
 # â”€â”€ delete_file / delete_directory â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

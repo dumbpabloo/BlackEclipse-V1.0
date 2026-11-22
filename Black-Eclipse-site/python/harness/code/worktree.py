@@ -21,6 +21,7 @@ Two strategies, chosen honestly and reported:
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -424,13 +425,20 @@ def _count_hunks(unified: str) -> tuple[int, int]:
 
 
 def diff(
-    workspace_id: str, base: Optional[str] = None, *, strategy: str = "worktree",
-    root: Optional[Path] = None,
+    workspace_id: str, base: Optional[str] = None, *, mode: str = "working",
+    strategy: str = "worktree", root: Optional[Path] = None,
 ) -> dict[str, Any]:
     """The unified diff plus added/modified/deleted lists.
 
+    `mode="working"` compares the working tree to `base` (default `HEAD`), which
+    is the change the agent has made so far. `mode="committed"` compares
+    `base..HEAD`, i.e. what was committed inside the workspace since it was cut.
+    A caller that supplies `base` while asking for `working` gets a branch/revision
+    comparison (`git diff <rev>`), and the file lists come from that diff rather
+    than from the status of the current checkout.
+
     For a "worktree" workspace the unified diff comes from
-    `git -C <root> diff <base> --no-color --no-ext-diff` (a read-only argv built
+    `git -C <root> diff <spec> --no-color --no-ext-diff` (a read-only argv built
     from the workspace record, not from the model). For a "snapshot" workspace
     there is no git object database, so a synthesized diff is produced and the
     result still says `strategy: "snapshot"` — no caller can mistake it for git.
@@ -438,46 +446,61 @@ def diff(
     ``root`` is the project the workspace was cut from; it locates the scratch
     folder when the build belongs to a project other than the selected one.
     """
+    if mode not in ("working", "committed"):
+        raise WorkspaceError("DIFF_MODE_INVALID", "the change source must be 'working' or 'committed'")
     repo_root = _resolve_allocate_root(root)
     # A direct workspace IS the resolved real root, not a scratch subfolder.
     target = repo_root if strategy == "direct" else _workspace_dir(repo_root, workspace_id)
     if not target.exists():
         raise WorkspaceError("UNKNOWN_WORKSPACE", f"no workspace {workspace_id!r}")
     base_rev = _valid_revision(base) if base else "HEAD"
+    spec = f"{base_rev}..HEAD" if mode == "committed" else base_rev
 
     if strategy == "snapshot":
+        if mode == "committed":
+            raise WorkspaceError(
+                "DIFF_MODE_UNAVAILABLE",
+                "a snapshot workspace has no commit history to compare against",
+            )
         sidecar = scratch_root(repo_root) / f"{workspace_id}.manifest.json"
         before = _read_manifest(sidecar)
         after = _manifest(target)
         unified, added, modified, deleted = _unified_from_manifests(before, after)
-    elif strategy == "direct":
-        # A direct workspace is the user's real folder. If it is a git checkout
-        # we can show a real diff; otherwise there is no base to diff against, so
-        # we report the working tree honestly rather than synthesizing a change.
-        if _git_available(target):
-            try:
-                proc = _run(("git", "-C", str(target), "diff", base_rev, "--no-color", "--no-ext-diff"), repo_root)
-                unified = proc.stdout.decode("utf-8", "replace")
-                status = _run(("git", "-C", str(target), "status", "--porcelain=v1", "-z"), repo_root)
-                added, modified, deleted = _parse_status_lists(status.stdout)
-            except (OSError, subprocess.SubprocessError) as exc:
-                raise WorkspaceError("GIT_FAILED", f"could not read the change: {exc}") from exc
-        else:
-            unified, added, modified, deleted = "", [], [], []
+    elif strategy == "direct" and not _git_available(target):
+        # A direct workspace is the user's real folder and not a git checkout:
+        # there is no base to diff against, so report the working tree honestly.
+        unified, added, modified, deleted = "", [], [], []
     else:
         try:
             proc = _run(
-                ("git", "-C", str(target), "diff", base_rev, "--no-color", "--no-ext-diff"),
+                ("git", "-C", str(target), "diff", spec, "--no-color", "--no-ext-diff"),
                 repo_root,
             )
             unified = proc.stdout.decode("utf-8", "replace")
         except (OSError, subprocess.SubprocessError) as exc:
             raise WorkspaceError("GIT_FAILED", f"could not read the change: {exc}") from exc
-        status = _run(
-            ("git", "-C", str(target), "status", "--porcelain=v1", "-z"),
-            repo_root,
-        )
-        added, modified, deleted = _parse_status_lists(status.stdout)
+        if mode == "committed":
+            named = _run(
+                ("git", "-C", str(target), "diff", "--name-status", "--no-renames", spec),
+                repo_root,
+            )
+            added, modified, deleted = _parse_name_status(named.stdout)
+        else:
+            # A working comparison must include files git does not track yet:
+            # `git diff` only sees tracked paths, while a promotion preview has to
+            # offer a newly created file too. The union is name-status + `??`.
+            named = _run(
+                ("git", "-C", str(target), "diff", "--name-status", "--no-renames", spec),
+                repo_root,
+            )
+            added, modified, deleted = _parse_name_status(named.stdout)
+            status = _run(
+                ("git", "-C", str(target), "status", "--porcelain=v1", "-z"),
+                repo_root,
+            )
+            for path in _untracked_paths(status.stdout):
+                if path not in added:
+                    added.append(path)
 
     total_chars = len(unified)
     truncated = total_chars > MAX_DIFF_BYTES
@@ -489,7 +512,9 @@ def diff(
     return {
         "available": True,
         "strategy": strategy,
-        "base": base_rev,
+        "mode": mode,
+        "base": spec,
+        "workspaceRoot": str(target),
         "unified": unified,
         "truncated": truncated,
         "totalChars": total_chars,
@@ -501,6 +526,185 @@ def diff(
         "additions": additions,
         "deletions": deletions,
     }
+
+
+#: A picture preview is bounded: the UI needs a thumbnail, not a multi-megabyte
+#: original, and the route must never become a general file exfiltration door.
+MAX_IMAGE_PREVIEW_BYTES = 2 * 1024 * 1024
+
+_IMAGE_SIGNATURES: tuple[tuple[bytes, str], ...] = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+    (b"BM", "image/bmp"),
+)
+
+
+def _image_mime(data: bytes) -> Optional[str]:
+    for signature, mime in _IMAGE_SIGNATURES:
+        if data.startswith(signature):
+            return mime
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def _image_result(raw: str, data: bytes, mime: str, *, side: str) -> dict[str, Any]:
+    return {
+        "available": True,
+        "path": raw,
+        "side": side,
+        "mime": mime,
+        "size": len(data),
+        "bytes": base64.b64encode(data).decode("ascii"),
+    }
+
+
+def _validated_picture_path(relative_path: str) -> str:
+    raw = str(relative_path or "").strip().replace("\\", "/")
+    if not raw or raw.startswith("/") or re.match(r"^[A-Za-z]:", raw) or ".." in raw.split("/"):
+        raise WorkspaceError("PATH_OUTSIDE_WORKSPACE", "the picture path must stay inside the workspace")
+    return raw
+
+
+def _confine_to_workspace(target: Path, raw: str) -> Path:
+    base = Path(os.path.realpath(target))
+    candidate = Path(os.path.realpath(base / raw))
+    if candidate != base and base not in candidate.parents:
+        raise WorkspaceError("PATH_OUTSIDE_WORKSPACE", "the picture path must stay inside the workspace")
+    return candidate
+
+
+def _git_before_bytes(target: Path, revision: str, raw: str, max_bytes: int) -> bytes:
+    """The base revision's bytes for one path, bounded BEFORE it is read.
+
+    A path with `:` is refused: that is git revision syntax, and this reader
+    builds a `rev:path` object name. The size probe prevents a multi-gigabyte
+    blob from ever being materialised just to reject it.
+    """
+    if ":" in raw:
+        raise WorkspaceError("PATH_OUTSIDE_WORKSPACE", "the picture path must stay inside the workspace")
+    if not _git_available(target):
+        raise WorkspaceError("IMAGE_BEFORE_UNAVAILABLE", "there is no history to read the previous picture from")
+    spec = f"{revision}:{raw}"
+    try:
+        probe = _run(("git", "-C", str(target), "cat-file", "-s", spec), target)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise WorkspaceError("IMAGE_BEFORE_UNAVAILABLE", "there is no history to read the previous picture from") from exc
+    if probe.returncode != 0:
+        raise WorkspaceError("IMAGE_BEFORE_UNAVAILABLE", "the previous version is not in the base revision")
+    try:
+        size = int(probe.stdout.decode("ascii", "replace").strip())
+    except ValueError as exc:
+        raise WorkspaceError("IMAGE_BEFORE_UNAVAILABLE", "the previous picture size could not be read") from exc
+    if size > max_bytes:
+        raise WorkspaceError("IMAGE_TOO_LARGE", f"the picture is larger than {max_bytes} bytes")
+    try:
+        proc = _run(("git", "-C", str(target), "show", spec), target)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise WorkspaceError("IMAGE_BEFORE_UNAVAILABLE", "there is no history to read the previous picture from") from exc
+    if proc.returncode != 0:
+        raise WorkspaceError("IMAGE_BEFORE_UNAVAILABLE", "the previous version is not in the base revision")
+    return proc.stdout
+
+
+def read_image(
+    workspace_id: str,
+    relative_path: str,
+    *,
+    side: str = "after",
+    base: Optional[str] = None,
+    strategy: str = "worktree",
+    root: Optional[Path] = None,
+    max_bytes: int = MAX_IMAGE_PREVIEW_BYTES,
+) -> dict[str, Any]:
+    """One bounded picture from a workspace, for the review diff.
+
+    `side="after"` reads the workspace file (what the change produced);
+    `side="before"` reads the base revision through git, so the review can show a
+    before/after pair. Both sides are confined and bounded identically.
+
+    Confined twice: the path is rejected if absolute or containing `..`, and the
+    resolved target must stay inside the workspace. Content is checked by magic
+    bytes (an extension is not proof), so this endpoint can only ever return a
+    real PNG/JPEG/GIF/WebP/BMP image, never arbitrary file content. The bytes are
+    base64 so the JSON route stays the only transport.
+    """
+    if side not in ("before", "after"):
+        raise WorkspaceError("IMAGE_SIDE_INVALID", "the picture side must be 'before' or 'after'")
+    raw = _validated_picture_path(relative_path)
+    repo_root = _resolve_allocate_root(root)
+    target = repo_root if strategy == "direct" else _workspace_dir(repo_root, workspace_id)
+    if not target.exists():
+        raise WorkspaceError("UNKNOWN_WORKSPACE", f"no workspace {workspace_id!r}")
+
+    if side == "before":
+        if strategy == "snapshot":
+            # A snapshot keeps hashes, not previous bytes; saying so is honest.
+            raise WorkspaceError(
+                "IMAGE_BEFORE_UNAVAILABLE",
+                "the previous picture is not kept for this kind of workspace",
+            )
+        revision = _valid_revision(base) if base else "HEAD"
+        data = _git_before_bytes(target, revision, raw, max_bytes)
+        mime = _image_mime(data)
+        if not mime:
+            raise WorkspaceError("NOT_AN_IMAGE", "the file is not a PNG/JPEG/GIF/WebP/BMP picture")
+        return _image_result(raw, data, mime, side="before")
+
+    candidate = _confine_to_workspace(target, raw)
+    if not candidate.is_file():
+        raise WorkspaceError("IMAGE_NOT_FOUND", f"no picture at {raw!r} (it may have been removed)")
+    size = candidate.stat().st_size
+    if size > max_bytes:
+        raise WorkspaceError("IMAGE_TOO_LARGE", f"the picture is larger than {max_bytes} bytes")
+    data = candidate.read_bytes()
+    mime = _image_mime(data)
+    if not mime:
+        raise WorkspaceError("NOT_AN_IMAGE", "the file is not a PNG/JPEG/GIF/WebP/BMP picture")
+    return _image_result(raw, data, mime, side="after")
+
+
+def _untracked_paths(stdout: bytes) -> list[str]:
+    """Paths git reports as untracked (`?? path`) in porcelain -z output."""
+    out: list[str] = []
+    for part in stdout.split(b"\x00"):
+        text = part.decode("utf-8", "replace")
+        if text.startswith("?? "):
+            out.append(text[3:].replace("\\", "/"))
+    return out
+
+
+def _parse_name_status(stdout: bytes) -> tuple[list[str], list[str], list[str]]:
+    """Turn `git diff --name-status` into added/modified/deleted lists."""
+    added: list[str] = []
+    modified: list[str] = []
+    deleted: list[str] = []
+    for line in stdout.decode("utf-8", "replace").splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        status = parts[0][:1]
+        path = parts[-1].replace("\\", "/")
+        if status == "A":
+            added.append(path)
+        elif status == "D":
+            deleted.append(path)
+        else:
+            modified.append(path)
+    return added, modified, deleted
+
+
+def workspace_path(
+    workspace_id: str, *, strategy: str = "worktree", root: Optional[Path] = None,
+) -> Path:
+    """The on-disk folder a workspace owns (for read-only inspection)."""
+    repo_root = _resolve_allocate_root(root)
+    target = repo_root if strategy == "direct" else _workspace_dir(repo_root, workspace_id)
+    if not target.exists():
+        raise WorkspaceError("UNKNOWN_WORKSPACE", f"no workspace {workspace_id!r}")
+    return target
 
 
 def _parse_status_lists(stdout: bytes) -> tuple[list[str], list[str], list[str]]:

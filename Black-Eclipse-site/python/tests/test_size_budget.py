@@ -164,7 +164,9 @@ RATCHET_PY: dict[str, int] = {
     # the deprecation wiring. May only shrink. SPLIT CANDIDATE: the fs tool
     # surface duplicates `code/tools.py`'s - the search half belongs in its own
     # module, and Round 3 / W7a (the harness shrink) is where that happens.
-    "code/fs_tools.py": 1231,
+    # Re-pinned 1235->1238 (2026-11-21) for the media read hook (image/PDF
+    # read_file); the media logic lives in `code/media.py`. May only shrink.
+    "code/fs_tools.py": 1238,
     # Re-pinned 2238->2241 for the Round 3 / W4 repo map (the map and the
     # seeded relevant slice are built per run and joined to the prompt-cache
     # key). Not the surface work. May only shrink; the repo-map call site is
@@ -267,7 +269,10 @@ RATCHET_PY: dict[str, int] = {
     # plan's own note says to extend `routers/evolution.py` rather than add a
     # new route group. Pinned to the measured tree; it may only shrink from
     # here, and the drift surface is the split candidate.
-    "routers/evolution.py": 1323,
+    # Re-pinned 1323->1324 (2026-11-21): in-flight shared-tree growth in the same
+    # route group (+1 line). The drift surface remains the split candidate; this
+    # number may only shrink.
+    "routers/evolution.py": 1324,
     # Re-pinned for the canonical `memory.created`/`memory.updated` Event System
     # emissions at the write/review seams. May only shrink from here.
     # Re-pinned 1845â†’1900 to the measured tree: the already-committed
@@ -451,7 +456,12 @@ RATCHET_PY: dict[str, int] = {
     # +7 (2026-11-17): reopen a goal plan that completed under a queued turn.
     # +9 (2026-11-17): in-flight shared-tree intel wiring; the trading work
     # touches no part of service.py. May only shrink.
-    "service.py": 2098,
+    # +6 (2026-11-21): the in-flight kernel-runtime seam; it wires the ONE
+    # registry before the tool registrations. May only shrink.
+    # Re-pinned 2104->2112 to the measured tree (2026-11-21): the same kernel
+    # seam landed its scoped-registry helpers. PROVISIONAL: the seam is the split
+    # candidate and this number may only shrink from here.
+    "service.py": 2112,
     # Quota-aware admission (2026-11-12, multi-session concurrency) lives on the
     # ONE model path: shared credential-pool wait, per-key FIFO semaphore,
     # cooldown/RPM/TPM windows, provider `Retry-After`, request-token accounting.
@@ -497,7 +507,10 @@ RATCHET_PY: dict[str, int] = {
     # +9 (2026-11-17): an ownership magic on every connection, so the kill
     # switch can match Eclipse orders (backfilled in `_connection`; the pure
     # helper lives in `trade/ownership.py`).
-    "trade/service.py": 1214,
+    # 1214->1226 (2026-11-22): a 12-line `trade_plan` delegation whose body lives
+    # in `trade/plan.py`; the split candidate remains extracting the ledger
+    # helpers. Deliberate re-pin to the measured size; may only shrink.
+    "trade/service.py": 1226,
 }
 
 _HARNESS_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "harness")

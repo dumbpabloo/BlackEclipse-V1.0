@@ -30,6 +30,9 @@ from ..tools import ToolContext, ToolDefinition, ToolRegistry
 from .events import diff_event_payload
 from .fs.errors import WORKSPACE_UNBOUND, FsError
 from .fs.intent import is_insert_before, parse_edit_instruction
+from .fs.path_hints import with_path_suggestions
+from .media import maybe_read_media
+from .fs.post_summary import summarize as _summary
 from .fs.service import FileSystemService
 from .tools import _ensure_code_workspace, _make_actor, _present, emit_code_event
 
@@ -480,6 +483,7 @@ def _write_service(ctx: ToolContext) -> FileSystemService:
     service = FileSystemService(
         resolved, binding, actor, config=_fs_config(ctx),
         run_id=getattr(ctx, "run_id", None),
+        turn_key=getattr(ctx, "checkpoint_turn", None),
     )
     try:
         setattr(ctx, _WRITE_CACHE, service)
@@ -543,18 +547,6 @@ def _refusal_text(error: FsError) -> str:
     if error.recovery:
         text += f" {error.recovery}"
     return text
-
-
-def _summary(data: dict[str, Any], *, verb: str, path: str) -> str:
-    changed = data.get("changed")
-    if changed is False:
-        return f"No change made to {path}."
-    if data.get("dryRun"):
-        preview = data.get("diff") or ""
-        return f"Dry run for {verb} on {path} (nothing written).\n{preview[:2000]}"
-    if "diff" in data and data.get("diff"):
-        return f"{verb} {path}.\n{data['diff'][:2000]}"
-    return f"{verb} {path}."
 
 
 def _ok(verb: str, path: str, data: dict[str, Any]) -> tuple[str, Any]:
@@ -637,6 +629,9 @@ async def _list_directory(args: dict[str, Any], ctx: ToolContext) -> tuple[str, 
 
 async def _read_file(args: dict[str, Any], ctx: ToolContext) -> tuple[str, Any]:
     model = ReadFileInput(**_present(args))
+    media = maybe_read_media(_read_service(ctx), model.path)
+    if media is not None:
+        return media
     text, payload = await _dispatch(
         ctx, "read_file", kind="read", path=model.path, verb="Read",
         run=lambda svc: svc.read_file(
@@ -645,6 +640,7 @@ async def _read_file(args: dict[str, Any], ctx: ToolContext) -> tuple[str, Any]:
             line_numbers=model.lineNumbers,
         ),
     )
+    text, payload = with_path_suggestions(ctx, model.path, text, payload)
     if isinstance(payload, dict) and payload.get("status") == "ok":
         header = f"{payload['path']} (lines {payload['startLine']}-{payload['endLine']} of {payload['totalLines']})"
         body = [header, *payload["content"]]
@@ -1210,6 +1206,7 @@ def _definition(name: str) -> ToolDefinition:
         effect="write" if write else None,
         deprecated=replacement is not None,
         replacement=replacement,
+        parallel_safe=(not write and name in _READ_TOOLS and name not in {"index_workspace", "watch_file", "watch_directory"}),
     )
 
 

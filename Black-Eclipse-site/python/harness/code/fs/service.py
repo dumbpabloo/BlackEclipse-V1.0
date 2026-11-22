@@ -58,6 +58,7 @@ class FileSystemService:
         index: Any = None,
         watcher: Any = None,
         run_id: Optional[str] = None,
+        turn_key: Optional[str] = None,
     ) -> None:
         self._ws = ws
         self._binding = binding
@@ -66,6 +67,7 @@ class FileSystemService:
         self._index = index
         self._watcher = watcher
         self._run_id = str(run_id or "")
+        self._turn_key = str(turn_key or run_id or "")
 
     def _before_mutation(self, reason: str = "before-write") -> None:
         """W7: one shadow snapshot per run before the first file mutation."""
@@ -76,7 +78,7 @@ class FileSystemService:
 
             checkpoints.snapshot(
                 self._ws.root, reason=reason, run_id=self._run_id,
-                turn_key=self._run_id,
+                turn_key=self._turn_key,
             )
         except Exception:  # noqa: BLE001 - `warn`/`off` never block a write
             from .. import checkpoints as _checkpoints  # noqa: PLC0415
@@ -109,6 +111,10 @@ class FileSystemService:
 
     def read_file(self, path: str, **kwargs: Any) -> dict[str, Any]:
         return operations.read_file(self._ctx(), path, **kwargs)
+
+    def read_media(self, path: str) -> Optional[dict[str, Any]]:
+        """Read a recognised image/PDF, or None for an ordinary file."""
+        return operations.read_media(self._ctx(), path)
 
     def write_file(self, path: str, content: str, **kwargs: Any) -> dict[str, Any]:
         self._before_mutation("before-write")

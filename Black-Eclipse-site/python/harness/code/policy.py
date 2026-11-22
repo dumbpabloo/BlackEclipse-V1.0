@@ -719,8 +719,81 @@ READ_ONLY_TOOLS: tuple[str, ...] = (
 )
 
 
+# ── The coding tool-surface preset (2026-11-21) ─────────────────────────────
+#
+# A coding run needs ~25 tools, not the full runtime/container/cloud/browser
+# catalogue. `CODING_SURFACE` is the default coding profile; non-coding effectful
+# tools are removed BEFORE the model sees their schemas. They remain discoverable
+# (tool_search names them and says they are outside the surface) and can be
+# enabled by the operator (`BLACK_ECLIPSE_CODING_EXTRA_TOOLS`) or disabled as a
+# whole (`BLACK_ECLIPSE_CODING_SURFACE=0`).
+CODING_SURFACE: tuple[str, ...] = (
+    # project + repository
+    "workspace_status", "workspace_docs", "project_rules", "git_status",
+    # navigate
+    "read_file", "list_directory", "search_text", "search_files",
+    "search_symbols",
+    # code intelligence
+    "code_get_diagnostics",
+    # change
+    "code_edit", "write_file", "create_file", "delete_file", "move_file",
+    "apply_diff", "review_change", "code_todo",
+    # undo
+    "checkpoint_list", "checkpoint_diff", "checkpoint_restore", "checkpoint_undo_turn",
+    # local git history (stage / commit / branch / restore). The long tail of the
+    # git engine stays OUTSIDE the preset: a coding run needs a commit path, not
+    # every worktree/submodule/bisect operation. These are LOCAL mutations, so
+    # `allowed_tools` keeps them at `edit_verify` and drops them at `plan_only`;
+    # remote actions (push/fetch/PR) stay in the `approve_external` profile.
+    "git_stage", "git_unstage", "git_commit", "git_generate_and_commit",
+    "git_restore", "git_reset", "git_checkout", "git_create_branch",
+    "git_stash_push", "git_stash_pop",
+    # run + inspect processes
+    "command_run", "terminal_run", "execute_command", "start_process",
+    "stop_process", "shell_spawn", "process_output",
+    # verify a change with the project's OWN build/test commands and record the
+    # evidence. Without these a coding run could edit and shell out, but never
+    # produce a verification record - the loop's proof that the change works.
+    "build_project", "test_project", "run_verification", "execution_get",
+    # ask
+    "clarify",
+    # ship (still approval-gated; only reachable at approve_external)
+    "code_commit", "code_push", "code_open_pr", "code_deploy",
+    # discovery / output pager
+    "tool_search", "tool_invoke", "load_tool_schema", "read_tool_output",
+)
+
+#: Removed tools the operator may enable by name (comma-separated).
+CODING_EXTRA_ENV = "BLACK_ECLIPSE_CODING_EXTRA_TOOLS"
+#: `0`/`off` turns the preset off entirely (the declared surface is unchanged).
+CODING_SURFACE_ENV = "BLACK_ECLIPSE_CODING_SURFACE"
+
+
+def coding_surface_enabled() -> bool:
+    value = str(os.environ.get(CODING_SURFACE_ENV, "1")).strip().lower()
+    return value not in {"0", "off", "false", "no", "disable", "disabled"}
+
+
+def coding_extra_tools() -> tuple[str, ...]:
+    raw = str(os.environ.get(CODING_EXTRA_ENV, "") or "")
+    return tuple(sorted({name.strip() for name in raw.split(",") if name.strip()}))
+
+
+def coding_surface(autonomy: Optional[str] = None) -> frozenset[str]:
+    """The coding preset for this autonomy, including operator extras.
+
+    Extras still pass through the autonomy profile, so adding a write tool to a
+    `plan_only` run does not grant it.
+    """
+    base = set(CODING_SURFACE) | set(coding_extra_tools())
+    if autonomy:
+        base = set(allowed_tools(autonomy, tuple(sorted(base))))
+    return frozenset(base)
+
+
 def allowed_tools(autonomy: str, declared: tuple[str, ...]) -> tuple[str, ...]:
     """Narrow a declared allowlist to what the autonomy profile permits.
+
 
     plan_only        → write + external tools REMOVED (the model cannot call them)
     edit_verify      → write tools present; external tools REMOVED
@@ -821,6 +894,9 @@ __all__ = [
     "ACQUISITION_WRITE_TOOLS",
     "AUTONOMY_PROFILES",
     "COMMAND_CLASSES",
+    "CODING_EXTRA_ENV",
+    "CODING_SURFACE",
+    "CODING_SURFACE_ENV",
     "DENIED_PROGRAMS",
     "EXECUTION_READ_TOOLS",
     "EXTERNAL_ACTION_TOOLS",
@@ -848,6 +924,9 @@ __all__ = [
     "allowed_tools",
     "acquisition_grants",
     "code_grants",
+    "coding_extra_tools",
+    "coding_surface",
+    "coding_surface_enabled",
     "decide_command",
     "decide_write",
     "is_automation_effect",

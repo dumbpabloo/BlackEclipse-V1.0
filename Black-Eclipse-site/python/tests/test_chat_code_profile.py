@@ -57,6 +57,7 @@ EXPECTED = (
     'insert_text',
     'delete_text',
     'code_edit',
+    'code_todo',
     'apply_diff',
     'execute_command',
     'open_shell',
@@ -225,6 +226,7 @@ EXPECTED = (
     'checkpoint_list',
     'checkpoint_diff',
     'checkpoint_restore',
+    'checkpoint_undo_turn',
     'git_repository_info',
     'git_list_repositories',
     'git_status',
@@ -417,7 +419,7 @@ def test_plan_only_turn_binds_read_only() -> None:
     allowed = chat_code_allowlist(ECLIPSE_AGENT, reg, "plan_only")
     assert allowed is not None
     bound = set(reg.names()) & allowed
-    assert "workspace_read" in bound
+    assert "read_file" in bound
     assert "code_edit" not in bound
     assert "command_run" not in bound
     assert not (set(EXTERNAL_ACTION_TOOLS) & bound)

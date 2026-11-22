@@ -153,6 +153,19 @@ def test_enabled_disclosure_keeps_effectful_and_interactive_and_saves_tokens(mon
     assert "tool_search" in plan.catalogue_block
 
 
+def test_coding_read_tools_stay_bound_on_a_coding_surface(monkeypatch):
+    """A coding turn must keep its read/search/inspect tools without a discovery hop."""
+    monkeypatch.setenv("HARNESS_TOOL_DISCLOSURE", "on")
+    reg = _registry()
+    for name in ("read_file", "search_text", "list_directory", "code_get_diagnostics"):
+        reg.register(_tool(name, f"Inspect the repository: {name}."))
+    allowed = set(reg.names())
+    plan = resolve_disclosure(allowed, reg, window=128_000, query="make the failing test pass")
+    assert plan.enabled
+    for name in ("read_file", "search_text", "list_directory", "code_get_diagnostics"):
+        assert name in (plan.allowed or ()), name
+
+
 def test_auto_activates_above_the_threshold_and_reports_the_reason(monkeypatch):
     monkeypatch.setenv("HARNESS_TOOL_DISCLOSURE", "auto")
     reg = _registry()

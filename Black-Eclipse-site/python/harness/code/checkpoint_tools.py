@@ -94,6 +94,47 @@ async def checkpoint_restore(args: dict[str, Any], ctx: ToolContext) -> tuple[st
     )
 
 
+async def checkpoint_undo_turn(args: dict[str, Any], ctx: ToolContext) -> tuple[str, Any]:
+    """Undo the most recent turn by restoring its before-write snapshot.
+
+    Gap #10: the agent-facing "undo this turn". The snapshot is the latest one
+    recorded for THIS run (taken before the turn's first write); restore is the
+    same approval-gated path as `checkpoint_restore`, with `all=true`.
+    """
+    run_id = str(getattr(ctx, "run_id", "") or "")
+    try:
+        items = checkpoints.list_checkpoints(_root(ctx), limit=200)
+    except checkpoints.CheckpointError as exc:
+        return f"{exc.code}: {exc.reason}", {"status": "unavailable", "code": exc.code}
+    mine = [cp for cp in items if str(cp.get("runId") or "") == run_id]
+    if not mine:
+        return (
+            "CHECKPOINT_NOT_FOUND: there is no file snapshot for this task yet.",
+            {"status": "refused", "code": "CHECKPOINT_NOT_FOUND"},
+        )
+    latest = mine[0]
+    try:
+        result = checkpoints.restore(
+            _root(ctx), str(latest.get("id") or ""),
+            all=True, run_id=run_id,
+            turn_key=f"undo:{getattr(ctx, 'checkpoint_turn', '') or run_id}",
+        )
+    except checkpoints.CheckpointError as exc:
+        return f"{exc.code}: {exc.reason}", {"status": "refused", "code": exc.code}
+    await _emit(ctx, "checkpoint.restored", {
+        "checkpointId": latest.get("id"), "preRestoreId": result.get("preRestoreId"),
+        "restored": len(result.get("restored") or []), "skipped": len(result.get("skipped") or []),
+        "undoTurn": True,
+    })
+    restored = result.get("restored") or []
+    return (
+        f"Undid the last turn: restored {len(restored)} file(s) to the snapshot taken "
+        f"before it ({latest.get('id')}). A pre-restore snapshot keeps this undoable "
+        f"({result.get('preRestoreId')}).",
+        {"status": "restored", "undoTurn": True, **result},
+    )
+
+
 _LIST_SCHEMA = {
     "type": "object",
     "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 200}},
@@ -131,17 +172,20 @@ def make_checkpoint_authorizer(inner: Any = None):
 
     async def authorize(tool: Any, args: dict[str, Any], ctx: Any = None) -> bool:
         name = str(getattr(tool, "name", ""))
-        if name != "checkpoint_restore":
+        if name not in ("checkpoint_restore", "checkpoint_undo_turn"):
             return bool(await inner(tool, args, ctx)) if inner is not None else False
+        undo = name == "checkpoint_undo_turn"
         run_args = args or {}
-        checkpoint_id = str(run_args.get("checkpointId") or "").strip()
+        checkpoint_id = "latest" if undo else str(run_args.get("checkpointId") or "").strip()
         if not checkpoint_id:
             return False
-        paths = run_args.get("paths") if isinstance(run_args.get("paths"), list) else []
+        paths = [] if undo else (run_args.get("paths") if isinstance(run_args.get("paths"), list) else [])
         digest_source = (
-            f"checkpoint_restore\x00{checkpoint_id}\x00"
-            f"{'|'.join(str(p) for p in paths)}\x00{bool(run_args.get('all'))}"
+            f"{name}\x00{checkpoint_id}\x00"
+            f"{'|'.join(str(p) for p in paths)}\x00{False if undo else bool(run_args.get('all'))}"
         )
+        if undo:
+            digest_source += f"\x00{str(getattr(ctx, 'run_id', ''))}"
         import hashlib  # noqa: PLC0415
 
         digest = hashlib.sha256(digest_source.encode("utf-8")).hexdigest()
@@ -150,8 +194,9 @@ def make_checkpoint_authorizer(inner: Any = None):
             return False
         workspace = getattr(ctx, "workspace", None) if ctx is not None else None
         ws_id = str(getattr(workspace, "id", "")) if workspace is not None else None
+        request_key = "checkpoint-undo" if undo else "checkpoint"
         claimed = approvals.consume_kind(
-            kind=APPROVAL_KIND, request_key="checkpoint", digest=digest,
+            kind=APPROVAL_KIND, request_key=request_key, digest=digest,
             workspace_id=ws_id,
         )
         if claimed is not None:
@@ -159,10 +204,13 @@ def make_checkpoint_authorizer(inner: Any = None):
         pending = None
         try:
             pending = approvals.request_kind(
-                kind=APPROVAL_KIND, request_key="checkpoint", digest=digest,
+                kind=APPROVAL_KIND, request_key=request_key, digest=digest,
                 effect="write", run_id=str(getattr(ctx, "run_id", "")),
                 workspace_id=ws_id,
-                action_summary=f"Restore files from snapshot {checkpoint_id}",
+                action_summary=(
+                    "Undo the last turn (restore the snapshot from before it)"
+                    if undo else f"Restore files from snapshot {checkpoint_id}"
+                ),
                 risk="medium",
             )
         except Exception:  # noqa: BLE001 - a store failure must never authorize
@@ -173,8 +221,8 @@ def make_checkpoint_authorizer(inner: Any = None):
                 await emitter.emit("approval.requested", {
                     "approvalId": (pending or {}).get("id"),
                     "kind": APPROVAL_KIND,
-                    "title": "Approve restoring a file snapshot",
-                    "summary": f"Restore from {checkpoint_id}",
+                    "title": "Approve undoing the last turn" if undo else "Approve restoring a file snapshot",
+                    "summary": "Undo the latest file changes" if undo else f"Restore from {checkpoint_id}",
                     "effect": "write",
                     "risk": "medium",
                 })
@@ -186,7 +234,7 @@ def make_checkpoint_authorizer(inner: Any = None):
             if await pause_for_decision(
                 approvals, ctx, pending.get("id"),
                 lambda: approvals.consume_kind(
-                    kind=APPROVAL_KIND, request_key="checkpoint", digest=digest,
+                    kind=APPROVAL_KIND, request_key=request_key, digest=digest,
                     workspace_id=ws_id,
                 ),
                 emitter=emitter, digest=digest,
@@ -222,6 +270,17 @@ def register_checkpoint_tools(registry: Any) -> list[str]:
             ),
             input_schema=_RESTORE_SCHEMA,
             handler=checkpoint_restore, permission="write", risk="medium",
+            timeout_ms=60_000, effect="write",
+        ),
+        ToolDefinition(
+            name="checkpoint_undo_turn",
+            description=(
+                "Undo the most recent turn: restore every tracked file to the snapshot "
+                "Eclipse took before that turn's first write. Effectful: requires an "
+                "approval. A pre-restore snapshot keeps the undo itself undoable."
+            ),
+            input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+            handler=checkpoint_undo_turn, permission="write", risk="medium",
             timeout_ms=60_000, effect="write",
         ),
     ]

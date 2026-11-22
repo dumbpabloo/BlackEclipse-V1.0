@@ -98,13 +98,18 @@ async def test_search_and_invoke_never_widen_beyond_the_run_surface():
 
     searched = await reg.execute("tool_search", "c1", {"query": "portfolio"}, ctx)
     payload = json.loads(searched.text)
-    assert all(row["name"] != "portfolio_write" for row in payload["tools"])
+    rows = {row["name"]: row for row in payload["tools"]}
+    # Discovery is honest: an outside tool may be NAMED, never bound or invoked.
+    if "portfolio_write" in rows:
+        assert rows["portfolio_write"]["outsideSurface"] is True
+        assert rows["portfolio_write"]["requiresEnable"] is True
 
     refused = await reg.execute(
         "tool_invoke", "c2",
         {"name": "portfolio_write", "arguments": {}}, ctx,
     )
     assert refused.data["status"] == "REFUSED"
+    assert refused.data["reason"] == "outside the surface"
 
 
 def test_lazy_surface_is_off_by_default_and_keeps_effectful_tools(monkeypatch):

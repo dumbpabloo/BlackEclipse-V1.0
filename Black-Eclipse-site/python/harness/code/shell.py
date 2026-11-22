@@ -90,6 +90,16 @@ def run(
     from .sandbox import RunSpec as SandboxSpec  # noqa: PLC0415
     from .sandbox import SandboxUnavailable  # noqa: PLC0415
     from .sandbox import run as sandbox_run  # noqa: PLC0415
+    from .shell_safety import broad_python_kill_error  # noqa: PLC0415
+
+    refusal = broad_python_kill_error(command)
+    if refusal:
+        # Refuse BEFORE spawning: `pkill python` would kill this process, and the
+        # caller would see a "successful" command followed by a dead harness.
+        return ShellResult(
+            command=command, cwd=str(cwd), exit_code=126, stdout="", stderr=refusal,
+            duration_ms=0, timed_out=False, truncated=False, status="failed",
+        )
 
     argv = detect_shell() + [command]
     env = _scrubbed_env()

@@ -156,6 +156,17 @@ class ToolTurn:
         tool_calls = int(state.get("tool_calls", 0) or 0)
         tool_errors = int(state.get("tool_errors", 0) or 0)
         step_index = int(state.get("step", 0) or 0)
+        # Gap #10: a checkpoint is per TURN, not per run. Every file mutation in
+        # this model step shares one key, so "undo this turn" restores the state
+        # before the step's first write.
+        try:
+            d.ctx.checkpoint_turn = f"step{step_index or 1}"
+            # The write service is cached per run; keep its turn key current.
+            svc = getattr(d.ctx, "_fs_write_service", None)
+            if svc is not None:
+                svc._turn_key = d.ctx.checkpoint_turn
+        except Exception:  # noqa: BLE001 - a frozen ctx must not break a turn
+            pass
         prev_keys = list(state.get("last_turn_keys") or [])
         turn_keys: list[str] = []
         failure_details: list[dict[str, Any]] = []
@@ -364,6 +375,7 @@ class ToolTurn:
 
         # ── postflight ───────────────────────────────────────────────────────
         out_messages: list[BaseMessage] = []
+        media_items: list[dict[str, Any]] = []
         for slot in slots:
             if slot.mode == "resume" and slot.result is not None:
                 ok = bool(slot.result.ok)
@@ -498,7 +510,17 @@ class ToolTurn:
             out_messages.append(
                 ToolMessage(content=result.text, tool_call_id=slot.call_id)
             )
+            data = getattr(result, "data", None)
+            media = data.get("media") if isinstance(data, dict) else None
+            if isinstance(media, dict) and media.get("dataUrl"):
+                media_items.append(media)
 
+        if media_items:
+            # Gap #11: a read image/PDF is attached as REAL model content after
+            # its tool result, so the next step can actually see it.
+            from .code.media import model_message  # noqa: PLC0415
+
+            out_messages.append(model_message(media_items))
         if d.write_progress is not None:
             d.write_progress(toolCalls=tool_calls, toolErrors=tool_errors)
         else:  # pragma: no cover - embedded callers only

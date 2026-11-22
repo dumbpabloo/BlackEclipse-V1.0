@@ -118,6 +118,18 @@ def test_a_read_feeds_the_per_run_ledger(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_read_file_suggests_candidates_for_a_wrong_path(tmp_path) -> None:
+    ws = fs_helpers.make_ws(fs_helpers.tree(tmp_path))
+    ctx = _ctx(ws)
+    text, payload = await fs_tools._read_file({"path": "src/ap.py"}, ctx)
+    assert payload["status"] == "refused"
+    assert payload["code"] in ("PATH_NOT_FOUND", "NOT_FOUND")
+    candidates = (payload.get("details") or {}).get("candidates") or []
+    assert any(c.endswith("app.py") for c in candidates), candidates
+    assert "Did you mean" in text
+
+
+@pytest.mark.asyncio
 async def test_editing_a_file_the_run_never_read_is_refused(tmp_path) -> None:
     ws = fs_helpers.make_ws(fs_helpers.tree(tmp_path))
     ctx = _ctx(ws)

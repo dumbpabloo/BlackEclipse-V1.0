@@ -88,21 +88,218 @@ def _commit_edit(edit: _Editable, new_text: str, *, expect_text: Optional[str] =
         txn.rollback()
         raise
     txn.commit()
-    preview = preview_for(edit.rel, edit.text, new_text)
+    # Gap #5: the project's formatter runs on the saved file BEFORE the hash and
+    # diff are reported, so the model sees the bytes that actually exist. It is
+    # bounded and non-fatal; a failure leaves the written text intact.
+    from .. import formatting as fmt_mod  # noqa: PLC0415 - keeps the edit path lean
+    from .. import post_edit  # noqa: PLC0415
+
+    format_info = fmt_mod.maybe_format(edit.path, edit.rel)
+    final_text = new_text
+    if format_info.get("changed"):
+        try:
+            final_text = enc.read_text(edit.path).text
+        except err.FsError:  # pragma: no cover - the write just succeeded
+            final_text = new_text
+    preview = preview_for(edit.rel, edit.text, final_text)
     after_hash = meta.hash_file(edit.path)
     result: dict[str, Any] = {
         "status": "ok", "path": edit.rel, "changed": True, "bytesWritten": nbytes,
         "sha256Before": edit.before_hash, "sha256After": after_hash,
         **preview,
+        "format": format_info,
     }
     # Verification is part of the lifecycle: a post-write syntax/integrity check
     # rides on every edit result so the agent sees a broken edit immediately.
     from . import verify as verify_mod  # noqa: PLC0415 - avoid a circular import
 
     result["verification"] = verify_mod.verify_mutation(
-        edit.ctx.ws, edit.rel, expected_hash=after_hash, expect_text=expect_text,
+        edit.ctx.ws, edit.rel, expected_hash=after_hash,
+        expect_text=None if format_info.get("changed") else expect_text,
     )
+    result["diagnostics"] = post_edit.diagnostics_for(edit.ctx.ws, edit.rel, final_text)
     return result
+
+
+# ── tolerant matching (parity with the best coding agents) ──────────────────
+#
+# A coding model reproduces text from what it read; a refusal for a curly quote,
+# a non-breaking space, or trailing whitespace is noise, not safety. Matching is
+# therefore tried in tiers, best first, and every tier still refuses ambiguity:
+#
+#   1. exact bytes (tolerating LF vs CRLF, as before);
+#   2. typographic variants — curly quotes, en/em dashes, NBSP and thin spaces;
+#   3. per-line trailing whitespace;
+#   4. case-insensitive, when the caller allowed it.
+#
+# Tiers 2-4 run on an LF-only view and map spans back to the source, so a CRLF
+# file matches the LF text the model was shown without shifting any offset.
+
+_TYPOGRAPHIC = str.maketrans({
+    "\u2018": "'", "\u2019": "'", "\u201a": "'", "\u201b": "'",
+    "\u201c": '"', "\u201d": '"', "\u201e": '"', "\u201f": '"',
+    "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-",
+    "\u2014": "-", "\u2015": "-", "\u2212": "-",
+    "\u00a0": " ", "\u2002": " ", "\u2003": " ", "\u2004": " ",
+    "\u2005": " ", "\u2006": " ", "\u2007": " ", "\u2008": " ",
+    "\u2009": " ", "\u200a": " ", "\u202f": " ", "\u205f": " ", "\u3000": " ",
+})
+
+#: How many lines a miss hint may show.
+_HINT_LINES = 12
+#: How long a hint line may be before it is clipped.
+_HINT_LINE_CHARS = 200
+
+
+def _typographic(text: str) -> str:
+    """Fold look-alike punctuation to ASCII. Always 1:1, so offsets stay valid."""
+    return text.translate(_TYPOGRAPHIC)
+
+
+def _lf_view(text: str) -> tuple[str, Optional[list[int]]]:
+    """The LF-only view of `text` plus a view-offset -> source-offset map."""
+    if "\r\n" not in text:
+        return text, None
+    chars: list[str] = []
+    offsets: list[int] = []
+    index = 0
+    while index < len(text):
+        if text[index] == "\r" and index + 1 < len(text) and text[index + 1] == "\n":
+            chars.append("\n")
+            offsets.append(index)
+            index += 2
+            continue
+        chars.append(text[index])
+        offsets.append(index)
+        index += 1
+    offsets.append(len(text))
+    return "".join(chars), offsets
+
+
+def _to_source(offsets: Optional[list[int]], span: tuple[int, int]) -> tuple[int, int]:
+    if offsets is None:
+        return span
+    return offsets[span[0]], offsets[span[1]]
+
+
+def _occurrences(haystack: str, needle: str) -> list[tuple[int, int]]:
+    if not needle:
+        return []
+    spans: list[tuple[int, int]] = []
+    start = 0
+    while True:
+        index = haystack.find(needle, start)
+        if index < 0:
+            return spans
+        spans.append((index, index + len(needle)))
+        start = index + len(needle)
+
+
+def _line_matches(view: str, needle: str) -> list[tuple[int, int]]:
+    """Matches that differ only in trailing whitespace, whole lines at a time.
+
+    Line endings are already normalised by the LF view. A match consumes the
+    final line ending only when the needle itself ends with one, so a match at
+    the end of a file without a trailing newline still works.
+    """
+    if "\n" not in needle:
+        return []
+    expected = needle.split("\n")
+    trailing_newline = needle.endswith("\n")
+    if trailing_newline:
+        expected.pop()
+    if not expected:
+        return []
+    lines: list[tuple[int, int, str, bool]] = []
+    position = 0
+    for chunk in view.splitlines(keepends=True):
+        has_newline = chunk.endswith("\n")
+        text = chunk[:-1] if has_newline else chunk
+        lines.append((position, position + len(chunk), text, has_newline))
+        position += len(chunk)
+    if position < len(view):
+        lines.append((position, len(view), view[position:], False))
+
+    candidates: list[tuple[int, int]] = []
+    for index in range(0, len(lines) - len(expected) + 1):
+        window = lines[index:index + len(expected)]
+        if any(
+            _typographic(actual[2].rstrip()) != _typographic(wanted.rstrip())
+            for actual, wanted in zip(window, expected)
+        ):
+            continue
+        last = window[-1]
+        if trailing_newline and not last[3]:
+            continue
+        start = window[0][0]
+        end = last[1] if trailing_newline else last[1] - (1 if last[3] else 0)
+        candidates.append((start, end))
+    # A shorter overlapping candidate is the same edit seen twice.
+    deduped: list[tuple[int, int]] = []
+    for candidate in candidates:
+        if any(candidate[0] < other[1] and other[0] < candidate[1] for other in deduped):
+            continue
+        deduped.append(candidate)
+    return deduped
+
+
+def _miss_hint(text: str, old_text: str) -> str:
+    """Numbered lines closest to a miss, so the model can retry without a re-read."""
+    view, _offsets = _lf_view(text)
+    source = _typographic(old_text.replace("\r\n", "\n"))
+    wanted_text = source.split("\n")
+
+    def key(line: str) -> str:
+        return " ".join(_typographic(line).split())
+
+    def distinct(line: str) -> bool:
+        return any(char.isalnum() for char in line)
+
+    lines = view.split("\n")
+    positions: dict[str, list[int]] = {}
+    for index, line in enumerate(lines):
+        value = key(line)
+        if distinct(value):
+            positions.setdefault(value, []).append(index)
+
+    votes: dict[int, int] = {}
+    wanted = 0
+    for offset, line in enumerate(wanted_text):
+        value = key(line)
+        if not distinct(value):
+            continue
+        wanted += 1
+        for index in positions.get(value, []):
+            votes[index - offset] = votes.get(index - offset, 0) + 1
+    if not votes:
+        return ""
+    start, count = max(votes.items(), key=lambda item: item[1])
+    if count == 0 or count * 2 < wanted:
+        return ""
+    matched = [
+        start + offset
+        for offset, line in enumerate(wanted_text)
+        if key(line) and 0 <= start + offset < len(lines) and key(lines[start + offset]) == key(line)
+    ]
+    if not matched:
+        return ""
+    first = matched[0]
+    last = min(matched[-1] + 1, first + _HINT_LINES)
+    shown = [
+        f"{first + offset + 1}: "
+        + (line[:_HINT_LINE_CHARS] + "..." if len(line) > _HINT_LINE_CHARS else line)
+        for offset, line in enumerate(lines[first:last])
+    ]
+    return "The closest lines in the file:\n" + "\n".join(shown)
+
+
+def _preserve_endings(new_text: str, newline: str) -> str:
+    """Give a replacement the file's line endings so an edit cannot mix them."""
+    if newline == "\r\n":
+        return re.sub(r"(?<!\r)\n", "\r\n", new_text)
+    if newline == "\n":
+        return new_text.replace("\r\n", "\n")
+    return new_text
 
 
 def _match_text(edit: _Editable, needle: str) -> str:
@@ -150,11 +347,16 @@ def replace_text(
     matches = _find_matches(edit, old_text, regex=regex, case_sensitive=case_sensitive)
     actual = len(matches)
     if actual == 0:
+        hint = _miss_hint(edit.text, old_text)
+        details: dict[str, Any] = {"searched": old_text[:120]}
+        if hint:
+            details["hint"] = hint
         raise err.FsError(
             err.PATCH_CONTEXT_MISMATCH,
-            "The text to replace was not found.",
+            "The text to replace was not found."
+            + (" The closest lines are shown in details.hint." if hint else " Re-read the region and retry."),
             path=edit.rel,
-            details={"searched": old_text[:120]},
+            details=details,
         )
     if expected_occurrences is not None and actual != expected_occurrences:
         raise err.FsError(
@@ -175,9 +377,12 @@ def replace_text(
         return {"status": "ok", "dryRun": True, "path": edit.rel, "occurrences": actual,
                 **preview_for(edit.rel, edit.text, new_text_value)}
     new_text_value = _apply_matches(edit, old_text, new_text, matches, count, regex, case_sensitive)
-    result = _commit_edit(edit, new_text_value, expect_text=(new_text if not regex else None))
+    result = _commit_edit(
+        edit, new_text_value,
+        expect_text=(None if regex else _preserve_endings(new_text, edit.newline)),
+    )
     result["occurrences"] = actual
-    result["replaced"] = min(count, actual)
+    result["replaced"] = actual if count <= 0 else min(count, actual)
     return result
 
 
@@ -189,6 +394,8 @@ def _find_matches(edit: _Editable, old_text: str, *, regex: bool, case_sensitive
         except re.error as exc:
             raise err.FsError(err.INVALID_PATH, f"That pattern isn't valid: {exc}") from None
         return [(m.start(), m.end()) for m in pattern.finditer(edit.text)]
+
+    # Tier 1: exact bytes, already tolerating the file's LF/CRLF convention.
     needle = _match_text(edit, old_text)
     spans: list[tuple[int, int]] = []
     start = 0
@@ -198,17 +405,23 @@ def _find_matches(edit: _Editable, old_text: str, *, regex: bool, case_sensitive
             break
         spans.append((index, index + len(needle)))
         start = index + len(needle)
-    if not case_sensitive and not spans:
-        lowered = edit.text.lower()
-        needle_l = needle.lower()
-        start = 0
-        while True:
-            index = lowered.find(needle_l, start)
-            if index < 0:
-                break
-            spans.append((index, index + len(needle_l)))
-            start = index + len(needle_l)
-    return spans
+    if spans:
+        return spans
+
+    # Tiers 2-4 run on the LF view the model was shown, then map back.
+    view, offsets = _lf_view(edit.text)
+    wanted = old_text.replace("\r\n", "\n")
+    if not case_sensitive:
+        found = _occurrences(view.lower(), wanted.lower())
+        if found:
+            return [_to_source(offsets, span) for span in found]
+    found = _occurrences(_typographic(view), _typographic(wanted))
+    if found:
+        return [_to_source(offsets, span) for span in found]
+    found = _line_matches(view, wanted)
+    if found:
+        return [_to_source(offsets, span) for span in found]
+    return []
 
 
 def _match_lines(edit: _Editable, spans: list[tuple[int, int]]) -> list[int]:
@@ -220,13 +433,14 @@ def _apply_matches(
     spans: list[tuple[int, int]], count: int, regex: bool, case_sensitive: bool,
 ) -> str:
     selected = spans if count <= 0 else spans[:count]
-    if regex:
-        flags = 0 if case_sensitive else re.IGNORECASE
-        return re.sub(old_text, lambda _m: new_text, edit.text, count=count if count > 0 else 0, flags=flags)
-    # Right-to-left so earlier offsets remain valid.
+    # Right-to-left so earlier offsets remain valid. The replacement takes the
+    # file's line endings; otherwise writing an LF snippet into a CRLF checkout
+    # would silently mix endings. Only the replaced spans are touched, so a
+    # mixed-ending file keeps every byte the edit did not target.
+    replacement = _preserve_endings(new_text, edit.newline)
     out = edit.text
     for start, end in reversed(selected):
-        out = out[:start] + new_text + out[end:]
+        out = out[:start] + replacement + out[end:]
     return out
 
 

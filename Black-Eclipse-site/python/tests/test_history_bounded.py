@@ -70,16 +70,20 @@ def _req(run_id, history, window=None, provider="openai", model="gpt-4o"):
 async def test_trimmed_run_emits_exactly_one_history_bounded(store, monkeypatch):
     monkeypatch.setattr(graph_module, "build_chat_model", lambda s: EchoModel())
     await graph_module.execute_run(
-        _req("run_trim", _history(30), window=20_000), _registry(), FakeBridge(), store
+        _req("run_trim", _history(30, chars=5000), window=20_000),
+        _registry(), FakeBridge(), store,
     )
     events = [e for e in store.list_events("run_trim") if e["type"] == "memory.history_bounded"]
     assert len(events) == 1
     data = events[0]["data"]
-    assert data["droppedTurns"] == 10
-    assert data["keptTurns"] == 20
+    assert data["droppedTurns"] > 0
+    assert data["keptTurns"] > 0
+    assert data["keptTurns"] + data["droppedTurns"] == 30
     assert data["droppedTokensEstimate"] > 0
     assert data["window"] == 20_000
     assert data["windowKnown"] is True
+    assert data["policy"] == "measured_model_window"
+    assert "keepTailTokens" in data
     # Never any dropped text / memory content.
     assert "content" not in data and "text" not in data and "dropped" not in data
 
@@ -113,7 +117,7 @@ async def test_unknown_window_reports_window_known_false(store, monkeypatch):
 async def test_event_carries_no_secret_content(store, monkeypatch):
     monkeypatch.setattr(graph_module, "build_chat_model", lambda s: EchoModel())
     await graph_module.execute_run(
-        _req("run_secret", _history(30, secret=True), window=20_000),
+        _req("run_secret", _history(30, chars=5000, secret=True), window=20_000),
         _registry(), FakeBridge(), store,
     )
     events = [e for e in store.list_events("run_secret") if e["type"] == "memory.history_bounded"]

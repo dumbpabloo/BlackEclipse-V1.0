@@ -282,7 +282,8 @@ def _rel_of(root: Path, resolved: Path) -> str:
         return ""
 
 
-def confine(ws: ResolvedWorkspace, rel_path: str, *, for_write: bool = False) -> Path:
+def confine(ws: ResolvedWorkspace, rel_path: str, *, for_write: bool = False,
+            allow_ignored: bool = False) -> Path:
     """Turn a model-supplied relative path into a confined real path.
 
     Calls `policy.resolve_within(ws.root, rel_path)` — it does NOT re-implement
@@ -294,7 +295,7 @@ def confine(ws: ResolvedWorkspace, rel_path: str, *, for_write: bool = False) ->
     if not text:
         raise WorkspaceDenial("NOT_FOUND", "That path is empty, so there's nothing to read.", path=text)
     try:
-        resolved = policy.resolve_within(ws.root, text)
+        resolved = policy.resolve_within(ws.root, text, allow_ignored=allow_ignored)
     except PolicyDenial as denial:
         raise WorkspaceDenial(denial.code, denial.reason, path=text) from denial
     rel = _rel_of(ws.root, resolved)

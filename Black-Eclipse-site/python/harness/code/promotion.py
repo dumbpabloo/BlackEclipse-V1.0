@@ -30,6 +30,7 @@ import hashlib
 import json
 import os
 import shutil
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -87,13 +88,106 @@ def _read_text_strict(path: Path) -> str:
         ) from exc
 
 
-def promotion_digest(files: list[dict[str, Any]]) -> str:
-    """A stable digest over the exact previewed file set (order-independent)."""
-    canonical = "\n".join(
-        f"{f.get('path')}\x00{f.get('op')}\x00{f.get('beforeHash') or ''}\x00{f.get('afterHash') or ''}"
-        for f in sorted(files, key=lambda f: str(f.get("path")))
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+def promotion_digest(
+    files: list[dict[str, Any]], selection: Optional[Iterable[str]] = None,
+) -> str:
+    """A stable digest over the exact previewed file AND hunk set.
+
+    Order-independent. When `selection` is given, only the named hunks are
+    covered, but each selected hunk's before/after content hash is included, so
+    an approval cannot be reused for a different slice of the same file.
+    """
+    chosen = {str(token) for token in selection} if selection is not None else None
+    parts: list[str] = []
+    for f in sorted(files, key=lambda f: str(f.get("path"))):
+        path = str(f.get("path"))
+        hunks = [h for h in (f.get("hunks") or []) if isinstance(h, dict)]
+        if chosen is None:
+            selected = hunks
+        else:
+            selected = [
+                h for h in hunks
+                if str(h.get("id")) in {t.split("#", 1)[-1] for t in chosen if t.startswith(path + "#")}
+            ]
+        token = (
+            f"{path}\x00{f.get('op')}\x00{f.get('beforeHash') or ''}\x00{f.get('afterHash') or ''}"
+        )
+        if hunks:
+            token += "\x00" + ";".join(
+                f"{h.get('id')}:{h.get('beforeHash')}:{h.get('afterHash')}"
+                for h in selected
+            )
+        parts.append(token)
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def _hunk_token(path: str, hunk_id: str) -> str:
+    return f"{path}#{hunk_id}"
+
+
+def build_hunks(before: str, after: str) -> list[dict[str, Any]]:
+    """Split a text change into grouped hunks with 3 lines of context.
+
+    Each hunk carries the exact before/after slice (line endings preserved), a
+    unified header, and content hashes. IDs are positional (`h1`, `h2`, ...) and
+    stable for the same before/after pair, so a selection can be re-derived at
+    apply time.
+    """
+    before_lines = before.splitlines(keepends=True)
+    after_lines = after.splitlines(keepends=True)
+    matcher = SequenceMatcher(None, before_lines, after_lines, autojunk=False)
+    hunks: list[dict[str, Any]] = []
+    for index, group in enumerate(matcher.get_grouped_opcodes(3), start=1):
+        b_start, b_end = group[0][1], group[-1][2]
+        a_start, a_end = group[0][3], group[-1][4]
+        before_text = "".join(before_lines[b_start:b_end])
+        after_text = "".join(after_lines[a_start:a_end])
+        preview: list[dict[str, Any]] = []
+        for tag, i1, i2, j1, j2 in group:
+            if tag == "equal":
+                continue
+            for line in before_lines[i1:i2][:10]:
+                preview.append({"kind": "remove", "text": _preview_line(line)})
+            for line in after_lines[j1:j2][:10]:
+                preview.append({"kind": "add", "text": _preview_line(line)})
+        hunks.append({
+            "id": f"h{index}",
+            "header": f"@@ -{b_start + 1},{b_end - b_start} +{a_start + 1},{a_end - a_start} @@",
+            "beforeStart": b_start + 1,
+            "beforeLines": b_end - b_start,
+            "afterStart": a_start + 1,
+            "afterLines": a_end - a_start,
+            "beforeText": before_text,
+            "afterText": after_text,
+            "beforeHash": _sha_text(before_text),
+            "afterHash": _sha_text(after_text),
+            "preview": preview[:24],
+        })
+    return hunks
+
+
+def _preview_line(line: str) -> str:
+    text = line.rstrip("\r\n")
+    return text[:200]
+
+
+def _apply_hunks(before: str, hunks: list[dict[str, Any]], selected: set[str]) -> str:
+    """Apply only the selected hunks to `before`, in reverse line order."""
+    chosen = [h for h in hunks if str(h.get("id")) in selected]
+    if not chosen:
+        return before
+    lines = before.splitlines(keepends=True)
+    for hunk in sorted(chosen, key=lambda h: int(h.get("beforeStart") or 1), reverse=True):
+        start = max(0, int(hunk.get("beforeStart") or 1) - 1)
+        count = int(hunk.get("beforeLines") or 0)
+        current = "".join(lines[start:start + count])
+        if current != str(hunk.get("beforeText") or ""):
+            raise PromotionError(
+                "PROMOTION_PREVIEW_STALE",
+                "The prepared change was altered after you reviewed it; review it again.",
+            )
+        lines[start:start + count] = [str(hunk.get("afterText") or "")]
+    return "".join(lines)
 
 
 def _operator_actor(binding_id: str) -> Any:
@@ -226,8 +320,10 @@ def build_preview(
 
         target = checkout / rel
         before_hash: Optional[str] = None
+        before_text = ""
         if target.exists():
-            before_hash = _sha_text(_read_text_strict(target))
+            before_text = _read_text_strict(target)
+            before_hash = _sha_text(before_text)
         after_hash: Optional[str] = None
         after_text: Optional[str] = None
         if op != "delete":
@@ -245,7 +341,11 @@ def build_preview(
                 "PROMOTION_BASE_CHANGED",
                 f"{rel} is missing from your project, so Eclipse can't put this change in.",
             )
-        files.append({"path": rel, "op": op, "beforeHash": before_hash, "afterHash": after_hash})
+        hunks = build_hunks(before_text if op != "create" else "", after_text or "")
+        files.append({
+            "path": rel, "op": op, "beforeHash": before_hash, "afterHash": after_hash,
+            "hunks": hunks,
+        })
 
     if total_bytes > MAX_PROMOTION_BYTES:
         raise PromotionError(
@@ -293,28 +393,70 @@ def _map_patch_error(code: str, reason: str) -> PromotionError:
 
 def filter_preview(
     preview: dict[str, Any], include: Iterable[str],
+    *, hunks: Optional[Iterable[str]] = None,
 ) -> dict[str, Any]:
-    """Narrow a preview to the files the reviewer kept. Pure.
+    """Narrow a preview to the files (and hunks) the reviewer kept.
 
-    The digest is recomputed over the KEPT set, so the approval is bound to
-    exactly what will be written. An empty `include` means "keep everything";
-    an include that keeps nothing is refused rather than silently landing an
-    empty change.
+    `include` names whole files; `hunks` names slices as `"path#hN"`. An empty
+    `hunks` means "every hunk of the kept files". A create/delete file cannot be
+    split (half a new or deleted file is not a meaningful change). The digest is
+    recomputed over exactly the KEPT set, so the approval is bound to what will
+    be written.
     """
     keep = {
         str(path).replace("\\", "/").lstrip("./")
         for path in include if str(path or "").strip()
     }
-    if not keep:
+    tokens = {str(token) for token in (hunks or []) if str(token).strip()}
+    split = bool(tokens)
+    # Empty (or whitespace-only) include with no hunk selection means "keep the
+    # whole preview". Returning the SAME object makes that identity explicit:
+    # no digest, count, or ordering is recomputed for a no-op selection.
+    if not keep and not tokens:
         return preview
-    files = [
-        item for item in (preview.get("files") or [])
-        if str(item.get("path") or "") in keep
-    ]
+
+    def _selected(item: dict[str, Any]) -> list[str]:
+        ids = [str(h.get("id")) for h in (item.get("hunks") or []) if isinstance(h, dict)]
+        if not split:
+            return ids
+        want = {token.split("#", 1)[1] for token in tokens if token.startswith(str(item.get("path")) + "#")}
+        return [hunk_id for hunk_id in ids if hunk_id in want]
+
+    files: list[dict[str, Any]] = []
+    for item in (preview.get("files") or []):
+        path = str(item.get("path") or "")
+        if keep and path not in keep:
+            continue
+        ids = [str(h.get("id")) for h in (item.get("hunks") or []) if isinstance(h, dict)]
+        selected = _selected(item)
+        if ids and not selected:
+            continue
+        if item.get("op") in ("create", "delete") and ids and len(selected) != len(ids):
+            raise PromotionError(
+                "PROMOTION_PARTIAL_FILE",
+                "A new or removed file has to be accepted as a whole.",
+            )
+        entry = dict(item)
+        if ids and selected and len(selected) != len(ids):
+            entry["selectedHunks"] = selected
+            entry["partial"] = True
+            target = Path(str(preview.get("checkoutRoot") or "")) / path
+            try:
+                before_text = _read_text_strict(target)
+            except PromotionError:
+                raise
+            if _sha_text(before_text) != item.get("beforeHash"):
+                raise PromotionError(
+                    "PROMOTION_BASE_CHANGED",
+                    f"{path} changed in your project since the preview.",
+                )
+            result_text = _apply_hunks(before_text, list(item.get("hunks") or []), set(selected))
+            entry["afterHash"] = _sha_text(result_text)
+        files.append(entry)
     if not files:
         raise PromotionError(
             "PROMOTION_NO_FILES",
-            "None of the selected files are part of this change.",
+            "None of the selected changes are part of this change.",
         )
     files.sort(key=lambda item: str(item.get("path")))
     return {
@@ -324,8 +466,9 @@ def filter_preview(
         "added": sum(1 for item in files if item.get("op") == "create"),
         "modified": sum(1 for item in files if item.get("op") == "overwrite"),
         "deleted": sum(1 for item in files if item.get("op") == "delete"),
-        "previewDigest": promotion_digest(files),
+        "previewDigest": promotion_digest(files, tokens if split else None),
         "filtered": True,
+        "hunksSelected": split,
     }
 
 
@@ -372,6 +515,26 @@ def apply_promotion(preview: dict[str, Any]) -> dict[str, Any]:
             ops.append(PatchOp(
                 op="delete", path=rel, reason="Put the reviewed change into the project.",
                 expect_hash=f.get("beforeHash"),
+            ))
+            continue
+        if f.get("partial"):
+            target = checkout / rel
+            before_text = _read_text_strict(target)
+            if _sha_text(before_text) != f.get("beforeHash"):
+                raise PromotionError(
+                    "PROMOTION_BASE_CHANGED",
+                    "Your project changed since the preview; review the change again.",
+                )
+            selected = {str(h) for h in (f.get("selectedHunks") or [])}
+            text = _apply_hunks(before_text, list(f.get("hunks") or []), selected)
+            if _sha_text(text) != f.get("afterHash"):
+                raise PromotionError(
+                    "PROMOTION_PREVIEW_STALE",
+                    "The prepared change was altered after you reviewed it; review it again.",
+                )
+            ops.append(PatchOp(
+                op="overwrite", path=rel, reason="Put the reviewed change into the project.",
+                content=text, expect_hash=f.get("beforeHash"),
             ))
             continue
         text = _read_text_strict(worktree_root / rel)
@@ -547,6 +710,29 @@ def rollback_promotion(rollback_id: str, *, checkout_root: Optional[Path] = None
     }
 
 
+def public_preview(preview: dict[str, Any]) -> dict[str, Any]:
+    """The client-safe preview: no worktree root, no full hunk text.
+
+    Hunk IDs, headers and a bounded changed-line preview are enough for the UI
+    to offer per-hunk choices; `beforeText`/`afterText` stay server-side and are
+    re-derived at apply time.
+    """
+    view = {k: v for k, v in preview.items() if k != "worktreeRoot"}
+    files: list[dict[str, Any]] = []
+    for item in view.get("files") or []:
+        entry = dict(item)
+        entry["hunks"] = [
+            {k: h.get(k) for k in (
+                "id", "header", "beforeStart", "beforeLines", "afterStart",
+                "afterLines", "preview",
+            )}
+            for h in (item.get("hunks") or [])
+        ]
+        files.append(entry)
+    view["files"] = files
+    return view
+
+
 __all__ = [
     "MAX_PROMOTION_FILES",
     "PROMOTION_KIND",
@@ -555,5 +741,6 @@ __all__ = [
     "apply_promotion",
     "build_preview",
     "promotion_digest",
+    "public_preview",
     "rollback_promotion",
 ]

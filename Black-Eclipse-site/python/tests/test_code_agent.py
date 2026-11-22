@@ -174,11 +174,14 @@ def test_plan_only_allowlist_has_no_write_tool():
 
 def test_edit_verify_allowlist_has_write_no_external():
     allowed = effective_allowlist(CODE_AGENT, _registry(), "edit_verify")
-    # Every write tool the preset DECLARES must be present at edit_verify.
-    # `workspace_patch_apply` is in the policy's WRITE set (it is still a
-    # registered write tool, so `plan_only` must still restrain it) but it is no
-    # longer DECLARED by the surface - it was superseded by `code_edit`.
-    assert (set(WRITE_TOOLS) & set(CODE_AGENT.tools)) <= set(allowed)
+    # Gap #6: the coding preset keeps the CORE edit surface and drops the
+    # non-coding runtime/container/cloud/orchestration/package/browser/computer
+    # tools. A write tool outside the preset is not silently present.
+    for name in ("code_edit", "write_file", "create_file", "apply_diff", "code_get_diagnostics", "code_todo"):
+        assert name in allowed, name
+    assert "container_run" not in allowed
+    assert "runtime_start" not in allowed
+    assert "package_install" not in allowed
     assert not (set(allowed) & set(EXTERNAL_ACTION_TOOLS))
 
 

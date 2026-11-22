@@ -100,6 +100,84 @@ def test_enforce_mode_alias():
         os.environ["HARNESS_FILE_CHECKPOINTS"] = "warn"
 
 
+def test_the_file_service_takes_one_checkpoint_per_turn(tmp_path):
+    """The real edit path: turn 1 and turn 2 each get their own snapshot."""
+    from harness.code.fs.service import FileSystemService
+    from harness.skills.permissions import Actor
+
+    import fs_helpers
+
+    root = _git_repo(tmp_path)
+    ws = fs_helpers.make_ws(root)
+    actor = Actor(id="coder", workspace_id=ws.id, autonomy="edit_verify")
+    service = FileSystemService(ws, ws.binding, actor, run_id="run-turns", turn_key="step1")
+
+    service.write_file("a.txt", "turn-one", overwrite=True)
+    first = [cp for cp in checkpoints.list_checkpoints(root) if cp.get("runId") == "run-turns"]
+    assert len(first) == 1 and first[0]["turnKey"] == "step1"
+
+    service._turn_key = "step2"  # the graph updates this at each step boundary
+    service.write_file("a.txt", "turn-two", overwrite=True)
+    both = [cp for cp in checkpoints.list_checkpoints(root) if cp.get("runId") == "run-turns"]
+    assert len(both) == 2
+    assert {cp["turnKey"] for cp in both} == {"step1", "step2"}
+
+
+def test_undo_turn_restores_the_pre_turn_bytes(tmp_path):
+    """Gap #10: a per-turn checkpoint + the agent-facing undo this turn."""
+    import asyncio
+
+    from harness.code.checkpoint_tools import checkpoint_undo_turn
+
+    root = _git_repo(tmp_path)
+    # Turn 1: snapshot before its first write, then write.
+    checkpoints.snapshot(root, run_id="run-u", turn_key="step1")
+    (root / "a.txt").write_text("turn-one", encoding="utf-8")
+    # Turn 2: another snapshot, then a second write.
+    checkpoints.snapshot(root, run_id="run-u", turn_key="step2")
+    (root / "a.txt").write_text("turn-two", encoding="utf-8")
+    assert (root / "a.txt").read_text(encoding="utf-8") == "turn-two"
+
+    class _Ctx:
+        workspace = None
+        run_id = "run-u"
+        checkpoint_turn = "step3"
+        log = staticmethod(lambda *_: None)
+
+    ctx = _Ctx()
+    ctx.workspace = type("W", (), {"root": root})()
+    text, data = asyncio.run(checkpoint_undo_turn({}, ctx))
+    assert data["status"] == "restored"
+    assert data["undoTurn"] is True
+    assert (root / "a.txt").read_text(encoding="utf-8") == "turn-one"
+    assert data["preRestoreId"]  # the undo is itself undoable
+
+
+def test_default_checkpoint_mode_is_on(monkeypatch):
+    monkeypatch.delenv("HARNESS_FILE_CHECKPOINTS", raising=False)
+    assert checkpoints.checkpoint_mode() == "warn"
+    assert checkpoints.checkpoints_enabled() is True
+
+
+def test_undo_turn_refuses_without_a_snapshot(tmp_path):
+    import asyncio
+
+    from harness.code.checkpoint_tools import checkpoint_undo_turn
+
+    root = _git_repo(tmp_path)
+
+    class _Ctx:
+        workspace = None
+        run_id = "never-ran"
+        checkpoint_turn = "step1"
+
+    ctx = _Ctx()
+    ctx.workspace = type("W", (), {"root": root})()
+    text, data = asyncio.run(checkpoint_undo_turn({}, ctx))
+    assert data["status"] == "refused"
+    assert data["code"] == "CHECKPOINT_NOT_FOUND"
+
+
 def _ctx(root):
     from types import SimpleNamespace
 

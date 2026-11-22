@@ -157,8 +157,8 @@ async def code_edit(args: dict[str, Any], ctx: ToolContext) -> tuple[str, Any]:
             rel,
             model.oldText,
             model.newText,
-            count=1,
-            expected_occurrences=model.expectedOccurrences,
+            count=0 if model.replaceAll else 1,
+            expected_occurrences=None if model.replaceAll else model.expectedOccurrences,
             expected_hash=known,
         )
     except fs_err.FsError as exc:
@@ -169,13 +169,22 @@ async def code_edit(args: dict[str, Any], ctx: ToolContext) -> tuple[str, Any]:
             candidates = nearest_paths(ws, rel)
             if candidates:
                 exc.details.setdefault("candidates", candidates)
-        return f"REFUSED ({exc.code}): {exc.reason}", exc.to_dict()
+        text = f"REFUSED ({exc.code}): {exc.reason}"
+        hint = exc.details.get("hint") if isinstance(exc.details, dict) else None
+        if hint:
+            text += "\n\n" + str(hint)
+        return text, exc.to_dict()
 
-    changed = int(result.get("occurrences") or 0) if result.get("dryRun") else 1
+    changed = int(result.get("replaced") or 0)
     text = (
         f"Changed {rel}: replaced {changed} occurrence(s). "
         f"sha256 before {result.get('sha256Before', '?')}, after {result.get('sha256After', '?')}."
     )
+    from .post_edit import render_diagnostics, render_format  # noqa: PLC0415
+
+    for line in (render_format(result.get("format")), render_diagnostics(result.get("diagnostics"))):
+        if line:
+            text += "\n" + line
     payload = dict(result)
     payload["status"] = "ok"
     payload["path"] = rel
@@ -194,6 +203,7 @@ def _input(**args: Any) -> Any:
         oldText: str = Field(..., min_length=1, max_length=100_000)  # noqa: N815
         newText: str = Field(..., max_length=100_000)  # noqa: N815
         expectedOccurrences: Optional[int] = Field(None, ge=1, le=1000)  # noqa: N815
+        replaceAll: bool = False  # noqa: N815
 
     return CodeEditInput(**{k: v for k, v in args.items() if v is not None})
 
@@ -214,6 +224,11 @@ _INPUT_SCHEMA: dict[str, Any] = {
             "description": "How many times oldText should appear. Leave it out when the text "
                            "is unique; Eclipse refuses an ambiguous match rather than guessing.",
         },
+        "replaceAll": {
+            "type": "boolean",
+            "description": "Replace every occurrence instead of requiring exactly one. "
+                           "Use for a rename across the file; leave it out for a normal edit.",
+        },
     },
     "required": ["path", "oldText", "newText"],
     "additionalProperties": False,
@@ -223,8 +238,11 @@ _DESCRIPTION = (
     "Replace text in a file - the ONE way to change a file's contents. Eclipse has to have "
     "READ the file earlier in this task, and the file must not have changed since; both "
     "refusals name the way forward. The text to replace must be unique unless you say how "
-    "many times it appears, so include enough surrounding context to make the match "
-    "unambiguous. To create a file use write_file; to apply a prepared diff use apply_diff."
+    "many times it appears (or pass replaceAll), so include enough surrounding context to "
+    "make the match unambiguous. Matching tolerates curly quotes, non-ASCII dashes, "
+    "non-breaking spaces and trailing whitespace, and the file's own line endings are "
+    "preserved. On a miss the refusal includes the closest numbered lines. To create a file "
+    "use write_file; to apply a prepared diff use apply_diff."
 )
 
 

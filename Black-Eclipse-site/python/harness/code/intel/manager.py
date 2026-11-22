@@ -601,6 +601,28 @@ class CodeIntelligenceManager:
         client, _reason = self.lsp.ensure_client(self.root, language)
         return client
 
+    def sync_document(self, file: str) -> bool:
+        """Push the file's CURRENT text to the language server, if one is live.
+
+        An edit happens on disk, outside the LSP client. Without this the server
+        would report diagnostics for the pre-edit text. Returns False when no
+        client serves the language; never raises.
+        """
+        try:
+            text = self._read(file)
+            client = self._lsp_for(detect_language(file))
+            if client is None:
+                return False
+            path = self.root / file
+            if client.is_open(path):
+                client.change_document(path, text)
+            else:
+                client.open_document(path, text)
+                self._open_docs.add(file)
+            return True
+        except Exception:  # noqa: BLE001 - a sync failure is not fatal
+            return False
+
     def _ensure_open(self, client: Any, rel_path: str) -> None:
         from .lsp.client import LSPClient  # noqa: PLC0415
 

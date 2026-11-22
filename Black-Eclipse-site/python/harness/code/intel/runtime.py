@@ -173,6 +173,17 @@ class CodeIntelRuntime:
             return
         self._state_for(workspace, initial_index=False)
 
+    def is_ready_for(self, workspace: ResolvedWorkspace) -> bool:
+        """True when this workspace already has a shared index/LSP state.
+
+        The post-edit diagnostics seam must never CREATE state on the write
+        path; it asks this first and falls back to structural diagnostics.
+        """
+        key = getattr(workspace, "id", "") or str(getattr(workspace, "root", ""))
+        with self._lock:
+            state = self._states.get(key)
+            return state is not None and Path(state.root) == Path(getattr(workspace, "root", ""))
+
     def is_fresh(self, workspace: ResolvedWorkspace, *, max_age_s: float = 30.0) -> bool:
         """Is the shared index CURRENT for this workspace?
 
@@ -264,6 +275,12 @@ def get_code_intel_runtime() -> CodeIntelRuntime:
         return _RUNTIME
 
 
+def peek_code_intel_runtime() -> Optional[CodeIntelRuntime]:
+    """The runtime only when one already exists. Never creates one."""
+    with _RUNTIME_LOCK:
+        return _RUNTIME
+
+
 def build_code_intel_runtime(
     *, on_event: Optional[Callable[[str, dict[str, Any]], None]] = None,
 ) -> CodeIntelRuntime:
@@ -282,5 +299,6 @@ __all__ = [
     "WATCH_INTERVAL_S",
     "build_code_intel_runtime",
     "get_code_intel_runtime",
+    "peek_code_intel_runtime",
     "set_code_intel_runtime",
 ]

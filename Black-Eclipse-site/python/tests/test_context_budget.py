@@ -88,9 +88,38 @@ def test_overhead_measurement_includes_real_per_run_blocks():
 def test_absolute_char_ceiling_holds_on_a_huge_window():
     req = _request(_turns(100, 1000))   # 100_000 chars
     budget = _budget(1_000_000)
-    assert budget.max_history_chars == graph_module.MAX_HISTORY_CHARS
+    # A KNOWN window spends its allowance on a token-budgeted tail (15k tokens
+    # = 60k chars), not the conservative unknown-window ceiling.
+    from harness.context_budget import KEEP_TAIL_CHARS
+
+    assert budget.max_history_chars == KEEP_TAIL_CHARS
+    assert budget.keep_tail_tokens == 15_000
     kept, dropped = graph_module._bounded_history(req, budget)
-    assert sum(len(t.content) for t in kept) <= graph_module.MAX_HISTORY_CHARS
+    assert sum(len(t.content) for t in kept) <= KEEP_TAIL_CHARS
+    assert dropped
+
+
+def test_known_window_keeps_a_token_budgeted_tail():
+    """The tail is spent in tokens, not turns: newest survive, oldest compact."""
+    req = _request(_turns(100, 1000))   # 100 000 chars, ~25k tokens
+    budget = _budget(1_000_000)
+    kept, dropped = graph_module._bounded_history(req, budget)
+    assert dropped, "the oldest turns should be compacted"
+    assert kept, "the newest turns must survive verbatim"
+    # The newest turn is the last one in the history and is kept whole.
+    assert kept[-1].content == "x" * 1000
+    total_chars = sum(len(t.content) for t in kept)
+    assert total_chars <= budget.keep_tail_tokens * 4
+    # Everything kept is the CONTIGUOUS newest suffix, never a gap.
+    assert [t.content for t in kept] == [t.content for t in req.input.history[-len(kept):]]
+
+
+def test_the_newest_turn_survives_even_when_it_alone_exceeds_the_tail():
+    turns = _turns(3, 100) + [{"role": "assistant", "content": "N" * 90_000}]
+    req = _request(turns)
+    budget = _budget(1_000_000)
+    kept, dropped = graph_module._bounded_history(req, budget)
+    assert kept and kept[-1].content.startswith("N")
     assert dropped
 
 

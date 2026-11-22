@@ -108,6 +108,68 @@ def test_preview_names_the_exact_change(repo):
     assert preview["filesChanged"] == 2 and preview["previewDigest"]
 
 
+def test_preview_offers_hunks_and_selection_applies_one(repo):
+    base = "\n".join(f"line {i}" for i in range(1, 26)) + "\n"
+    _write(repo / "src" / "multi.py", base)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "multi"], cwd=repo, check=True)
+    after = base.replace("line 3", "LINE THREE").replace("line 22", "LINE TWENTY-TWO")
+    _ws, store = _prepare(repo, "runh", {"src/multi.py": after})
+
+    preview = promotion.build_preview("runh", code_store=store, checkout_root=repo)
+    item = {f["path"]: f for f in preview["files"]}["src/multi.py"]
+    assert len(item["hunks"]) == 2, item["hunks"]
+    first, second = item["hunks"][0], item["hunks"][1]
+
+    only_first = promotion.filter_preview(
+        preview, [], hunks=[f"src/multi.py#{first['id']}"],
+    )
+    only_second = promotion.filter_preview(
+        preview, [], hunks=[f"src/multi.py#{second['id']}"],
+    )
+    # The digest covers the SELECTED hunk, not just the file.
+    assert only_first["previewDigest"] != preview["previewDigest"]
+    assert only_first["previewDigest"] != only_second["previewDigest"]
+    assert only_first["files"][0]["partial"] is True
+
+    promotion.apply_promotion(only_first)
+
+    landed = (repo / "src" / "multi.py").read_text(encoding="utf-8")
+    assert "LINE THREE" in landed
+    assert "LINE TWENTY-TWO" not in landed
+    assert "line 22" in landed
+
+
+def test_a_stale_target_refuses_a_hunk_selection(repo):
+    base = "\n".join(f"line {i}" for i in range(1, 26)) + "\n"
+    _write(repo / "src" / "multi.py", base)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "multi2"], cwd=repo, check=True)
+    after = base.replace("line 3", "LINE THREE").replace("line 22", "LINE TWENTY-TWO")
+    _ws, store = _prepare(repo, "runh2", {"src/multi.py": after})
+    preview = promotion.build_preview("runh2", code_store=store, checkout_root=repo)
+    item = preview["files"][0]
+    selected = promotion.filter_preview(
+        preview, [], hunks=[f"src/multi.py#{item['hunks'][0]['id']}"],
+    )
+    # The user edits the file between review and confirm.
+    _write(repo / "src" / "multi.py", base + "user edit\n")
+    with pytest.raises(PromotionError) as exc:
+        promotion.apply_promotion(selected)
+    assert exc.value.code == "PROMOTION_BASE_CHANGED"
+
+
+def test_public_preview_hides_hunk_text(repo):
+    ws, store = _prepare(repo, "runh3", {"src/app.py": "print('world')\n"})
+    preview = promotion.build_preview("runh3", code_store=store, checkout_root=repo)
+    view = promotion.public_preview(preview)
+    assert "worktreeRoot" not in view
+    for item in view["files"]:
+        for hunk in item.get("hunks") or []:
+            assert "beforeText" not in hunk and "afterText" not in hunk
+            assert "id" in hunk and "header" in hunk
+
+
 def test_preview_refuses_a_protected_path(repo):
     ws, store = _prepare(repo, "run2", {
         "python/harness/code/policy.py": "# tampered\n",
@@ -289,6 +351,39 @@ def test_route_preview_approve_apply(repo, monkeypatch):
     # Single-use: a second apply is refused.
     again = client.post("/code/tasks/run9/promote", json={"approvalId": approval_id, "previewDigest": digest})
     assert again.status_code in (403, 409)
+
+
+def test_route_applies_only_the_selected_hunk(repo, monkeypatch):
+    base = "\n".join(f"line {i}" for i in range(1, 26)) + "\n"
+    _write(repo / "src" / "multi.py", base)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "route-hunks"], cwd=repo, check=True)
+    after = base.replace("line 3", "LINE THREE").replace("line 22", "LINE TWENTY-TWO")
+    _ws, store = _prepare(repo, "run11", {"src/multi.py": after})
+    approvals = _FakeApprovals()
+    client = _client(monkeypatch, _StubPromoteService(store, approvals))
+
+    full = client.post("/code/tasks/run11/promote/preview").json()
+    hunk_id = full["preview"]["files"][0]["hunks"][0]["id"]
+    narrowed = client.post(
+        "/code/tasks/run11/promote/preview",
+        json={"include": [], "hunks": [f"src/multi.py#{hunk_id}"]},
+    )
+    assert narrowed.status_code == 200, narrowed.text
+    body = narrowed.json()
+    assert body["preview"]["previewDigest"] != full["preview"]["previewDigest"]
+    approval_id = body["approval"]["id"]
+    digest = body["preview"]["previewDigest"]
+
+    approvals.approve(approval_id)
+    applied = client.post("/code/tasks/run11/promote", json={
+        "approvalId": approval_id, "previewDigest": digest,
+        "include": [], "hunks": [f"src/multi.py#{hunk_id}"],
+    })
+    assert applied.status_code == 200, applied.text
+    landed = (repo / "src" / "multi.py").read_text(encoding="utf-8")
+    assert "LINE THREE" in landed
+    assert "LINE TWENTY-TWO" not in landed
 
 
 def test_route_preview_unknown_task_404(monkeypatch):

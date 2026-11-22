@@ -208,6 +208,67 @@ def test_multi_file_patch_rolls_back_an_apply_phase_failure(tmp_path, monkeypatc
     assert (root / "src" / "other.py").read_bytes() == other_before
 
 
+def test_tolerates_typographic_quotes_and_dashes(tmp_path):
+    """A curly quote or em dash in the file must not refuse an intended edit."""
+    root = tree(tmp_path)
+    (root / "src" / "style.ts").write_text(
+        "const label = \u201cdone\u201d;\nconst range = 1\u20135;\n", encoding="utf-8"
+    )
+    svc = make_service(root)
+    svc.replace_text("src/style.ts", 'const label = "done";', 'const label = "shipped";')
+    assert (root / "src" / "style.ts").read_text(encoding="utf-8").startswith(
+        'const label = "shipped";'
+    )
+
+
+def test_tolerates_trailing_whitespace_per_line(tmp_path):
+    root = tree(tmp_path)
+    (root / "src" / "ws.py").write_text("def f():\n    return 1   \n", encoding="utf-8")
+    svc = make_service(root)
+    svc.replace_text("src/ws.py", "def f():\n    return 1", "def f():\n    return 2")
+    assert (root / "src" / "ws.py").read_text(encoding="utf-8") == "def f():\n    return 2   \n"
+
+
+def test_a_miss_returns_the_closest_lines(tmp_path):
+    root = tree(tmp_path)
+    (root / "src" / "app.py").write_text(
+        "alpha\nbeta\ngamma\n", encoding="utf-8"
+    )
+    svc = make_service(root)
+    with pytest.raises(err.FsError) as exc:
+        svc.replace_text("src/app.py", "beta\ndelta", "x")
+    assert exc.value.code == err.PATCH_CONTEXT_MISMATCH
+    hint = (exc.value.details or {}).get("hint") or ""
+    assert "2: beta" in hint
+    assert "1: alpha" not in hint  # only the span around the match is revealed
+
+
+def test_a_crlf_file_keeps_crlf_when_the_replacement_uses_lf(tmp_path):
+    root = tree(tmp_path)
+    (root / "src" / "win.ts").write_bytes(b"one\r\ntwo\r\nthree\r\n")
+    svc = make_service(root)
+    svc.replace_text("src/win.ts", "two", "TWO\nEXTRA")
+    assert (root / "src" / "win.ts").read_bytes() == b"one\r\nTWO\r\nEXTRA\r\nthree\r\n"
+
+
+def test_replace_all_replaces_every_occurrence(tmp_path):
+    root = tree(tmp_path)
+    (root / "src" / "dup.txt").write_text("same\nsame\n", encoding="utf-8")
+    svc = make_service(root)
+    result = svc.replace_text("src/dup.txt", "same", "done", count=0)
+    assert result["replaced"] == 2
+    assert (root / "src" / "dup.txt").read_text(encoding="utf-8") == "done\ndone\n"
+
+
+def test_regex_replacement_leaves_untouched_endings_alone(tmp_path):
+    root = tree(tmp_path)
+    # CRLF-dominant with one bare LF: the edit must not normalize the other line.
+    (root / "src" / "mix.txt").write_bytes(b"one\r\ntwo\nthree\r\n")
+    svc = make_service(root)
+    svc.replace_text("src/mix.txt", "two", "TWO\nEXTRA", regex=True)
+    assert (root / "src" / "mix.txt").read_bytes() == b"one\r\nTWO\r\nEXTRA\nthree\r\n"
+
+
 def test_dry_run_writes_nothing(tmp_path):
     root = tree(tmp_path)
     svc = make_service(root)

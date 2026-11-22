@@ -827,6 +827,18 @@ class CountingLiveAdapter(RealLiveAdapter):
         return super().order_preview(intent)
 
 
+@pytest.fixture(autouse=True)
+def _open_the_evidence_gates(monkeypatch):
+    """This module tests the FENCE, not the evidence.
+
+    The proof gate and the live ramp are covered end to end in
+    `test_trade_proof.py`, `test_trade_ramp.py` and `test_live_ramp_e2e.py`.
+    Here they are stubbed so a tier/version/mandate test is not re-testing them.
+    """
+    monkeypatch.setattr("harness.trade.proof.live_proof_gap", lambda *_a, **_k: None)
+    monkeypatch.setattr("harness.trade.ramp.ramp_gap", lambda *_a, **_k: None)
+
+
 def _bot_definition(tier="l2", version=3):
     return SimpleNamespace(
         id="aut_bot",
