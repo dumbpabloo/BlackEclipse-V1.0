@@ -6,6 +6,62 @@ export interface DiffSection {
   text: string;
 }
 
+/**
+ * One rendered line of a unified diff, with the file line number each side had.
+ * `hunk` and `meta` lines carry no number; review comments anchor to `newLine`
+ * (falling back to `oldLine` for a removed line) so a note names a real line in
+ * the file the user is looking at.
+ */
+export type DiffLineKind = 'add' | 'del' | 'context' | 'hunk' | 'meta';
+
+export interface DiffLine {
+  kind: DiffLineKind;
+  text: string;
+  oldLine?: number;
+  newLine?: number;
+}
+
+const HUNK_HEADER = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+
+/** Parse one file section into lines with old/new line numbers. */
+export function parseDiffLines(text: string): DiffLine[] {
+  const out: DiffLine[] = [];
+  let oldLine = 0;
+  let newLine = 0;
+  for (const line of text.split(/\r?\n/)) {
+    const hunk = line.match(HUNK_HEADER);
+    if (hunk) {
+      oldLine = Number(hunk[1]);
+      newLine = Number(hunk[2]);
+      out.push({ kind: 'hunk', text: line });
+      continue;
+    }
+    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ')) {
+      out.push({ kind: 'meta', text: line });
+      continue;
+    }
+    if (line.startsWith('+')) {
+      out.push({ kind: 'add', text: line.slice(1), newLine });
+      newLine += 1;
+      continue;
+    }
+    if (line.startsWith('-')) {
+      out.push({ kind: 'del', text: line.slice(1), oldLine });
+      oldLine += 1;
+      continue;
+    }
+    // Context (also the `\ No newline` marker, which has no number).
+    if (line.startsWith('\\')) {
+      out.push({ kind: 'meta', text: line });
+      continue;
+    }
+    out.push({ kind: 'context', text: line.startsWith(' ') ? line.slice(1) : line, oldLine, newLine });
+    oldLine += 1;
+    newLine += 1;
+  }
+  return out;
+}
+
 const GIT_HEADER = /^diff --git a\/(.+?) b\/(.+)$/;
 const PLUS_HEADER = /^\+\+\+ b\/(.+)$/;
 
