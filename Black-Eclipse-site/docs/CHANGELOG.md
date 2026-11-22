@@ -6,6 +6,11 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-22
 
+- **release: v0.4.25.** Ships the desktop runtime-resolution fix (vendored Python and `python/harness` now resolve
+  from the project root, not the pinned-release cwd). Version bumped in `package.json`, `pyproject.toml` and
+  `harness.__version__`; `release-check` reports package 0.4.25 / API 1.0.0.
+  docs updated: `docs/CHANGELOG.md`.
+
 - **security: dependency audit cleared - npm 40 -> 0 and pip 103 pypdf advisories -> 0.**
   - `npm audit fix` (non-breaking) took 40 -> 12; the rest were fixed with explicit
     bounds: `nodemailer` 9 -> 10.6.1, `katex` 0.16 -> 0.19.1, and overrides for
