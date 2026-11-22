@@ -624,6 +624,23 @@ export async function connectProvider(input: ConnectInput): Promise<ConnectResul
   // connect flow never fails just because a hard-coded default was retired.
   const chosenModel = probe.model || target.model || probe.models[0] || target.provider.model;
 
+  // Persist the models the probe just found. Without this the composer (and the
+  // picker in Settings) only knew the catalog default until someone clicked
+  // "Discover" — so a freshly connected API appeared to have one model, or only
+  // the local Ollama list stayed visible. Best effort: a snapshot failure must
+  // never fail a verified connection.
+  const rememberModels = async () => {
+    const ids = probe.models.filter((m): m is string => typeof m === "string" && m.length > 0);
+    if (ids.length === 0) return;
+    try {
+      const { recordDiscoveredModels } = await import("./discovered-models");
+      // Everything the provider listed in this probe is genuinely served.
+      await recordDiscoveredModels(target.provider.id, ids, ids);
+    } catch {
+      // The in-memory runtime registry still knows them for this session.
+    }
+  };
+
   try {
     if (target.provider.id === "custom") {
       // A named connection is the source of truth for endpoint + auth routing.
@@ -645,6 +662,7 @@ export async function connectProvider(input: ConnectInput): Promise<ConnectResul
         model: chosenModel,
         apiKey: "",
       });
+      await rememberModels();
       return {
         ...probe,
         providerId: "custom",
@@ -678,6 +696,7 @@ export async function connectProvider(input: ConnectInput): Promise<ConnectResul
       // The key lives in the vault, never plaintext in llm_config.
       apiKey: "",
     });
+    await rememberModels();
   } catch (err) {
     return {
       ok: false,

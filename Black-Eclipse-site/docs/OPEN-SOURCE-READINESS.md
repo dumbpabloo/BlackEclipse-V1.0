@@ -52,10 +52,12 @@ stale O1/O4 history and anything the old commits contain. Create the public
 repository from a rewritten history (§2), or delete the stale refs and prove a
 fresh clone is clean first.
 
-**Done 2026-11-16.** `desimarijuana/BlackEclipse-V1.0` is a *new* repository
-built from the rewritten history; the previous one is
-`desimarijuana/BlackEclipse-V1.0-archive` — **private, and it must stay that
-way**, because it still holds every leaking PR ref and the 720 MB draft release.
+**Done 2026-11-16.** The public repository is a *new* repository built from the
+rewritten history; the previous private one remains as
+`BlackEclipse-V1.0-archive` — **private, and it must stay that way**, because it
+still holds every leaking PR ref and the 720 MB draft release. (The account and
+the repository were renamed since: the live home is
+`dumbpabloo/black-eclipse`.)
 A fresh clone of the new repository shows zero `refs/pull/*`, zero `.db` paths in
 history, no reachable 38 MB blob, and noreply-only authors.
 
@@ -255,7 +257,7 @@ Repository content:
       (`repository`, `homepage`, `bugs`), the README download/release links,
       `.github/ISSUE_TEMPLATE/config.yml`, and the API URL in
       `repository-guards.md`; the current links all name
-      `dumbpabloo/BlackEclipse-V1.0`.
+      `dumbpabloo/black-eclipse`.
 
 GitHub settings (all free once public):
 

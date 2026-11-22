@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { confirmDialog } from "@/lib/ui/confirm-dialog";
+import { notifyLlmConfigChanged } from "@/lib/agent/llm-config-events";
 import {
   Cog, Bot, Globe2, Newspaper, Palette, Database,
   Trash2, RotateCcw, Check, Activity, ShieldCheck,
@@ -399,6 +400,10 @@ export function Settings({
       if (data.llm) setLlm({ ...data.llm, apiKey: "" });
       if (Array.isArray(data.newsFeeds)) setFeeds(data.newsFeeds);
       if (data.preferences) setPrefs(data.preferences);
+      // The saved LLM config changed. Broadcast AFTER the server confirmed it so
+      // every mounted composer (chat + floating dock) re-fetches the provider's
+      // models instead of keeping the boot-time list.
+      if (body.llm) notifyLlmConfigChanged();
       if (settingsCache) {
         if (data.llm) settingsCache.llm = { ...data.llm, apiKey: "" };
         if (Array.isArray(data.newsFeeds)) settingsCache.feeds = data.newsFeeds;

@@ -362,7 +362,25 @@ export interface TradeApproval {
     margin?: number | null;
     spreadPoints?: number | null;
     retcode?: number | null;
+    /** Server-computed risk for THIS order (max loss, % equity, warnings). */
+    riskSummary?: TradeRiskSummary | null;
   } | null;
+}
+
+/** The order's own risk, computed by the Python trade service from broker facts. */
+export interface TradeRiskSummary {
+  maxLoss: number;
+  riskPctOfEquity: number;
+  basis: "tick-value" | "contract-size";
+  equity?: number | null;
+  currency?: string | null;
+  verdict: "ok" | "warn" | "block";
+  warnings?: string[];
+  reasons?: string[];
+  spreadCost?: number | null;
+  spreadPctOfRisk?: number | null;
+  marginUsedPct?: number | null;
+  rewardRisk?: number | null;
 }
 
 export interface OrderPreview {

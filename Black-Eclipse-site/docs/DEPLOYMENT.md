@@ -131,7 +131,7 @@ waits for `/login` before reporting success.
 Install it once per server:
 
 ```sh
-cd /path/to/BlackEclipse-V1.0
+cd /path/to/black-eclipse
 git pull --ff-only
 sudo bash Black-Eclipse-site/scripts/install-autodeploy.sh
 ```
@@ -156,8 +156,8 @@ After=network-online.target docker.service
 
 [Service]
 Type=oneshot
-WorkingDirectory=/opt/BlackEclipse-V1.0/Black-Eclipse-site
-ExecStart=/opt/BlackEclipse-V1.0/Black-Eclipse-site/scripts/deploy.sh
+WorkingDirectory=/opt/black-eclipse/Black-Eclipse-site
+ExecStart=/opt/black-eclipse/Black-Eclipse-site/scripts/deploy.sh
 ```
 
 ```ini
@@ -183,7 +183,7 @@ sudo journalctl -u blackeclipse-deploy -f
 A cron entry is equivalent:
 
 ```cron
-*/5 * * * * /opt/BlackEclipse-V1.0/Black-Eclipse-site/scripts/deploy.sh >> /var/log/blackeclipse-deploy.log 2>&1
+*/5 * * * * /opt/black-eclipse/Black-Eclipse-site/scripts/deploy.sh >> /var/log/blackeclipse-deploy.log 2>&1
 ```
 
 The timer polls; it does not receive webhooks. For an immediate deploy on every
@@ -245,7 +245,7 @@ systemctl list-timers blackeclipse-backup.timer
 A cron entry is equivalent:
 
 ```cron
-15 3 * * * /opt/BlackEclipse-V1.0/Black-Eclipse-site/scripts/backup.sh \
+15 3 * * * /opt/black-eclipse/Black-Eclipse-site/scripts/backup.sh \
            >> /var/log/blackeclipse-backup.log 2>&1
 ```
 
@@ -350,7 +350,7 @@ so the release process reads the real databases. `BE_DATA_DIR` moves
   entry is enough:
 
   ```cron
-  * * * * * cd /opt/BlackEclipse-V1.0/Black-Eclipse-site && \
+  * * * * * cd /opt/black-eclipse/Black-Eclipse-site && \
     HEALTH_URL=http://127.0.0.1:3000/login \
     ALERT_WEBHOOK_URL=https://hooks.example/ops \
     bash scripts/health-watch.sh >> /var/log/blackeclipse-health.log 2>&1

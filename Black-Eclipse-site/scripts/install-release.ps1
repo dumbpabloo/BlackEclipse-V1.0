@@ -38,7 +38,7 @@
   Print what would be downloaded and where, then stop.
 
 .EXAMPLE
-  irm https://raw.githubusercontent.com/dumbpabloo/BlackEclipse-V1.0/main/Black-Eclipse-site/scripts/install-release.ps1 -OutFile install-release.ps1
+  irm https://raw.githubusercontent.com/dumbpabloo/black-eclipse/main/Black-Eclipse-site/scripts/install-release.ps1 -OutFile install-release.ps1
   ./install-release.ps1
 
 .EXAMPLE
@@ -52,7 +52,7 @@ param(
   [switch]$SkipChecksum,
   [switch]$NoLaunch,
   [switch]$DryRun,
-  [string]$Repo = $(if ($env:BLACK_ECLIPSE_REPO) { $env:BLACK_ECLIPSE_REPO } else { "dumbpabloo/BlackEclipse-V1.0" })
+  [string]$Repo = $(if ($env:BLACK_ECLIPSE_REPO) { $env:BLACK_ECLIPSE_REPO } else { "dumbpabloo/black-eclipse" })
 )
 
 $ErrorActionPreference = "Stop"

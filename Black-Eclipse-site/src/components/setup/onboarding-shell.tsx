@@ -524,20 +524,20 @@ export function OnboardingShell({
           <div
             ref={cardRef}
             tabIndex={-1}
-            className="glass-card-strong relative flex max-h-[calc(100dvh-1.5rem)] flex-col overflow-hidden rounded-2xl border border-white/12 outline-none sm:max-h-[calc(100dvh-3rem)]"
+            className="glass-card-strong relative flex max-h-[calc(100vh-1.5rem)] flex-col overflow-hidden rounded-2xl border border-white/12 outline-none supports-[height:100dvh]:max-h-[calc(100dvh-1.5rem)] sm:max-h-[calc(100vh-3rem)] sm:supports-[height:100dvh]:max-h-[calc(100dvh-3rem)]"
           >
             <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/50 to-transparent" />
 
             <div className="grid min-h-0 flex-1 md:grid-cols-[300px_minmax(0,1fr)]">
               {/* ── Left rail: brand + stepper ───────────────────────────── */}
-              <aside className="hidden flex-col border-r border-white/[0.07] bg-white/[0.025] px-6 py-7 md:flex">
+              <aside className="hidden min-h-0 flex-col border-r border-white/[0.07] bg-white/[0.025] px-6 py-7 md:flex">
                 <img
                   src="/branding/LOGO-WORDMARK.svg"
                   alt="BlackEclipse"
-                  className="h-[24px] w-auto self-start"
+                  className="h-[24px] w-auto shrink-0 self-start"
                 />
 
-                <ol className="relative mb-auto mt-9">
+                <ol className="relative mb-auto mt-9 min-h-0 overflow-y-auto pr-1">
                   {/* One continuous rail behind the discs: the icons are opaque,
                       so the line can never show through a glyph. */}
                   <span
@@ -555,64 +555,78 @@ export function OnboardingShell({
                     const done = index < draft.step;
                     const isActive = index === draft.step;
                     const Icon = step.icon;
-                    const reachable = index === 0 ? draft.riskAck : index < draft.step + 1;
+                    // Once the risk notice is acknowledged the whole rail is
+                    // navigable — a step is reachable whether it is behind or
+                    // ahead. The notice itself stays a hard gate: until it is
+                    // accepted, no jump (including forward) is offered.
+                    const reachable = draft.riskAck;
+                    const disabled = !reachable || isActive;
                     return (
-                      <li key={step.id} className="relative flex gap-3.5 pb-7 last:pb-0">
-                        <span
+                      <li key={step.id} className="relative pb-7 last:pb-0">
+                        <button
+                          type="button"
+                          disabled={disabled}
+                          aria-current={isActive ? "step" : undefined}
+                          aria-label={`${step.title} — ${step.short}`}
+                          onClick={() => goToStep(index)}
                           className={cn(
-                            "relative z-10 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition-colors",
-                            isActive
-                              ? "border-primary bg-primary shadow-[0_0_0_5px_color-mix(in_srgb,var(--primary)_14%,transparent)]"
-                              : done
-                                ? "border-primary/40 bg-[color-mix(in_srgb,var(--primary)_16%,var(--card))]"
-                                : "border-white/12 bg-[color-mix(in_srgb,white_4%,var(--card))] text-muted-foreground/70",
+                            "group flex w-full gap-3.5 rounded-xl text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+                            disabled ? "cursor-default" : "cursor-pointer",
                           )}
-                          /* Icon colour follows the disc, set inline because
-                             globals.css greys any span class containing
-                             `text-primary` with !important. Light accent disc →
-                             near-black glyph; dark tinted disc → accent glyph. */
-                          style={
-                            isActive
-                              ? { color: "var(--primary-foreground)" }
-                              : done
-                                ? { color: "var(--primary)" }
-                                : undefined
-                          }
                         >
-                          {done ? <Check size={16} weight="bold" /> : <Icon size={16} />}
-                        </span>
-                        <span className="min-w-0 pt-0.5">
-                          <button
-                            type="button"
-                            disabled={!reachable || index === draft.step}
-                            onClick={() => goToStep(index)}
-                            className={cn(
-                              "block text-left text-[13.5px] font-semibold leading-tight transition-colors",
-                              isActive
-                                ? "text-foreground"
-                                : done
-                                  ? "text-foreground/80 hover:text-foreground"
-                                  : "text-muted-foreground/60",
-                              reachable && !isActive ? "cursor-pointer" : "cursor-default",
-                            )}
-                          >
-                            {step.title}
-                          </button>
                           <span
                             className={cn(
-                              "mt-1 block text-[11.5px] leading-snug",
-                              isActive ? "text-muted-foreground" : "text-muted-foreground/55",
+                              "relative z-10 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition-colors",
+                              isActive
+                                ? "border-primary bg-primary shadow-[0_0_0_5px_color-mix(in_srgb,var(--primary)_14%,transparent)]"
+                                : done
+                                  ? "border-primary/40 bg-[color-mix(in_srgb,var(--primary)_16%,var(--card))]"
+                                  : "border-white/12 bg-[color-mix(in_srgb,white_4%,var(--card))] text-muted-foreground/70",
+                              !disabled && "group-hover:border-primary/50",
                             )}
+                            /* Icon colour follows the disc, set inline because
+                               globals.css greys any span class containing
+                               `text-primary` with !important. Light accent disc →
+                               near-black glyph; dark tinted disc → accent glyph. */
+                            style={
+                              isActive
+                                ? { color: "var(--primary-foreground)" }
+                                : done
+                                  ? { color: "var(--primary)" }
+                                  : undefined
+                            }
                           >
-                            {step.short}
+                            {done ? <Check size={16} weight="bold" /> : <Icon size={16} />}
                           </span>
-                        </span>
+                          <span className="min-w-0 pt-0.5">
+                            <span
+                              className={cn(
+                                "block text-[13.5px] font-semibold leading-tight transition-colors",
+                                isActive
+                                  ? "text-foreground"
+                                  : done
+                                    ? "text-foreground/80 group-hover:text-foreground"
+                                    : "text-muted-foreground/60 group-hover:text-muted-foreground/80",
+                              )}
+                            >
+                              {step.title}
+                            </span>
+                            <span
+                              className={cn(
+                                "mt-1 block text-[11.5px] leading-snug",
+                                isActive ? "text-muted-foreground" : "text-muted-foreground/55",
+                              )}
+                            >
+                              {step.short}
+                            </span>
+                          </span>
+                        </button>
                       </li>
                     );
                   })}
                 </ol>
 
-                <div className="mt-8 space-y-1 border-t border-white/[0.07] pt-4">
+                <div className="mt-8 shrink-0 space-y-1 border-t border-white/[0.07] pt-4">
                   <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground/40">
                     Local setup · 127.0.0.1
                   </p>
@@ -625,7 +639,7 @@ export function OnboardingShell({
               {/* ── Right panel: step content + actions ──────────────────── */}
               <section className="flex min-h-0 flex-col">
                 {/* Mobile brand + progress (rail is hidden below md). */}
-                <div className="flex items-center gap-3 border-b border-white/[0.07] px-5 py-3 md:hidden">
+                <div className="flex shrink-0 items-center gap-3 border-b border-white/[0.07] px-5 py-3 md:hidden">
                   <img
                     src="/branding/LOGO-WORDMARK.svg"
                     alt="BlackEclipse"
@@ -635,7 +649,7 @@ export function OnboardingShell({
                     Step {draft.step + 1} of {STEPS.length}
                   </span>
                 </div>
-                <div className="px-5 pt-4 md:hidden">
+                <div className="shrink-0 px-5 pt-4 md:hidden">
                   <div className="h-[3px] overflow-hidden rounded-full bg-white/[0.08]">
                     <div
                       className="h-full rounded-full bg-primary transition-[width] duration-500"
@@ -644,7 +658,7 @@ export function OnboardingShell({
                   </div>
                 </div>
 
-                <header className="flex items-start gap-3.5 px-5 pb-1 pt-6 sm:px-8">
+                <header className="flex shrink-0 items-start gap-3.5 px-5 pb-1 pt-6 sm:px-8">
                   <span className="mt-0.5 hidden h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-primary/25 bg-primary/12 text-primary sm:flex">
                     <ActiveIcon size={20} />
                   </span>
@@ -652,7 +666,7 @@ export function OnboardingShell({
                     <h1 className="font-serif text-[22px] font-semibold leading-[1.25] tracking-[-0.01em] text-foreground">
                       {active.title}
                     </h1>
-                    <p className="mt-1 max-w-[56ch] text-[13px] leading-relaxed text-muted-foreground">
+                    <p className="mt-1 max-w-[56ch] text-[13px] leading-relaxed text-muted-foreground [@media(max-height:620px)]:hidden">
                       {active.description}
                     </p>
                   </div>
@@ -693,14 +707,14 @@ export function OnboardingShell({
                 </div>
 
                 {busy && slowSave && (
-                  <p className="border-t border-white/[0.07] bg-amber-500/[0.04] px-5 py-2 text-[11.5px] leading-relaxed text-amber-200/90 sm:px-8">
+                  <p className="shrink-0 border-t border-white/[0.07] bg-amber-500/[0.04] px-5 py-2 text-[11.5px] leading-relaxed text-amber-200/90 sm:px-8">
                     Still saving — the local database is taking longer than usual (usually another
                     Eclipse window or a disk scan). This is bounded; if it cannot finish, the button
                     comes back with a retry and a diagnostics option.
                   </p>
                 )}
 
-                <div className="flex items-center gap-2 border-t border-white/[0.07] bg-white/[0.015] px-5 py-3.5 sm:px-8">
+                <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-2 border-t border-white/[0.07] bg-white/[0.015] px-5 py-3.5 sm:px-8">
                   {draft.step === 0 ? (
                     <button
                       type="button"

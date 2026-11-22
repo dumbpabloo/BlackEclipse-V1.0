@@ -221,11 +221,76 @@ def is_valid(expression: str) -> bool:
         return False
 
 
+# ── DST-aware instant resolution ───────────────────────────────────────────
+#
+# `next_fire` above does wall-clock arithmetic on a naive datetime, which is the
+# right thing for a UTC schedule and the wrong thing across a DST transition. The
+# policy here is Vibe-Trading's (`scheduling/triggers.py::
+# local_wall_time_to_epoch_ms`), and both halves matter:
+#
+#   * a NONEXISTENT wall time (the spring-forward gap) resolves to ``None`` and is
+#     skipped — ZoneInfo would otherwise silently map it past the transition
+#     (PEP 495) and run it at an hour nobody asked for;
+#   * an AMBIGUOUS wall time (the fall-back fold) resolves with ``fold=0``, the
+#     first occurrence, so it runs exactly once rather than twice.
+
+#: Days searched before declaring a cron expression never fires (~4 years, the
+#: reference's ``CRON_SEARCH_LIMIT_DAYS``: a leap day plus DST slack).
+CRON_SEARCH_LIMIT_DAYS = 6 * 366 + 1
+
+
+def local_wall_time_to_epoch_ms(
+    day: _dt.date, hour: int, minute: int, zone: _dt.tzinfo
+) -> Optional[int]:
+    """Resolve one local wall time to a UTC epoch-ms instant, or ``None`` in a gap."""
+    local = _dt.datetime(day.year, day.month, day.day, hour, minute, tzinfo=zone)
+    as_utc = local.astimezone(_dt.timezone.utc)
+    round_trip = as_utc.astimezone(zone).replace(tzinfo=None)
+    if round_trip != local.replace(tzinfo=None):
+        return None                    # this wall time does not exist here (DST gap)
+    return int(as_utc.timestamp() * 1000)
+
+
+def next_fire_epoch_ms(
+    expression: CronExpression, after_ms: int, zone: _dt.tzinfo
+) -> Optional[int]:
+    """First matching instant strictly after ``after_ms``, evaluated in ``zone``.
+
+    Days are walked on the zone's own calendar, so the weekday test follows the
+    authoring wall clock rather than UTC. A fire time that falls in a DST gap is
+    skipped instead of being moved; ``None`` means "never fires" within the search
+    horizon, which is how an impossible date (Feb 30) is reported.
+    """
+    start = _dt.datetime.fromtimestamp(after_ms / 1000.0, zone).date()
+    for offset in range(CRON_SEARCH_LIMIT_DAYS):
+        candidate_day = start + _dt.timedelta(days=offset)
+        if candidate_day.month not in expression.months:
+            continue
+        cron_dow = (candidate_day.weekday() + 1) % 7
+        dom_ok = candidate_day.day in expression.days
+        dow_ok = cron_dow in expression.weekdays
+        if expression.dom_restricted and expression.dow_restricted:
+            day_ok = dom_ok or dow_ok            # Vixie OR rule
+        else:
+            day_ok = dom_ok and dow_ok           # an unconstrained field is a full set
+        if not day_ok:
+            continue
+        for hour in sorted(expression.hours):
+            for minute in sorted(expression.minutes):
+                fire = local_wall_time_to_epoch_ms(candidate_day, hour, minute, zone)
+                if fire is not None and fire > after_ms:
+                    return fire
+    return None
+
+
 __all__ = [
+    "CRON_SEARCH_LIMIT_DAYS",
     "CronError",
     "CronExpression",
     "FIELD_NAMES",
     "FIELD_RANGES",
     "is_valid",
+    "local_wall_time_to_epoch_ms",
+    "next_fire_epoch_ms",
     "parse_cron",
 ]

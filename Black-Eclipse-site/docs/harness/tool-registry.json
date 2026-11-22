@@ -1,7 +1,7 @@
 {
-  "digest": "40ab20751e9e1b3c",
+  "digest": "a9ec22da70d3e10e",
   "manifestVersion": "1",
-  "toolCount": 1107,
+  "toolCount": 1113,
   "tools": [
     {
       "deprecated": false,
@@ -2267,6 +2267,31 @@
         "type": "object"
       },
       "name": "broker_reconciliation",
+      "permission": "read",
+      "replacement": null,
+      "risk": "none",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
+      "description": "Read the broker's own static facts for one instrument: contract size, volume minimum/step/maximum, tick size and tick value in the account currency, stops level, trade mode and sessions. Read-only. Call this before sizing a trade - never assume a contract size.",
+      "effect": null,
+      "inputSchema": {
+        "properties": {
+          "connectionId": {
+            "description": "Saved connection id (optional when there is exactly one).",
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol"
+        ],
+        "type": "object"
+      },
+      "name": "broker_symbol_info",
       "permission": "read",
       "replacement": null,
       "risk": "none",
@@ -6471,6 +6496,21 @@
     },
     {
       "deprecated": false,
+      "description": "Undo the most recent turn: restore every tracked file to the snapshot Eclipse took before that turn's first write. Effectful: requires an approval. A pre-restore snapshot keeps the undo itself undoable.",
+      "effect": "write",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "checkpoint_undo_turn",
+      "permission": "write",
+      "replacement": null,
+      "risk": "medium",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
       "description": "List the citations recorded for a research run (claim → evidence → source → location).",
       "effect": null,
       "inputSchema": {
@@ -6773,7 +6813,7 @@
     },
     {
       "deprecated": false,
-      "description": "Replace text in a file - the ONE way to change a file's contents. Eclipse has to have READ the file earlier in this task, and the file must not have changed since; both refusals name the way forward. The text to replace must be unique unless you say how many times it appears, so include enough surrounding context to make the match unambiguous. To create a file use write_file; to apply a prepared diff use apply_diff.",
+      "description": "Replace text in a file - the ONE way to change a file's contents. Eclipse has to have READ the file earlier in this task, and the file must not have changed since; both refusals name the way forward. The text to replace must be unique unless you say how many times it appears (or pass replaceAll), so include enough surrounding context to make the match unambiguous. Matching tolerates curly quotes, non-ASCII dashes, non-breaking spaces and trailing whitespace, and the file's own line endings are preserved. On a miss the refusal includes the closest numbered lines. To create a file use write_file; to apply a prepared diff use apply_diff.",
       "effect": "write",
       "inputSchema": {
         "additionalProperties": false,
@@ -6793,6 +6833,10 @@
           "path": {
             "description": "File to change, relative to the project root.",
             "type": "string"
+          },
+          "replaceAll": {
+            "description": "Replace every occurrence instead of requiring exactly one. Use for a rename across the file; leave it out for a normal edit.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -7501,6 +7545,51 @@
       "permission": "read",
       "replacement": null,
       "risk": "low",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
+      "description": "Record or update the plan for this coding task: the whole list of steps, each with a status (pending, in_progress, completed, cancelled). Use it for multi-step work so the plan survives the whole task and the user can see it. Send the FULL list each time; it replaces the previous one.",
+      "effect": null,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "todos": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "content": {
+                  "maxLength": 240,
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "pending",
+                    "in_progress",
+                    "completed",
+                    "cancelled"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "status"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "todos"
+        ],
+        "type": "object"
+      },
+      "name": "code_todo",
+      "permission": "read",
+      "replacement": null,
+      "risk": "none",
       "version": "1.0.0"
     },
     {
@@ -16900,6 +16989,25 @@
     },
     {
       "deprecated": false,
+      "description": "Read the live harness composition: kernel status, services, agent catalog, tool/prompt scopes, skills and plugin-provided services. Read-only; never invokes a method or returns a secret.",
+      "effect": null,
+      "inputSchema": {
+        "properties": {
+          "section": {
+            "description": "Optional section: enabled, services, agents, tools, skills, provided",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "harness_inspect",
+      "permission": "read",
+      "replacement": null,
+      "risk": "low",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
       "description": "Run a health check on a runtime or a single target. Read-only.",
       "effect": null,
       "inputSchema": {
@@ -21786,7 +21894,7 @@
     },
     {
       "deprecated": false,
-      "description": "Validate an order (demo or live) against broker constraints, the connection's limits and the money guardrails, then request a single-use operator approval. On a live connection the operator confirms the approval card in chat and types the LIVE phrase; this tool NEVER sends an order.",
+      "description": "Validate an order (demo or live) against broker constraints, the connection's limits and the money guardrails, then request a single-use operator approval. On a live connection the operator confirms the approval card in chat and types the LIVE phrase; this tool NEVER sends an order. For a new entry, call `broker_symbol_info` and `trade_plan` first; never guess a volume.",
       "effect": null,
       "inputSchema": {
         "properties": {
@@ -26735,6 +26843,20 @@
         "type": "object"
       },
       "name": "review_change",
+      "permission": "read",
+      "replacement": null,
+      "risk": "none",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
+      "description": "Read the account-level trading supervisor: total margin vs equity, open positions, equity loss since the day/week open, and each bot's realized result after costs. `block` means no new entries. Read-only.",
+      "effect": null,
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "risk_supervisor",
       "permission": "read",
       "replacement": null,
       "risk": "none",
@@ -33594,7 +33716,7 @@
     },
     {
       "deprecated": false,
-      "description": "Run a short Python program that calls READ-ONLY tools through `tools.call(name, **args)` / `tools.text(name, **args)` and sets `result`. Process-isolated, no network, 20 tool calls max. Use it to loop, filter or join data across several tool results. Effectful tools must be called directly.",
+      "description": "Run a short Python program that calls tools through `tools.call(name, **args)` / `tools.text(name, **args)` and sets `result`. Process-isolated, no network, 20 tool calls max. Use it to loop, filter or join work across several tool results. Read-only tools run directly; an EFFECTFUL tool runs only through this run's approval chain (and is refused without one).",
       "effect": null,
       "inputSchema": {
         "properties": {
@@ -33664,6 +33786,52 @@
         "type": "object"
       },
       "name": "tool_search",
+      "permission": "read",
+      "replacement": null,
+      "risk": "none",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
+      "description": "Turn a trade idea into a sized, risk-checked plan: read the account equity and the symbol's own limits, place the entry at the operator's price or the broker's quote, and compute the largest volume whose stop-out stays inside `riskPct` of equity (default 1%). Also checks the account fit (open positions, concentration, margin, spread) and returns max loss, % of equity and reward:risk. Sends nothing and creates no approval. A refusal (minimum lot too large, stop too tight) names the exact correction. Use its volume and stop in `order_preview`.",
+      "effect": null,
+      "inputSchema": {
+        "properties": {
+          "connectionId": {
+            "description": "Saved connection id (optional when there is exactly one).",
+            "type": "string"
+          },
+          "entry": {
+            "type": "number"
+          },
+          "riskPct": {
+            "type": "number"
+          },
+          "side": {
+            "enum": [
+              "buy",
+              "sell"
+            ],
+            "type": "string"
+          },
+          "stop": {
+            "type": "number"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "target": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "symbol",
+          "side",
+          "stop"
+        ],
+        "type": "object"
+      },
+      "name": "trade_plan",
       "permission": "read",
       "replacement": null,
       "risk": "none",

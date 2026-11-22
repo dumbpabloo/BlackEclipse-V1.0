@@ -155,6 +155,118 @@ def deflated_sharpe(
     }
 
 
+#: Fewest observations for which skew/kurtosis-corrected statistics mean anything.
+#: The sqrt(T-1) scaling is not the binding constraint; the moment estimates are.
+MIN_OBSERVATIONS = 30
+
+#: Fourth standardised moment of a Gaussian. NOT zero: the Bailey-Lopez de Prado
+#: variance term uses the non-excess form (3 for a normal), and passing an excess
+#: kurtosis makes the confidence too high.
+GAUSSIAN_KURTOSIS = 3.0
+
+
+def probabilistic_sharpe_ratio(
+    observed_sharpe: float,
+    n_observations: int,
+    benchmark_sharpe: float = 0.0,
+    skew: float = 0.0,
+    kurtosis: float = GAUSSIAN_KURTOSIS,
+) -> float:
+    """Confidence that a strategy's true Sharpe exceeds a benchmark.
+
+    Parity with Vibe-Trading's `quantlib/multipletesting.py`:
+
+        PSR = Phi[ (SR - SR*) * sqrt(T - 1) / sqrt(1 - g3*SR + (g4-1)/4*SR^2) ]
+
+    Negative skew and fat tails both make a given Sharpe less trustworthy, which
+    is why this is not a plain t-test. Sharpe must be **per observation** and
+    matched to ``n_observations``: an annualised Sharpe with a daily ``T``
+    inflates the statistic by roughly sqrt(252).
+
+    Raises ``MultipleTestingError`` on a non-finite input, fewer than
+    :data:`MIN_OBSERVATIONS` observations, a kurtosis below 1 (impossible for any
+    distribution, and the signature of an excess-kurtosis caller), or a
+    non-positive variance term (mutually inconsistent moments).
+    """
+    for name, value in (("observed_sharpe", observed_sharpe),
+                        ("n_observations", n_observations),
+                        ("benchmark_sharpe", benchmark_sharpe),
+                        ("skew", skew), ("kurtosis", kurtosis)):
+        if not math.isfinite(float(value)):
+            raise MultipleTestingError(f"{name} must be finite, got {value!r}")
+    if n_observations < MIN_OBSERVATIONS:
+        raise MultipleTestingError(
+            f"need at least {MIN_OBSERVATIONS} observations, got {n_observations}"
+        )
+    if kurtosis < 1.0:
+        raise MultipleTestingError(
+            f"kurtosis must be the non-excess fourth moment (>= 1, 3 for a "
+            f"Gaussian), got {kurtosis}; excess kurtosis was probably passed"
+        )
+    variance_term = (1.0 - skew * observed_sharpe
+                     + (kurtosis - 1.0) / 4.0 * observed_sharpe ** 2)
+    if variance_term <= 0.0:
+        raise MultipleTestingError(
+            f"the Sharpe variance term is {variance_term:.4f}, which is not "
+            "positive; the supplied skew and kurtosis are inconsistent with this Sharpe"
+        )
+    z = ((observed_sharpe - benchmark_sharpe) * math.sqrt(n_observations - 1)
+         / math.sqrt(variance_term))
+    return norm_cdf(z)
+
+
+def benjamini_hochberg(p_values: list[float], *, fdr: float = 0.05) -> dict[str, Any]:
+    """Benjamini-Hochberg false-discovery-rate control (step-up).
+
+    Parity with the reference's ``benjamini_hochberg``. Screening hundreds of
+    factors with Bonferroni is far too strict; BH bounds the expected *fraction*
+    of rejections that are false, which is the quantity a research pipeline
+    actually cares about.
+
+    Returned in the caller's order: ``rejected`` is a list of booleans,
+    ``adjustedPValues`` is the monotone-non-decreasing adjusted p-value array
+    (running minimum from the largest rank down, clipped at 1), ``threshold`` is
+    the largest raw p-value rejected (0.0 when none), and ``nRejected`` counts.
+    """
+    if not (0.0 < fdr < 1.0):
+        raise MultipleTestingError(f"fdr must be in (0, 1), got {fdr}")
+    values = np.asarray([float(x) for x in p_values], dtype=float).ravel()
+    if values.size == 0:
+        raise MultipleTestingError("p_values is empty")
+    if not np.isfinite(values).all():
+        raise MultipleTestingError("p_values holds a non-finite value")
+    if ((values < 0.0) | (values > 1.0)).any():
+        raise MultipleTestingError("every p-value must lie in [0, 1]")
+
+    n = values.size
+    order = np.argsort(values, kind="stable")
+    sorted_p = values[order]
+    ranks = np.arange(1, n + 1)
+    below = sorted_p <= (ranks / n) * fdr
+    if below.any():
+        cutoff_rank = int(ranks[below].max())
+        threshold = float(sorted_p[cutoff_rank - 1])
+    else:
+        cutoff_rank = 0
+        threshold = 0.0
+
+    adjusted_sorted = np.minimum.accumulate((n / ranks * sorted_p)[::-1])[::-1]
+    adjusted_sorted = np.clip(adjusted_sorted, 0.0, 1.0)
+    rejected_sorted = ranks <= cutoff_rank
+
+    rejected = np.empty(n, dtype=bool)
+    adjusted = np.empty(n, dtype=float)
+    rejected[order] = rejected_sorted
+    adjusted[order] = adjusted_sorted
+    return {
+        "rejected": [bool(x) for x in rejected],
+        "adjustedPValues": [float(x) for x in adjusted],
+        "nRejected": int(rejected.sum()),
+        "threshold": threshold,
+        "fdr": fdr,
+    }
+
+
 def _skew(x: np.ndarray) -> float:
     n = x.size
     if n < 2:
@@ -259,8 +371,12 @@ def pbo_cscv(returns_matrix: list[list[float]], *, n_splits: int = 16) -> dict[s
 
 __all__ = [
     "MultipleTestingError",
+    "GAUSSIAN_KURTOSIS",
+    "MIN_OBSERVATIONS",
+    "benjamini_hochberg",
     "deflated_sharpe",
     "norm_cdf",
     "norm_ppf",
     "pbo_cscv",
+    "probabilistic_sharpe_ratio",
 ]

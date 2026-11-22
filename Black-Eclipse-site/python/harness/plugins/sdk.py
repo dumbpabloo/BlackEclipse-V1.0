@@ -195,6 +195,30 @@ def workflow_contribution(workflow_id: str) -> Callable[[Callable[..., Any]], Ca
     return decorator
 
 
+def prompt_section(section_id: str, *, scope: str = "", order: int = 100,
+                   ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Declare a prompt section. The handler returns the section text."""
+
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        return _mark(func, {
+            "kind": "prompt",
+            "id": section_id,
+            "scope": scope,
+            "order": order,
+        })
+
+    return decorator
+
+
+def model_provider(name: str, *, provider: str = "") -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Declare a model/provider contribution. The handler returns its descriptor."""
+
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        return _mark(func, {"kind": "model", "name": name, "provider": provider})
+
+    return decorator
+
+
 def ui_panel(kind: str, panel_id: str, *, title: str = "", entry: Optional[str] = None,
              ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -227,6 +251,10 @@ class Plugin:
 
     async def on_unload(self, ctx: Any) -> None:  # pragma: no cover
         return None
+
+    def provided_services(self) -> list[str]:
+        """Service keys this plugin actually provides. Must match the manifest."""
+        return []
 
     def contributions(self) -> list[dict[str, Any]]:
         """Every contribution declared on this instance, in declaration order."""
@@ -261,6 +289,8 @@ __all__ = [
     "research_provider",
     "agent_contribution",
     "workflow_contribution",
+    "prompt_section",
+    "model_provider",
     "SDK_VERSION",
     "CONTRIB_ATTR",
 ]

@@ -438,6 +438,97 @@ with a bot-pinned mandate sends exactly once, and a stale bot version is refused
 `BOT_VERSION_STALE`.
 
 
+### Sizing, plans and pre-trade risk
+
+A trade idea is **sized before it is previewed**. Two tools do that, and neither sends
+anything:
+
+- `broker_symbol_info` reads the broker's own facts for one instrument - contract size,
+  volume minimum/step/maximum, tick size and **tick value in the account currency**,
+  stops level, trade mode and sessions. A missing fact is `UNAVAILABLE`, never assumed.
+- `trade_plan` turns `{symbol, side, stop, riskPct?, entry?, target?}` into a sized plan:
+  the entry is the operator's price or the broker's ask/bid; the volume is the largest
+  broker-legal size whose stop-out stays inside `riskPct` of equity (default **1%**) and
+  is always rounded **down**.
+
+A plan that cannot be sized refuses with the correction, not a guess:
+`RISK_TOO_SMALL` names the smallest legal trade and what it would risk; `STOP_TOO_TIGHT`
+names the broker's minimum entry-to-stop distance.
+
+**Account fit is assessed in the same step** (`harness/trade/risk.py`): open position
+count, per-symbol concentration, margin after the order vs equity, the broker's margin
+level floor, and the spread's share of the planned risk. A blocking assessment refuses
+the plan **before an approval card exists**. The thresholds live on the connection
+(`config.risk`, edited under Settings -> Trading -> Risk limits -> Account fit):
+`maxRiskPct`, `maxOpenPositions`, `maxSymbolPositions`, `maxMarginPct`,
+`minMarginLevelPct`, `maxSpreadPctOfRisk`.
+
+`order_preview` attaches the same class of summary to every preview (`riskSummary`:
+max loss, % of equity, reward:risk, spread cost, warnings), computed from the numbers the
+broker already returned - no second round-trip and no estimate. The chat approval card
+renders it, so the operator approves a **sized risk**, not only a symbol and a volume. A
+blocking summary refuses the preview itself.
+
+### The portfolio supervisor (portfolio stops + bot stand-down)
+
+`harness/trade/supervisor.py` is the account-level layer above the per-order checks.
+It answers two questions and nothing else:
+
+1. **May the book take new risk?** Total margin vs equity, total open positions, and the
+   equity loss since the **day/week open**. The open equity is snapshotted once per period
+   (`BrokerRiskSnapshot`, first write wins), so a restart cannot move the baseline to hide a
+   loss. A breach is `block`: no new entries, and the numbers are the broker's own.
+2. **Has a bot lost the right to keep trading?** A bot with at least `botMinTrades` (30)
+   closed fills whose realized P&L after commission and swap is not positive, or with
+   `botMaxConsecutiveLosses` (8) losses in a row, is **paused** through the automation
+   service. Pausing stops future triggers; it never closes an open position.
+
+Unreadable data is `unmeasured`, never "healthy". Limits live in the connection's
+`config.supervisor` (`maxPortfolioMarginPct`, `maxPortfolioPositions`, `dailyLossPct`,
+`weeklyLossPct`, `warnAtPct`, `botMinTrades`, `botMaxConsecutiveLosses`,
+`botMinRealizedPnl`).
+
+Surfaces: `risk_supervisor` (read-only report, safe for any turn) and
+`risk_supervisor_apply` (write/high, pauses underperformers on request). The periodic
+sweep is opt-in with `TRADING_SUPERVISOR_SECONDS` (minimum 30, default **0** = off) and
+runs from `boot.py` beside the reconciler. It places no order.
+
+### The live proof gate (evidence before exposure)
+
+A tier is the **permission**; proof is the **evidence**. Creating a **live** mandate now
+also requires `harness/trade/proof.py` to pass, with both halves present:
+
+- **Out-of-sample** - the strategy was scored on data it was not fitted on, with costs
+  included, at least `minOosTrades` (30) trades, positive expectancy and drawdown inside
+  `maxDrawdownPct` (20%). The record is stored by the backtest flow as
+  `config.proof.outOfSample`; this module never manufactures one.
+- **Demo** - real fills from the broker's own deal history on **demo** connections only:
+  at least `minDemoTrades` (30), spanning at least `minDemoDays` (14), with positive
+  expectancy after commission and swap.
+
+Missing or unreadable evidence is a refusal (`PROOF_INSUFFICIENT`, HTTP 409) that names
+the first gaps and includes the full report; it is never a benefit of the doubt. A **demo**
+mandate is not proof-gated - that is where the evidence comes from. Thresholds are
+overridable per bot (`config.proof.requirements`), but malformed values fall back to the
+defaults rather than widening the gate.
+
+### The live ramp (small money before more)
+
+Proof earns live access; `harness/trade/ramp.py` decides how **much**. A live mandate's
+margin and order caps are clamped to the stage the bot's **real live fills** have earned:
+
+| stage | earned by | margin cap |
+|---|---|---|
+| `probe` | no live history (or a losing one) | 25% of the bot's ceiling |
+| `build` | >= 20 live fills, positive expectancy | 50% |
+| `scale` | >= 50 live fills, positive expectancy | 100% |
+
+A losing expectancy or a drawdown above the stage cap steps the bot **down one stage**;
+nothing steps it up except live results. The ramp can only shrink the bot's own
+`max_margin_per_order` / `max_orders` - it never raises them. A live mandate above the
+current stage is refused (`RAMP_CAP_EXCEEDED`, 409) with the stage, the cap and what the
+next stage needs.
+
 ### Chat: one-click order approval
 
 `order_preview` creates the single-use approval; the chat then renders it above the
@@ -848,11 +939,24 @@ exact same operator routes.
 | **P4.5 (done)** | close (ticket, symbol or all), partial close, SL/TP modify, read-back verification | risk-reducing, no mandate/approval/arm; demo or live with a matching account; a live close-all is scoped to the connection magic |
 | **P4.6 (done)** | per-trade risk, per-symbol notional, rolling 24 h loss brake, spread cap | config on the connection; brake blocks entries, never exits |
 | **P4.7 (done)** | chat one-click live approval (`TradeApprovalBanner`) + Settings mode switch | preview -> approval -> typed LIVE phrase -> submit; no unattended live |
-| P5 | unattended live mandates | separate design + review; not enabled by P4 |
+| **P5 (available, operator-gated)** | unattended live mandates | L2 + proof (out-of-sample + demo fills) + ramp stage + armed live connection + pinned live mandate <= 24 h + supervisor day/week stops; the graph compiler still refuses live *nodes* (they have no live adapter) |
 
-P4 deliberately does not add unattended live automation. The manual live path and
-its chat approval are observable; unattended live trading remains a separate risk
-decision.
+**Autonomous live trading is enabled, and it is earned.** An operator who wants a bot
+to trade live without a card must satisfy ALL of these, in order - there is no setting
+that skips one:
+
+1. **L2 authority** on the bot (operator-granted, versioned);
+2. **proof**: out-of-sample results (costs included, positive expectancy) AND at least 30
+   demo fills over 14 days with positive expectancy after commission/swap;
+3. **ramp**: the live mandate's margin/order caps are clamped to `probe` (25%) until 20
+   profitable live fills, then `build` (50%), then `scale` (100%);
+4. **armed connection** (typed `ARM LIVE <login>`, time-boxed) for the connection;
+5. **live mandate** pinned to the bot and its CURRENT objective version (<= 24 h TTL);
+6. **supervisor**: day/week equity stops and the position/margin caps remain active.
+
+Every order still passes the per-order stop requirement, position cap, cooldown, money
+guardrails and the daily-loss brake. A demo mandate needs only L1 and no proof - that is
+how the evidence in step 2 is earned.
 
 ## Honest boundaries
 
@@ -870,8 +974,9 @@ decision.
   `account_info()` itself.
 - The kill switch cancels **working orders only** (by magic). It does not close
   positions. Closing a position is a separate action and is not implemented yet.
-- Unattended mandates are **demo-only**. A live graph is refused by the compiler
-  and the front door, and a live connection cannot create a mandate.
+- Unattended mandates are not demo-only: a **bot** may hold a live mandate once L2,
+  proof and the ramp stage allow it. The Graph Studio **node** remains paper-only (it has
+  no live adapter) and a live graph is still refused by the compiler.
 - Reconciliation copies what the broker reports. It does not mark positions to
   market itself; `currentPrice`/`profit` are the broker's values at sync time.
 - The background reconciler is off unless `TRADING_RECONCILE_SECONDS` is set.

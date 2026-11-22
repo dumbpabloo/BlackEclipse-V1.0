@@ -184,6 +184,14 @@ async def disable_plugin(plugin_id: str, _: bool = Depends(require_operator)) ->
         raise _error(exc) from exc
 
 
+@router.post("/plugins/{plugin_id}/reload")
+async def reload_plugin(plugin_id: str, _: bool = Depends(require_operator)) -> JSONResponse:
+    try:
+        return JSONResponse(await _manager().reload(plugin_id, operator=True))
+    except Exception as exc:  # noqa: BLE001
+        raise _error(exc) from exc
+
+
 @router.post("/plugins/{plugin_id}/update")
 async def update_plugin(plugin_id: str, request: LifecycleRequest, _: bool = Depends(require_operator)) -> JSONResponse:
     manager = _manager()

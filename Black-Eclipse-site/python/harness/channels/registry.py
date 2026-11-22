@@ -281,8 +281,10 @@ PUSH_KINDS: frozenset[str] = frozenset(
 POLL_KINDS: frozenset[str] = frozenset(
     k for k, s in PROVIDERS.items() if s.inbound_mode in ("poll", "both")
 )
-#: Providers that only SEND (an alerts/notification surface). The three sets
-#: partition KINDS: every provider is push, poll, or outbound-only.
+#: Providers that only SEND (an alerts/notification surface). ``PUSH_KINDS`` and
+#: ``POLL_KINDS`` are CAPABILITY sets, not a partition: a ``both`` provider (e.g.
+#: lark) appears in both. The only exclusivity is that an outbound-only provider is
+#: in neither, and a push/poll provider is in at least one.
 OUTBOUND_KINDS: frozenset[str] = frozenset(
     k for k, s in PROVIDERS.items() if s.inbound_mode == "none"
 )
@@ -290,6 +292,43 @@ OUTBOUND_KINDS: frozenset[str] = frozenset(
 
 def spec_for(kind: str) -> Optional[ProviderSpec]:
     return PROVIDERS.get(kind)
+
+
+def describe(config_names: Any = ()) -> dict[str, dict[str, Any]]:
+    """Every provider plus any *configured* name, including ones we do not know.
+
+    Parity with Vibe-Trading's `channels/registry.py::inspect_channels`: the status
+    surface unions the built-in names with the names present in the operator's
+    config, so a channel that was configured but never wired up is **visible as
+    unknown** instead of silently absent. That matters: silently dropping a
+    configured name is how an operator ends up believing a channel is on when it is
+    not.
+
+    ``known`` is the field that matters: ``configured and not known`` means the
+    config names a provider this build does not implement.
+    """
+    names = set(PROVIDERS) | {str(name) for name in config_names if name}
+    configured = {str(name) for name in config_names if name}
+    out: dict[str, dict[str, Any]] = {}
+    for name in sorted(names):
+        spec = PROVIDERS.get(name)
+        if spec is None:
+            out[name] = {
+                "kind": name,
+                "known": False,
+                "label": name,
+                "inboundMode": "none",
+                "configured": True,
+            }
+            continue
+        out[name] = {
+            "kind": name,
+            "known": True,
+            "label": spec.label,
+            "inboundMode": spec.inbound_mode,
+            "configured": name in configured,
+        }
+    return out
 
 
 def is_configured(kind: str, get: Any) -> bool:
@@ -558,6 +597,7 @@ __all__ = [
     "PROVIDERS",
     "PUSH_KINDS",
     "build_provider",
+    "describe",
     "is_configured",
     "spec_for",
 ]

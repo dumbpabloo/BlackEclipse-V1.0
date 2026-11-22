@@ -88,7 +88,7 @@ ruleset**, or apply it with one API call:
 ```sh
 curl -X POST -H "Authorization: Bearer $GITHUB_TOKEN" \
   -H "Accept: application/vnd.github+json" \
-  https://api.github.com/repos/dumbpabloo/BlackEclipse-V1.0/rulesets \
+  https://api.github.com/repos/dumbpabloo/black-eclipse/rulesets \
   -d @.github/ruleset.json
 ```
 

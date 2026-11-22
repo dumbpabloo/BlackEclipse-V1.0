@@ -134,13 +134,17 @@ def test_execution_tools_registered_and_gated(tmp_path):
     assert registry.get("discover_tests").permission == "read"
 
 
-def test_execution_tools_are_reachable_from_a_chat_coding_turn():
-    """A chat coding turn (autonomy `edit_verify`) binds the execution tools.
+def test_a_chat_coding_turn_binds_the_verification_tools():
+    """A chat coding turn binds the build/test/verify path, not every runtime tool.
 
     Registers the REAL code + execution tools on one registry and resolves the
     surface with the SAME resolver the graph uses, then asserts the BOUND schemas
-    (not the prompt). At `plan_only` the execute/build tools are removed; the
-    read-only evidence tools stay.
+    (not the prompt). The coding preset carries the four tools that turn an edit
+    into recorded evidence (`build_project`, `test_project`, `run_verification`,
+    `execution_get`) plus `command_run`; the reduce-arbitrary-code runners
+    (`execute_python` etc.) stay outside it and remain discoverable through
+    `tool_search` (an operator can enable one by name). At `plan_only` the
+    effectful ones are removed; the read-only `execution_get` stays.
     """
     from harness.agents import ECLIPSE_AGENT
     from harness.code.tools import register_code_tools
@@ -157,10 +161,13 @@ def test_execution_tools_are_reachable_from_a_chat_coding_turn():
         return {s["name"] for s in registry.schemas(allowed)}
 
     change = _bound("edit_verify")
-    assert {"execute_python", "execute_javascript", "execute_typescript", "execute_sql",
-            "build_project", "test_project", "run_verification", "start_service"} <= change
-    assert {"discover_tests", "execution_get", "service_status"} <= change
+    assert {"build_project", "test_project", "run_verification", "execution_get"} <= change
+    assert "command_run" in change
+    # The ad-hoc runners are not advertised to a coding run; that is the preset's
+    # stated narrowing, and `command_run` remains the one way to run anything.
+    assert not ({"execute_python", "execute_javascript", "execute_typescript",
+                 "execute_sql", "start_service"} & change)
 
     question = _bound("plan_only")
-    assert not ({"execute_python", "build_project", "start_service"} & question)
-    assert {"discover_tests", "execution_get"} <= question
+    assert not ({"build_project", "test_project", "run_verification"} & question)
+    assert "execution_get" in question

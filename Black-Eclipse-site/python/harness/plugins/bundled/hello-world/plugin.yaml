@@ -23,6 +23,8 @@ permissions:
   - events.subscribe
   - secrets
   - notifications
+  - skills.contribute
+  - ui
 
 dependencies: []
 

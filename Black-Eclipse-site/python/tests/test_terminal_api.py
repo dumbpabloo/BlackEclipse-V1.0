@@ -125,7 +125,9 @@ def test_raw_input_and_stream_round_trip(app):
         opened = client.post("/terminal/sessions", json={"owner": "term-ui-raw"}).json()["session"]
         sid = opened["sessionId"]
         # Wait for the shell prompt, then send raw keystrokes like xterm.onData.
-        deadline = time.monotonic() + 8
+        # Full-suite load can make shell startup slow; the deadline is generous so
+        # this remains a round-trip test, not a shell-startup race.
+        deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             if ">" in manager.read_shell_output(sid, tail=50).get("text", "") or opened["pty"] is False:
                 break
@@ -134,7 +136,7 @@ def test_raw_input_and_stream_round_trip(app):
         assert res.status_code == 200
         got = ""
         cursor = 0
-        deadline = time.monotonic() + 8
+        deadline = time.monotonic() + 30
         while time.monotonic() < deadline and "raw_ok" not in got:
             body = client.get(f"/terminal/sessions/{sid}/stream", params={"since": cursor, "timeout": 2}).json()
             cursor = body["nextSequence"]

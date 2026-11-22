@@ -159,6 +159,15 @@ class ProviderRegistry:
             self._order.append(descriptor.id)
         self._providers[descriptor.id] = descriptor
 
+    def unregister(self, provider_id: str) -> bool:
+        removed = self._providers.pop(provider_id, None) is not None
+        if removed:
+            try:
+                self._order.remove(provider_id)
+            except ValueError:
+                pass
+        return removed
+
     def get(self, provider_id: str) -> Optional[ProviderDescriptor]:
         return self._providers.get(provider_id)
 

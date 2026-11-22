@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from ..mcp.circuit import CircuitBreaker
+from ..mcp.circuit import CircuitBreaker, backoff_cooldown_s
 from .config import get_config
 from .instruments import CanonicalInstrument
 from .providers import ProviderDescriptor, default_providers
@@ -105,24 +105,32 @@ class ProviderRouter:
         *,
         breaker_threshold: Optional[int] = None,
         breaker_reset_s: Optional[float] = None,
+        breaker_lifetime_s: Optional[float] = None,
     ) -> None:
         self._providers: dict[str, ProviderDescriptor] = {
             p.id: p for p in (providers if providers is not None else default_providers())
         }
         cfg = get_config()
+        base = breaker_reset_s if breaker_reset_s is not None else cfg.breaker_reset_s
+        lifetime = (
+            breaker_lifetime_s if breaker_lifetime_s is not None
+            else getattr(cfg, "breaker_lifetime_s", 300.0)
+        )
         self._health: dict[str, ProviderHealth] = {
             pid: ProviderHealth(
                 provider=pid,
                 breaker=CircuitBreaker(
                     threshold=breaker_threshold if breaker_threshold is not None else cfg.breaker_fail_threshold,
-                    cooldown_s=breaker_reset_s if breaker_reset_s is not None else cfg.breaker_reset_s,
+                    cooldown_s=base,
+                    # Per-provider failures back off exponentially up to the lifetime,
+                    # so a provider that has been down for an hour is not retried at
+                    # the same cadence as one that failed once.
+                    lifetime_s=lifetime,
                 ),
             )
             for pid in self._providers
         }
-        self._probes = ProbeBudget(
-            cooldown_s=breaker_reset_s if breaker_reset_s is not None else cfg.breaker_reset_s,
-        )
+        self._probes = ProbeBudget(cooldown_s=base)
 
     def get(self, provider: str) -> Optional[ProviderDescriptor]:
         return self._providers.get(provider)

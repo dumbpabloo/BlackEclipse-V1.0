@@ -171,11 +171,16 @@ def test_mandate_creation_requires_l2_and_the_current_version():
     assert exc.value.code == "BOT_VERSION_STALE"
 
 
-def test_a_mandate_may_not_exceed_the_bots_margin_ceiling():
+def test_a_mandate_may_not_exceed_the_bots_margin_ceiling(monkeypatch):
     _install(_bot(tier="l2", version=3, max_margin_per_order=50))
     with pytest.raises(TradeRefused) as exc:
         check_mandate_creation(_Brokers(), bot_id="auto_1", bot_version=3, max_margin=100)
     assert exc.value.code == "MANDATE_ABOVE_BOT_CAP"
+    # This test is about the MARGIN ceiling; the proof gate and the live ramp are
+    # covered in test_trade_proof.py / test_trade_ramp.py. Stub both so the
+    # success path is reachable.
+    monkeypatch.setattr("harness.trade.proof.live_proof_gap", lambda *_a, **_k: None)
+    monkeypatch.setattr("harness.trade.ramp.ramp_gap", lambda *_a, **_k: None)
     check_mandate_creation(_Brokers(), bot_id="auto_1", bot_version=3, max_margin=50)
 
 

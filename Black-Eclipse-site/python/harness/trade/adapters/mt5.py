@@ -614,6 +614,12 @@ class MT5Adapter(TradingAdapter):
                 "digits": _int(getattr(info, "digits", 0)),
                 "point": _num(getattr(info, "point", 0)),
                 "tickSize": _num(getattr(info, "trade_tick_size", 0)),
+                # Money per tick for ONE lot in the ACCOUNT currency. This is what
+                # makes risk-based sizing exact instead of a quote-currency guess.
+                "tickValue": _num(getattr(info, "trade_tick_value", 0)),
+                "currencyBase": str(getattr(info, "currency_base", "") or ""),
+                "currencyProfit": str(getattr(info, "currency_profit", "") or ""),
+                "currencyMargin": str(getattr(info, "currency_margin", "") or ""),
                 "contractSize": _num(getattr(info, "trade_contract_size", 0)),
                 "volumeMin": _num(getattr(info, "volume_min", 0)),
                 "volumeMax": _num(getattr(info, "volume_max", 0)),
@@ -724,6 +730,9 @@ class MT5Adapter(TradingAdapter):
                 "stopLoss": intent.stop_loss,
                 "takeProfit": intent.take_profit,
                 "contractSize": _num(getattr(info, "trade_contract_size", 0)),
+                "tickSize": _num(getattr(info, "trade_tick_size", 0)),
+                "tickValue": _num(getattr(info, "trade_tick_value", 0)),
+                "point": _num(getattr(info, "point", 0)),
                 "margin": None,
                 "marginFree": account.get("marginFree"),
                 "spreadPoints": quote.get("spreadPoints"),

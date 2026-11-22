@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { discoverRuntimeModels } from "@/lib/harness/clients/model-runtime-browser";
+import { onLlmConfigChanged } from "./llm-config-events";
 
 const STORAGE_KEY = "eclipse.chatModelChoice";
 
@@ -94,6 +95,32 @@ export function shouldDropStoredChoice(
   return !provider.available && !provider.keyless;
 }
 
+/**
+ * A stored choice on a KEYLESS local server must not outlive a real connection.
+ *
+ * The composer remembers the last model the operator picked. Picking an Ollama
+ * model once pinned the picker to Ollama forever, because Ollama is keyless and
+ * therefore still "usable" — connecting OpenAI/OpenCode afterwards changed the
+ * saved config but the local choice kept overriding it, so the composer showed
+ * Ollama's models. A deliberate pick of a KEYED provider is never overridden;
+ * only a stale keyless pick yields to a different saved provider that is usable.
+ */
+export function shouldDropStoredLocalChoice(
+  choice: Choice | null,
+  providers: ChatModelProvider[],
+  savedProvider: string,
+): boolean {
+  if (!choice) return false;
+  if (!savedProvider || savedProvider === "auto" || savedProvider === "mock") return false;
+  if (choice.provider === savedProvider) return false;
+  const chosen = providers.find((p) => p.id === choice.provider);
+  const saved = providers.find((p) => p.id === savedProvider);
+  if (!chosen || !saved) return false;
+  // Only a keyless local pick is treated as a default rather than a decision.
+  if (!chosen.keyless) return false;
+  return saved.keyless || saved.available;
+}
+
 function readStored(): Choice | null {
   if (typeof window === "undefined") return null;
   try {
@@ -127,6 +154,17 @@ export function useChatModel(): ChatModelState {
   const [discovering, setDiscovering] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Bumped when the saved LLM config changes (Settings/onboarding connect, a
+  // named-connection activation, a disconnect, or the window regaining focus).
+  // The composer is already mounted in those flows, so a mount-only fetch kept
+  // showing the boot-time catalog (keyless Ollama) after a real API was added.
+  const [reloadToken, setReloadToken] = useState(0);
+
+  // The per-chat choice is read once; reloads must not resurrect a choice that
+  // the operator just replaced by connecting a provider.
+  useEffect(() => {
+    setChoice(readStored());
+  }, []);
 
   useEffect(() => {
     let live = true;
@@ -155,7 +193,6 @@ export function useChatModel(): ChatModelState {
         });
     };
 
-    setChoice(readStored());
     // Fast path: the saved LLM config already knows the configured provider and
     // model. Show them immediately so the composer never sits on "Auto" while
     // the heavier provider/model catalog is still probing (a cold runtime can
@@ -174,6 +211,29 @@ export function useChatModel(): ChatModelState {
     return () => {
       live = false;
       if (retry != null) window.clearTimeout(retry);
+    };
+  }, [reloadToken]);
+
+  // Stay in step with the vault config. The chat screen is not remounted when a
+  // provider is connected in Settings, so without this the selector lists only
+  // what was usable at boot. `resetChoice` also clears the old local pick so the
+  // newly connected API becomes the default, as an operator expects.
+  useEffect(() => {
+    const off = onLlmConfigChanged((detail) => {
+      if (detail.resetChoice) {
+        setChoice(null);
+        writeStored(null);
+      }
+      setReloadToken((n) => n + 1);
+    });
+    // Another window may have changed the config; refresh when we come back.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") setReloadToken((n) => n + 1);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      off();
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
 
@@ -211,14 +271,18 @@ export function useChatModel(): ChatModelState {
   );
 
   // Drop a stale per-chat choice whose provider lost its key (e.g. the composer
-  // was left on OpenCode Zen, then the operator connected only OpenCode Go).
+  // was left on OpenCode Zen, then the operator connected only OpenCode Go), or
+  // a stale KEYLESS local pick that would otherwise hide a newly connected API.
   // The saved provider/model then becomes the effective choice.
   useEffect(() => {
     if (loading || providers.length === 0 || !choice) return;
-    if (!shouldDropStoredChoice(choice, providers)) return;
+    const drop =
+      shouldDropStoredChoice(choice, providers) ||
+      shouldDropStoredLocalChoice(choice, providers, savedProvider);
+    if (!drop) return;
     setChoice(null);
     writeStored(null);
-  }, [loading, providers, choice]);
+  }, [loading, providers, choice, savedProvider]);
 
   // ── Default-model reconciliation ─────────────────────────────────────────
   // A keyless local provider's declared default can be a placeholder the server

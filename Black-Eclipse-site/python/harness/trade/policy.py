@@ -76,18 +76,35 @@ class TradePolicy:
             )
 
         margin = _num(preview.get("margin"))
-        if self.max_margin > 0 and margin is not None and margin > self.max_margin:
-            rules.append("policy.max-margin")
-            reasons.append(
-                f"The order needs {margin:,.2f} margin, above the {self.max_margin:,.2f} cap."
-            )
+        if self.max_margin > 0:
+            if margin is None:
+                # Fail closed, as the reference mandate gate does: a configured cap
+                # that cannot be verified is not a cap. Silence here would let a
+                # broker preview that omits margin walk past the limit.
+                rules.append("policy.max-margin-unverified")
+                reasons.append(
+                    "The order's margin could not be read, so the "
+                    f"{self.max_margin:,.2f} margin cap cannot be verified; refusing."
+                )
+            elif margin > self.max_margin:
+                rules.append("policy.max-margin")
+                reasons.append(
+                    f"The order needs {margin:,.2f} margin, above the {self.max_margin:,.2f} cap."
+                )
 
         volume = _num(preview.get("volume"))
-        if self.max_volume > 0 and volume is not None and volume > self.max_volume:
-            rules.append("policy.max-volume")
-            reasons.append(
-                f"Volume {volume:g} exceeds the {self.max_volume:g} cap."
-            )
+        if self.max_volume > 0:
+            if volume is None:
+                rules.append("policy.max-volume-unverified")
+                reasons.append(
+                    "The order's volume could not be read, so the "
+                    f"{self.max_volume:g} volume cap cannot be verified; refusing."
+                )
+            elif volume > self.max_volume:
+                rules.append("policy.max-volume")
+                reasons.append(
+                    f"Volume {volume:g} exceeds the {self.max_volume:g} cap."
+                )
 
         spread = _num(preview.get("spreadPoints"))
         if self.max_spread_points > 0 and spread is not None and spread > self.max_spread_points:
@@ -97,28 +114,35 @@ class TradePolicy:
             )
 
         open_positions = _num(preview.get("openPositions"))
-        if (
-            self.max_open_positions > 0
-            and open_positions is not None
-            and open_positions >= self.max_open_positions
-        ):
-            rules.append("policy.max-open-positions")
-            reasons.append(
-                f"There are already {int(open_positions)} open positions "
-                f"(cap {self.max_open_positions})."
-            )
+        if self.max_open_positions > 0:
+            if open_positions is None:
+                rules.append("policy.max-open-positions-unverified")
+                reasons.append(
+                    "The open-position count could not be read, so the "
+                    f"{self.max_open_positions}-position cap cannot be verified; refusing."
+                )
+            elif open_positions >= self.max_open_positions:
+                rules.append("policy.max-open-positions")
+                reasons.append(
+                    f"There are already {int(open_positions)} open positions "
+                    f"(cap {self.max_open_positions})."
+                )
 
         notional = _num(preview.get("notional"))
-        if (
-            self.max_symbol_notional > 0
-            and notional is not None
-            and notional > self.max_symbol_notional
-        ):
-            rules.append("policy.max-symbol-notional")
-            reasons.append(
-                f"The order's {symbol or 'symbol'} notional is {notional:,.2f}, above "
-                f"the {self.max_symbol_notional:,.2f} per-symbol cap."
-            )
+        if self.max_symbol_notional > 0:
+            if notional is None:
+                rules.append("policy.max-symbol-notional-unverified")
+                reasons.append(
+                    "The order's notional could not be read, so the "
+                    f"{self.max_symbol_notional:,.2f} per-symbol cap cannot be "
+                    "verified; refusing."
+                )
+            elif notional > self.max_symbol_notional:
+                rules.append("policy.max-symbol-notional")
+                reasons.append(
+                    f"The order's {symbol or 'symbol'} notional is {notional:,.2f}, above "
+                    f"the {self.max_symbol_notional:,.2f} per-symbol cap."
+                )
 
         if self.risk_per_trade_pct > 0:
             account = preview.get("account") or {}

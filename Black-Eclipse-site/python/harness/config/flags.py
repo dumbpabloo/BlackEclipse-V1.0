@@ -168,9 +168,10 @@ FLAG_SPECS: dict[str, FlagSpec] = {
     ),
     # W3 — tools
     "HARNESS_PARALLEL_TOOLS": _spec(
-        "HARNESS_PARALLEL_TOOLS", "enum", "off",
+        "HARNESS_PARALLEL_TOOLS", "enum", "on",
         values=("shadow", "on", "off"), owner="W3",
-        description="Run contiguous parallel-safe tool calls concurrently (shadow = plan only)",
+        description="Run contiguous parallel-safe tool calls concurrently (shadow = plan only); "
+                    "default on because only explicitly read-only tools opt in",
     ),
     "HARNESS_TOOL_CONCURRENCY": _spec(
         "HARNESS_TOOL_CONCURRENCY", "int", "6", minimum=1, maximum=12, owner="W3",
@@ -280,10 +281,11 @@ FLAG_SPECS: dict[str, FlagSpec] = {
     ),
     # W7 — delegation / files
     "HARNESS_FILE_CHECKPOINTS": _spec(
-        "HARNESS_FILE_CHECKPOINTS", "enum", "off",
+        "HARNESS_FILE_CHECKPOINTS", "enum", "warn",
         values=("off", "warn", "enforce", "on", "true", "false", "1", "0"),
         owner="W7",
-        description="Shadow-git file checkpoints (off/warn/enforce; on aliases enforce)",
+        description="Shadow-git file checkpoints (off/warn/enforce; on aliases enforce); "
+                    "default warn = snapshots are taken but a missing undo point never blocks a write",
     ),
     "HARNESS_FILE_CHECKPOINT_MAX_MB": _spec(
         "HARNESS_FILE_CHECKPOINT_MAX_MB", "int", "500", minimum=50, maximum=5000,

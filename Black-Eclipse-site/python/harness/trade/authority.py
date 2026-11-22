@@ -196,6 +196,7 @@ def check_mandate_creation(
     bot_version: Optional[int],
     max_margin: float,
     mode: str = "live",
+    max_orders: int = 0,
 ) -> None:
     """Validate a mandate pinned to a bot, at the moment it is created.
 
@@ -237,6 +238,36 @@ def check_mandate_creation(
             f"ceiling {cap:g}",
             status_code=400,
         )
+    if str(mode) == "live":
+        # The tier is the PERMISSION; this is the EVIDENCE. A live grant needs
+        # out-of-sample results AND real demo fills, both after costs. Absent
+        # evidence is a refusal, never a benefit of the doubt.
+        from . import proof as proof_mod  # noqa: PLC0415 - avoids a cycle
+
+        gap = proof_mod.live_proof_gap(service, definition)
+        if gap is not None:
+            raise TradeRefused(
+                str(gap["reason"]),
+                str(gap["message"]),
+                status_code=409,
+                detail={"proof": gap.get("proof")},
+            )
+        # Proof earns live access; the ramp decides how MUCH. The requested caps
+        # must fit the stage the bot's REAL live results have earned.
+        from . import ramp as ramp_mod  # noqa: PLC0415 - avoids a cycle
+
+        ramp_refusal = ramp_mod.ramp_gap(
+            service, definition,
+            requested_margin=float(max_margin or 0),
+            requested_orders=int(max_orders or 0),
+        )
+        if ramp_refusal is not None:
+            raise TradeRefused(
+                str(ramp_refusal["reason"]),
+                str(ramp_refusal["message"]),
+                status_code=409,
+                detail={"ramp": ramp_refusal.get("ramp")},
+            )
 
 
 def risk_amount(equity: float, appetite: str) -> float:

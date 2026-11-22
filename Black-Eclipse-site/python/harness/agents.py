@@ -315,7 +315,7 @@ CODE_NAVIGATOR_TOOLS = [
     "verify_file", "validate_changes", "git_status",
     "write_file", "create_file", "delete_file", "move_file", "copy_file",
     "rename_file", "create_directory", "delete_directory",
-    "insert_text", "delete_text", "code_edit",
+    "insert_text", "delete_text", "code_edit", "code_todo",
     "apply_diff",
     # Terminal subsystem: foreground execution, persistent shells, background
     # processes and ports. The effectful ones are removed at `plan_only`.
@@ -358,6 +358,7 @@ ECLIPSE_AGENT = AgentConfig(
     tools=[
         # Round 5 / C3: discovery + safe read-only dispatch, and the pager for a
         # truncated tool result's full text.
+        "harness_inspect",
         "tool_search",
         # Schema-on-demand for a catalogue-only tool, before `tool_invoke`.
         "load_tool_schema",
@@ -799,7 +800,7 @@ CODE_AGENT_TOOLS = [
     "verify_file", "validate_changes", "git_status",
     "write_file", "create_file", "delete_file", "move_file", "copy_file",
     "rename_file", "create_directory", "delete_directory",
-    "insert_text", "delete_text", "code_edit",
+    "insert_text", "delete_text", "code_edit", "code_todo",
     "apply_diff",
     # Command broker (Phase 3) â€” effectful; removed at plan_only
     "command_run",
@@ -921,7 +922,7 @@ CODE_AGENT_TOOLS = [
     # W7: durable background lifecycle + file checkpoints (restore is effectful).
     "delegate_async", "delegate_status", "delegate_result",
     "delegate_cancel", "delegate_steer", "delegate_wait",
-    "checkpoint_list", "checkpoint_diff", "checkpoint_restore",
+    "checkpoint_list", "checkpoint_diff", "checkpoint_restore", "checkpoint_undo_turn",
     # Durable Task / Plan runtime: track a multi-step build as a hierarchical plan
     # whose tasks are dispatched through the normal run path. Create/steer only.
     *TASK_TOOLS,
@@ -1017,7 +1018,7 @@ CHAT_CODE_TOOLS: tuple[str, ...] = (
     "verify_file", "validate_changes", "git_status",
     "write_file", "create_file", "delete_file", "move_file", "copy_file",
     "rename_file", "create_directory", "delete_directory",
-    "insert_text", "delete_text", "code_edit",
+    "insert_text", "delete_text", "code_edit", "code_todo",
     "apply_diff",
     # Terminal subsystem (persistent shells + background processes + ports).
     "execute_command",
@@ -1083,7 +1084,7 @@ CHAT_CODE_TOOLS: tuple[str, ...] = (
     "delegate",
     "delegate_async", "delegate_status", "delegate_result",
     "delegate_cancel", "delegate_steer", "delegate_wait",
-    "checkpoint_list", "checkpoint_diff", "checkpoint_restore",
+    "checkpoint_list", "checkpoint_diff", "checkpoint_restore", "checkpoint_undo_turn",
     # Git / Version-Control subsystem: read + LOCAL mutation only. External
     # actions (fetch/pull/push/PR/CI) stay on the Code Tasks surface beside the
     # approval panel, exactly like `code_commit`/`code_push`.

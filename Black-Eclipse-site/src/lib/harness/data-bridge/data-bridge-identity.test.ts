@@ -9,6 +9,8 @@ const assetFindMany = vi.fn();
 const assetFindFirst = vi.fn();
 const fetchQuoteWithFallback = vi.fn();
 const fetchYahooBatchRaw = vi.fn();
+const newsFindMany = vi.fn();
+const searchWeb = vi.fn();
 
 vi.mock('@/lib/db', () => ({
   prisma: {
@@ -16,7 +18,16 @@ vi.mock('@/lib/db', () => ({
       findMany: (...a: unknown[]) => assetFindMany(...a),
       findFirst: (...a: unknown[]) => assetFindFirst(...a),
     },
+    newsItem: { findMany: (...a: unknown[]) => newsFindMany(...a) },
   },
+}));
+// The news capability falls through to the web transport when the vault is
+// empty. Mock it: this file pins the RESPONSE CONTRACT (C2: never claim "no
+// data" over a failed lookup), not the network. Left unmocked, the case below
+// hit the live provider inside the unit suite and timed out under load.
+vi.mock('@/lib/web-research', () => ({
+  searchWeb: (...a: unknown[]) => searchWeb(...a),
+  fetchWebPageDetailed: vi.fn(),
 }));
 vi.mock('@/lib/scraper/fetchers', () => ({
   fetchQuoteWithFallback: (...a: unknown[]) => fetchQuoteWithFallback(...a),
@@ -42,6 +53,11 @@ beforeEach(() => {
   assetFindFirst.mockReset();
   fetchQuoteWithFallback.mockReset();
   fetchYahooBatchRaw.mockReset();
+  newsFindMany.mockReset();
+  newsFindMany.mockResolvedValue([]);
+  searchWeb.mockReset();
+  // Both sources reachable and genuinely empty -> covered-but-empty (no_data).
+  searchWeb.mockResolvedValue({ provider: 'mock', results: [], diagnostics: [] });
 });
 
 describe('live_quote — instrument identity', () => {

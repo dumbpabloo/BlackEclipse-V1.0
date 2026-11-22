@@ -18,9 +18,13 @@ Rules:
     per-run context block, and the user turn are summed.
   * **Unknown stays unknown.** When `resolve_context_window` returns None the
     budget is *inert* (`effective=False`): the caller must fall back to the
-    conservative constants, never assume a large window.
-  * **The char ceiling is absolute.** `MAX_HISTORY_CHARS` can never be exceeded,
-    even on a huge window, so a pathological history cannot flood a prompt.
+    conservative constants, never assume a large window. The conservative
+    fallback keeps `absolute_max_chars` (20 turns / 40 000 chars).
+  * **The tail is token-budgeted, not turn-counted.** On a known window the
+    history allowance is spent on a verbatim tail of up to `KEEP_TAIL_TOKENS`
+    (15 000 estimated tokens), minus a reserve for the compaction summary that
+    sits beside it. `MAX_HISTORY_CHARS` remains the absolute ceiling for an
+    unknown window, so a pathological history cannot flood an unmeasured model.
   * **Approximation margin.** `estimate_tokens` is ~4 chars/token; the budget
     keeps a safety margin because of that.
 """
@@ -50,6 +54,17 @@ MIN_TURN_TOKENS = 4
 # The estimator's unit: how many characters one estimated token represents.
 CHARS_PER_TOKEN = 4
 
+#: The verbatim tail a KNOWN window may keep, in tokens. This is the default
+#: target; the measured allowance and the summary reserve can lower it. An
+#: unknown window never uses it — the conservative fallback stays at 20 turns /
+#: 40 000 chars.
+KEEP_TAIL_TOKENS = 15_000
+KEEP_TAIL_CHARS = KEEP_TAIL_TOKENS * CHARS_PER_TOKEN
+
+#: Tokens held back out of the allowance for the compaction summary that sits
+#: beside the tail, so a full tail cannot crowd the summary out of the prompt.
+SUMMARY_RESERVE_TOKENS = 2_000
+
 UNKNOWN_WINDOW_POLICY = "conservative_ceiling"
 KNOWN_WINDOW_POLICY = "measured_model_window"
 
@@ -69,7 +84,9 @@ class ContextBudget:
     history_allowance_chars: int
     max_history_turns: int
     max_history_chars: int
-    policy: str
+    #: The verbatim tail this budget actually permits, in estimated tokens.
+    keep_tail_tokens: int = 0
+    policy: str = UNKNOWN_WINDOW_POLICY
     components: dict[str, int] = field(default_factory=dict)
     tighter: bool = False
     # W2: measured pressure from the provider usage anchor, when available.
@@ -89,6 +106,7 @@ class ContextBudget:
             "historyAllowanceChars": self.history_allowance_chars,
             "maxHistoryTurns": self.max_history_turns,
             "maxHistoryChars": self.max_history_chars,
+            "keepTailTokens": self.keep_tail_tokens,
             "policy": self.policy,
             "tighterRetry": self.tighter,
             "anchorUsedTokens": self.anchor_used_tokens,
@@ -134,6 +152,7 @@ def compute_history_budget(
     window_override: Optional[int] = None,
     anchor: Optional[Any] = None,
     history_chars: int = 0,
+    keep_tail_tokens: int = KEEP_TAIL_TOKENS,
     gate_soft: float = 0.50,
     gate_hard: float = 0.70,
     gate_emergency: float = 0.85,
@@ -174,6 +193,7 @@ def compute_history_budget(
             history_allowance_chars=0,
             max_history_turns=absolute_max_turns,
             max_history_chars=absolute_max_chars,
+            keep_tail_tokens=0,
             policy=UNKNOWN_WINDOW_POLICY,
             components=components,
             tighter=tighter,
@@ -209,11 +229,18 @@ def compute_history_budget(
     if tighter:
         usable = usable // 2
 
-    allowance_chars = usable * CHARS_PER_TOKEN
-    max_history_chars = max(0, min(absolute_max_chars, allowance_chars))
+    # Hold room for the summary that will sit beside the verbatim tail, then
+    # let the tail use the rest up to the token target. A known window is
+    # measured, so the 40k conservative ceiling does not apply; an unknown
+    # window never reaches this branch.
+    summary_reserve = min(SUMMARY_RESERVE_TOKENS, usable // 4)
+    history_usable = max(0, usable - summary_reserve)
+    tail_tokens = max(0, min(int(keep_tail_tokens), history_usable))
+    allowance_chars = history_usable * CHARS_PER_TOKEN
+    max_history_chars = min(KEEP_TAIL_CHARS, allowance_chars)
     # A derived turn budget from the allowance, never below 1 when there is any
-    # allowance. The char ceiling is the binding constraint in practice.
-    max_history_turns = max(1, usable // MIN_TURN_TOKENS) if usable > 0 else 0
+    # allowance. The token/char ceiling is the binding constraint in practice.
+    max_history_turns = max(1, tail_tokens // MIN_TURN_TOKENS) if tail_tokens > 0 else 0
 
     return ContextBudget(
         window=window,
@@ -221,10 +248,11 @@ def compute_history_budget(
         effective=True,
         reserved_output_tokens=reserved_output_tokens,
         measured_overhead_tokens=overhead,
-        history_allowance_tokens=usable,
+        history_allowance_tokens=history_usable,
         history_allowance_chars=allowance_chars,
         max_history_turns=max_history_turns,
         max_history_chars=max_history_chars,
+        keep_tail_tokens=tail_tokens,
         policy=KNOWN_WINDOW_POLICY,
         components=components,
         tighter=tighter,
@@ -239,9 +267,12 @@ __all__ = [
     "CHARS_PER_TOKEN",
     "ContextBudget",
     "DEFAULT_RESERVED_OUTPUT_TOKENS",
+    "KEEP_TAIL_CHARS",
+    "KEEP_TAIL_TOKENS",
     "KNOWN_WINDOW_POLICY",
     "MIN_TURN_TOKENS",
     "SAFETY_MARGIN_RATIO",
+    "SUMMARY_RESERVE_TOKENS",
     "UNKNOWN_WINDOW_POLICY",
     "compute_history_budget",
     "tool_schema_text",

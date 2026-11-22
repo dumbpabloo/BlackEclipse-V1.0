@@ -217,9 +217,11 @@ def test_confine_delegates_to_policy_resolve_within(tmp_path, monkeypatch):
     called = {"n": 0}
     original = policy.resolve_within
 
-    def _spy(root, candidate):
+    def _spy(root, candidate, **kwargs):
+        # `confine` forwards `allow_ignored` to the policy authority; the spy must
+        # pass it through so this still asserts delegation, not the call shape.
         called["n"] += 1
-        return original(root, candidate)
+        return original(root, candidate, **kwargs)
 
     monkeypatch.setattr(policy, "resolve_within", _spy)
     confine(ws, "src/app.py")

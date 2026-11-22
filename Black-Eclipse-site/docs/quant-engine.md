@@ -510,6 +510,17 @@ futures contracts are deliberately not claimed.
   optimized **only** on the training slice (a test that mutates test-only bars
   asserts the chosen params do not move), then evaluated on the unseen test
   slice. Reports in-sample / out-of-sample / combined and the IS→OOS divergence.
+  `holdout_bars` reserves a tail **no train or test window may touch**, so the
+  verdict is read from bars selection never saw; `max_windows` caps the folds oldest-
+  first. Both default to the historical behaviour (`0` / `None`) and the fold
+  arithmetic is asserted against Vibe-Trading's formula on five shared fixtures
+  (`python/tests/test_quant_walkforward_parity.py`).
+- **Artifact decay** (`decay.py`): a strategy or factor is not pass/fail — it moves
+  `ACTIVE → MONITORING → DECAYED → DISABLED` on *consecutive* weak readings (3 non-
+  healthy to monitor, 2 decayed-or-worse to decay, one healthy reading to recover,
+  3 critical to disable), with the reference's thresholds for IC ratio, IR, IC
+  positive ratio and Sharpe. The weakest metric wins, so a healthy IC cannot hide a
+  collapsed Sharpe. Pure logic: no I/O, no clock.
 - **Monte-Carlo** (`montecarlo.py`): trade reshuffle, return bootstrap, regime-block
   bootstrap, parameter perturbation, execution perturbation; percentiles, probability
   of loss/ruin, expected/worst drawdown; seeded and reproducible.

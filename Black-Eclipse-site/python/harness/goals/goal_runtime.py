@@ -30,6 +30,7 @@ from ..tasks.model import (
 )
 from .gates import GateResult, resolve_binding, run_gates
 from .judge import JudgeOutcome, judge_goal
+from .policy import ExecutionObjectiveError, reject_execution_objective
 from .store import GoalStore
 
 log = logging.getLogger("harness.goals.goal_runtime")
@@ -160,6 +161,13 @@ class GoalRuntime:
         text = str(objective or "").strip()
         if not text:
             raise GoalError("MISSING_OBJECTIVE", "a goal needs an objective")
+        # A goal that is really an order is refused before any task is dispatched:
+        # Eclipse never places trades, and the failure is cheaper and clearer here
+        # than in the middle of a run.
+        try:
+            reject_execution_objective(text)
+        except ExecutionObjectiveError as exc:
+            raise GoalError("EXECUTION_OBJECTIVE", str(exc)) from exc
         if self.tasks is None:
             raise GoalError("TASKS_UNAVAILABLE", "the task runtime is unavailable")
 

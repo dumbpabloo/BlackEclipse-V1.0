@@ -40,20 +40,70 @@ def _bounded_history(
     the bound removed. A history under the bound drops nothing — `dropped` is
     empty and the caller must behave exactly as before.
 
-    The bound comes from the per-run measured `budget` when it is effective (the
-    resolved model's window is known); otherwise it falls back to the module
-    constants. The fallback is byte-for-byte today's behaviour, which is the
-    safety property for an unknown window.
+    On a KNOWN window the bound is a **token-budgeted verbatim tail**: walk the
+    history backwards and keep turns until the tail reaches
+    `budget.keep_tail_tokens` (default 15 000). The newest turn is always kept
+    when there is any allowance, because the next answer depends on it; older
+    turns become the compaction input. On an UNKNOWN window the conservative
+    fallback (20 turns / 40 000 chars) is byte-for-byte the previous behaviour.
     """
     history = request.input.history or []
+    if not history:
+        return [], []
     if budget is not None and getattr(budget, "effective", False):
         max_turns = int(getattr(budget, "max_history_turns", MAX_HISTORY_TURNS))
         max_chars = int(getattr(budget, "max_history_chars", MAX_HISTORY_CHARS))
-    else:
-        max_turns = MAX_HISTORY_TURNS
-        max_chars = MAX_HISTORY_CHARS
-    if not history:
-        return [], []
+        max_tokens = int(getattr(budget, "keep_tail_tokens", 0))
+        if max_tokens <= 0:
+            # A budget object from before the token-tail change (or a caller
+            # that only knows turns/chars): keep the previous turn/char bound.
+            trimmed = list(history[-max_turns:]) if max_turns > 0 else []
+            from .compaction import collapse_enabled, collapse_turns  # noqa: PLC0415
+
+            if collapse_enabled():
+                trimmed = collapse_turns(trimmed)[0]
+            dropped = list(history[: max(0, len(history) - max_turns)]) if max_turns > 0 else list(history)
+            total = sum(len(t.content) for t in trimmed)
+            while trimmed and total > max_chars:
+                total -= len(trimmed[0].content)
+                dropped.append(trimmed[0])
+                trimmed = trimmed[1:]
+            return trimmed, dropped
+        if max_turns <= 0 or max_chars <= 0:
+            return [], list(history)
+        from .eclipse_memory.profile import estimate_tokens  # noqa: PLC0415
+
+        kept_reversed: list[Any] = []
+        tokens = 0
+        chars = 0
+        for turn in reversed(history):
+            if len(kept_reversed) >= max_turns:
+                break
+            content = str(getattr(turn, "content", "") or "")
+            turn_tokens = estimate_tokens(content)
+            exceeds = (
+                chars + len(content) > max_chars
+                or (max_tokens > 0 and tokens + turn_tokens > max_tokens)
+            )
+            # The newest turn survives even a single over-budget turn: the
+            # answer in progress is anchored on it. Older turns stop the tail.
+            if exceeds and kept_reversed:
+                break
+            kept_reversed.append(turn)
+            tokens += turn_tokens
+            chars += len(content)
+            if exceeds:
+                break
+        kept = list(reversed(kept_reversed))
+        dropped = list(history[: max(0, len(history) - len(kept))])
+        from .compaction import collapse_enabled, collapse_turns  # noqa: PLC0415
+
+        if collapse_enabled():
+            kept = collapse_turns(kept)[0]
+        return kept, dropped
+    # Unknown window: the conservative fallback is unchanged.
+    max_turns = MAX_HISTORY_TURNS
+    max_chars = MAX_HISTORY_CHARS
     trimmed = list(history[-max_turns:]) if max_turns > 0 else []
     # Zero-cost collapse BEFORE the character cap, when enabled: a single
     # over-long turn is folded to head+tail (marked, digest-bearing, no model
@@ -111,12 +161,15 @@ async def _dropped_context_block(
         for t in kept
     ]
     if not dropped:
+        _trigger_precompute(request, budget, memory_service)
         return messages, "", dropped
     # Round 3 / W6 (ADR-H286): the COMPACTION comes first, and the inert
     # dropped-context block follows it. The compaction is never a replacement
     # for the block - it is what carries the conversation forward, and the
     # block stays the deterministic record of what was dropped.
-    compaction_block = await _compaction_block(request, dropped, memory_service, emitter)
+    compaction_block = await _compaction_block_with_held(
+        request, dropped, kept, memory_service, emitter, budget,
+    )
     try:
         from .eclipse_memory.dropped_context import (  # noqa: PLC0415
             MAX_ITEMS,
@@ -191,11 +244,67 @@ def _combine(compaction_block: str, dropped_block: str) -> str:
     return "\n\n".join(parts)
 
 
+def _trigger_precompute(
+    request: RunRequest, budget: Optional[Any], memory_service: Optional[Any],
+) -> None:
+    """Start a background summary when the window is filling, never await it."""
+    try:
+        from .context import precompute  # noqa: PLC0415
+        from .context.compression_ladder import _settings_for  # noqa: PLC0415
+
+        precompute.start_precompute(
+            request, list(request.input.history or []),
+            budget=budget, settings=_settings_for(memory_service),
+        )
+    except Exception:  # noqa: BLE001 - precomputation never breaks a run
+        pass
+
+
+async def _compaction_block_with_held(
+    request: RunRequest,
+    dropped: list[Any],
+    kept: list[Any],
+    memory_service: Optional[Any],
+    emitter: RunEmitter,
+    budget: Optional[Any],
+) -> str:
+    """Use a held background summary when the tail budget allows, else compact."""
+    try:
+        from .context import precompute  # noqa: PLC0415
+
+        summary = precompute.held(precompute.session_key(request))
+        if summary is not None and precompute.applicable(summary, dropped, kept, budget):
+            covered = list(dropped[: summary.boundary])
+            remainder = list(dropped[summary.boundary:])
+            block = summary.block
+            if remainder:
+                extra = await _compaction_block(
+                    request, remainder, memory_service, emitter, emit=False,
+                )
+                block = _combine(block, extra)
+            try:
+                if emitter is not None:
+                    await emitter.emit("memory.history_compacted", {
+                        "precomputed": True,
+                        "coveredTurns": len(covered),
+                        "remainderTurns": len(remainder),
+                        "usedModel": summary.used_model,
+                        "chars": len(block),
+                    })
+            except Exception:  # noqa: BLE001
+                pass
+            return block
+    except Exception:  # noqa: BLE001 - fall back to the on-demand path
+        pass
+    return await _compaction_block(request, dropped, memory_service, emitter)
+
+
 async def _compaction_block(
     request: RunRequest,
     dropped: list[Any],
     memory_service: Optional[Any],
     emitter: RunEmitter,
+    *, emit: bool = True,
 ) -> str:
     """The compaction of the dropped turns, or "" when it cannot be built.
 
@@ -215,12 +324,13 @@ async def _compaction_block(
     session_id = str(getattr(request, "sessionId", "") or getattr(request, "runId", "") or "")
     try:
         block, _result = await compact_turns(
-            dropped, request=request, settings=settings, emitter=emitter,
+            dropped, request=request, settings=settings, emitter=emitter if emit else None,
             state_store=state_store, session_id=session_id,
         )
     except Exception as exc:  # noqa: BLE001 - a compaction must never break a run
         try:
-            await emitter.emit("memory.history_compaction_failed", {"error": str(exc)})
+            if emit and emitter is not None:
+                await emitter.emit("memory.history_compaction_failed", {"error": str(exc)})
         except Exception:  # noqa: BLE001
             pass
         return ""
@@ -283,6 +393,8 @@ def _history_bounded_data(
         "droppedTokensEstimate": dropped_tokens,
         "window": budget.window,
         "windowKnown": bool(budget.window_known),
+        "keepTailTokens": int(getattr(budget, "keep_tail_tokens", 0) or 0),
+        "policy": getattr(budget, "policy", ""),
         "tighterRetry": bool(retried),
         # W8: the measured pressure and gate are what the context SLOs consume.
         # Both are counts/ratios, never content.

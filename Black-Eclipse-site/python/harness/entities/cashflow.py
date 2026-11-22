@@ -34,18 +34,33 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Iterable, Optional, Sequence
 
-#: Canonical kinds and the sign the holder's perspective requires.
+#: Canonical kinds and the sign the holder's perspective requires. The set matches
+#: Vibe-Trading's `entities/cashflow.py::KIND_DIRECTION` exactly (verified in
+#: `tests/test_vibe_parity_tier4.py`); a kind missing here is a flow whose sign
+#: nobody checks, so the list is kept complete rather than minimal.
 KIND_DIRECTION: dict[str, int] = {
+    # cash leaving the holder
+    "contribution": -1,
     "capital_call": -1,
     "purchase": -1,
-    "fee": -1,
     "subscription": -1,
+    "transfer_in": -1,
+    "fee": -1,
+    "expense": -1,
+    # cash arriving at the holder
     "distribution": +1,
     "dividend": +1,
     "coupon": +1,
-    "proceeds": +1,
+    "interest": +1,
+    "principal": +1,
     "redemption": +1,
+    "transfer_out": +1,
+    "proceeds": +1,
 }
+
+#: Kinds whose amount is a mark rather than a settled movement. Excluded from every
+#: total by default: a NAV added to distributions overstates what was received.
+VALUATION_KINDS: frozenset[str] = frozenset({"nav", "residual_value", "valuation"})
 
 #: Kinds whose amount may legitimately be either sign (a recallable distribution,
 #: a fee rebate). They are listed so an operator can see them, and they carry no
@@ -55,6 +70,24 @@ TWO_WAY_KINDS: frozenset[str] = frozenset({
 })
 
 _DAY = 86_400.0
+
+
+def normalize_kind(value: object) -> str:
+    """Canonical form of a kind label: lower-case, underscores, no repeats.
+
+    Real exports write ``"Capital Call"``, ``"capital-call"`` and
+    ``"CAPITAL_CALL"``. Normalizing means the sign check actually bites on those
+    files rather than treating each spelling as a different (unconstrained) kind.
+    """
+    if not isinstance(value, str):
+        raise ValueError(f"kind must be a string, got {type(value).__name__}")
+    cleaned = value.strip().lower().replace("-", "_").replace(" ", "_")
+    while "__" in cleaned:
+        cleaned = cleaned.replace("__", "_")
+    if not cleaned:
+        raise ValueError("kind is required and cannot be empty")
+    return cleaned
+
 
 
 def _parse_day(value: object) -> date:
@@ -85,9 +118,15 @@ class CashFlow:
             raise ValueError("amount must be finite")
         object.__setattr__(self, "amount", amount)
         object.__setattr__(self, "_day", _parse_day(self.date))
-        required = KIND_DIRECTION.get(self.kind)
+        kind = normalize_kind(self.kind)
+        object.__setattr__(self, "kind", kind)
+        if kind in VALUATION_KINDS:
+            # A mark is never settled cash, whatever the caller passed: deriving
+            # this from the kind closes the hole where a NAV was counted as income.
+            object.__setattr__(self, "is_valuation", True)
+        required = KIND_DIRECTION.get(kind)
         if required is None:
-            if self.kind not in TWO_WAY_KINDS:
+            if kind not in TWO_WAY_KINDS and kind not in VALUATION_KINDS:
                 raise ValueError(
                     f"unknown kind {self.kind!r}; use a canonical kind "
                     f"({', '.join(sorted(KIND_DIRECTION))}) or a two-way kind "
@@ -225,10 +264,112 @@ class CashFlowSeries:
         return _xirr_entries(entries)
 
 
+class MissingExchangeRateError(ValueError):
+    """A flow's own settlement date has no usable rate.
+
+    Forward-filling silently across a gap is the failure this refuses: a large flow
+    that happens to land inside the gap would be translated at the wrong rate and
+    nothing downstream could tell.
+    """
+
+
+def translate_flows(
+    entries: Iterable[dict],
+    rates: dict,
+    quote_currency: str,
+    *,
+    allow_stale: bool = False,
+    max_staleness_days: Optional[int] = None,
+) -> list[dict]:
+    """Translate dated amounts into ``quote_currency`` at **each flow's own date**.
+
+    Parity with Vibe-Trading's `entities/cashflow.py::translate_cashflows`. Applying
+    one period-end rate to every flow is the classic FX bug: the aggregate looks
+    right while every flow that settled on another date is mispriced. ``rates`` is
+    ``{(base_currency, date): rate}`` and ``rate`` is quote-per-base units.
+
+    Each result keeps its provenance, so a total can be audited back to the rate that
+    produced it: ``fxRate``, ``fxRateDate``, ``fxRateIsStale``, ``originalAmount``,
+    ``originalCurrency``.
+
+    A date with no exact quote raises unless ``allow_stale`` is set, in which case the
+    most recent earlier rate is used (bounded by ``max_staleness_days``) and flagged.
+    """
+    quote = str(quote_currency or "").strip().upper()
+    if not quote:
+        raise ValueError("quote_currency is required")
+    indexed: dict[tuple[str, date], float] = {}
+    for key, value in dict(rates).items():
+        base, day = key
+        rate = float(value)
+        if not (rate > 0) or rate != rate or rate in (float("inf"), float("-inf")):
+            raise ValueError(
+                f"rate for {base}/{quote} on {day} must be finite and strictly "
+                f"positive (quote-per-base), got {value!r}"
+            )
+        indexed[(str(base).strip().upper(), _parse_day(day))] = rate
+
+    out: list[dict] = []
+    for entry in entries:
+        currency = str(entry.get("currency") or "").strip().upper()
+        if not currency:
+            raise ValueError("every cash-flow entry needs a currency")
+        day = _parse_day(entry.get("date"))
+        amount = float(entry.get("amount") or 0)
+        if currency == quote:
+            used, rate_day, stale = 1.0, day, False
+        else:
+            exact = indexed.get((currency, day))
+            if exact is not None:
+                used, rate_day, stale = exact, day, False
+            elif not allow_stale:
+                raise MissingExchangeRateError(
+                    f"no {currency}/{quote} rate for {day}; pass allow_stale=True to "
+                    "reuse the most recent earlier rate instead. Stale reuse is "
+                    "flagged on the flow, never applied silently."
+                )
+            else:
+                candidates = [
+                    (rate_day, rate)
+                    for (base, rate_day), rate in indexed.items()
+                    if base == currency and rate_day <= day
+                ]
+                if max_staleness_days is not None:
+                    candidates = [
+                        item for item in candidates
+                        if (day - item[0]).days <= max_staleness_days
+                    ]
+                if not candidates:
+                    bound = (
+                        f" within {max_staleness_days} days"
+                        if max_staleness_days is not None else ""
+                    )
+                    raise MissingExchangeRateError(
+                        f"no {currency}/{quote} rate on or before {day}{bound}"
+                    )
+                rate_day, used = max(candidates, key=lambda item: item[0])
+                stale = True
+        out.append({
+            "date": day.isoformat(),
+            "amount": amount * used,
+            "currency": quote,
+            "originalAmount": amount,
+            "originalCurrency": currency,
+            "fxRate": used,
+            "fxRateDate": rate_day.isoformat(),
+            "fxRateIsStale": stale,
+        })
+    return out
+
+
 __all__ = [
     "CashFlow",
     "CashFlowSeries",
     "KIND_DIRECTION",
+    "MissingExchangeRateError",
     "TWO_WAY_KINDS",
+    "VALUATION_KINDS",
+    "normalize_kind",
+    "translate_flows",
     "xirr",
 ]

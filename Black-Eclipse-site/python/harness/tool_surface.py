@@ -21,6 +21,7 @@ from typing import Any, Optional
 
 from .tool_bm25 import rank_tools
 from .tool_disclosure import CORE_TOOLS, disclosure_mode
+from .code.policy import CODING_EXTRA_ENV
 
 # Always bound when disclosure narrows: the discovery pair, the output pager, the
 # response-contract read-back and the clarify gate. Re-exported for compatibility
@@ -104,27 +105,44 @@ def register_tool_surface_tools(registry: Any) -> None:
                 {"status": "INVALID_INPUT"},
             )
 
-        names = [
-            name for name in getattr(target, "names", lambda: [])()
-            if surface is None or name in surface
-        ]
+        names = list(getattr(target, "names", lambda: [])())
         tools = []
         for name in names:
             tool = target.get(name)
             if tool is not None:
                 tools.append(tool)
-        ranked = rank_tools(query, tools, len(tools))
-        selected = ranked[:limit]
+        # Search the run's OWN surface first; then show matching tools outside it
+        # as DISCOVERY only. A coding run sees that `container_run` exists and is
+        # one operator enable away, without binding its schema or executing it.
+        inside = [t for t in tools if surface is None or t.name in surface]
+        outside = [t for t in tools if surface is not None and t.name not in surface]
+        inside_ranked = rank_tools(query, inside, len(inside))
+        outside_ranked = rank_tools(query, outside, len(outside)) if outside else []
+        selected = inside_ranked[:limit]
+        if len(selected) < limit and outside_ranked:
+            selected.extend(outside_ranked[: limit - len(selected)])
+
+        def _row(tool: Any) -> dict[str, Any]:
+            row = _tool_row(tool, include_schema=True)
+            if surface is not None and tool.name not in surface:
+                row["outsideSurface"] = True
+                row["requiresEnable"] = True
+                row["enableHint"] = (
+                    f"{tool.name} is not in this run's coding surface. An operator can "
+                    f"enable it with {CODING_EXTRA_ENV} before the run starts; the model "
+                    "cannot widen its own surface."
+                )
+            return row
 
         include_schema = True
-        payload = {"tools": [_tool_row(tool, include_schema=True) for tool in selected]}
+        payload = {"tools": [_row(tool) for tool in selected]}
         if len(json.dumps(payload, default=str)) > MAX_SEARCH_SCHEMA_CHARS:
             include_schema = False
             payload = {
                 "tools": [_tool_row(tool, include_schema=False) for tool in selected],
                 "schemasOmitted": True,
             }
-        payload["matchCount"] = len(ranked)
+        payload["matchCount"] = len(inside_ranked) + len(outside_ranked)
         payload["returned"] = len(selected)
         if not selected:
             payload["availableSources"] = _available_sources(names, target)
@@ -156,8 +174,9 @@ def register_tool_surface_tools(registry: Any) -> None:
         surface = getattr(ctx, "allowed", None)
         if surface is not None and name not in surface:
             return (
-                f"REFUSED: {name!r} is not in this run's surface. "
-                "Call tool_search for an allowed tool.",
+                f"REFUSED: {name!r} is outside the surface of this run. "
+                "Call tool_search for an allowed tool; an operator can enable a "
+                "removed tool before the run starts.",
                 {"status": "REFUSED", "name": name, "reason": "outside the surface"},
             )
         tool = target.get(name) if hasattr(target, "get") else None

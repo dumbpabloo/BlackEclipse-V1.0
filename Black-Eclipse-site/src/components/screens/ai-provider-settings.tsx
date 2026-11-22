@@ -38,6 +38,7 @@ import { isLocalBaseUrl, presetForBaseUrl, LLM_PRESETS, type LLMPreset } from "@
 import { PROVIDERS, getProvider } from "@/lib/providers/registry";
 import { CUSTOM_AUTH_STYLES, type CustomAuthStyle } from "@/lib/agent/custom-auth";
 import { customConnectionKeyEnvVar } from "@/lib/agent/custom-key";
+import { notifyLlmConfigChanged } from "@/lib/agent/llm-config-events";
 import { REASONING_OPTIONS, type ReasoningLevel } from "@/lib/agent/reasoning";
 import { loadModelCatalog, type ModelCatalog } from "@/lib/agent/model-catalog";
 import { ModelPicker } from "./model-picker";
@@ -759,6 +760,9 @@ export function AIProviderSettings({
       },
       0,
     );
+    // A different provider is now active; the composer must stop showing the
+    // old provider's models.
+    notifyLlmConfigChanged({ resetChoice: true });
   };
 
   const disconnect = async (preset: LLMPreset) => {
@@ -769,6 +773,7 @@ export function AIProviderSettings({
         updateLlm({ provider: "mock", apiKey: "", model: "" }, 0);
       }
       reload();
+      notifyLlmConfigChanged({ resetChoice: true });
     } finally {
       setBusyId(null);
     }
@@ -816,6 +821,7 @@ export function AIProviderSettings({
           },
           0,
         );
+        notifyLlmConfigChanged({ resetChoice: true });
       }
     } finally {
       setBusyId(null);
@@ -833,6 +839,7 @@ export function AIProviderSettings({
       }
       reloadConnections();
       reload();
+      notifyLlmConfigChanged({ resetChoice: true });
     } finally {
       setBusyId(null);
     }
@@ -858,6 +865,7 @@ export function AIProviderSettings({
       updateLlm({ provider: "mock", apiKey: "", model: "", connectionId: undefined }, 0);
       reload();
       reloadConnections();
+      notifyLlmConfigChanged({ resetChoice: true });
     } finally {
       setRemovingKey(false);
     }

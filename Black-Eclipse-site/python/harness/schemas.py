@@ -20,6 +20,11 @@ HarnessErrorCode = Literal[
     "PROVIDER_NOT_CONFIGURED",
     "PROVIDER_ERROR",
     "PROVIDER_TIMEOUT",
+    # The RUN's own wall clock expired (the graph emits `RUN_TIMEOUT`), which is
+    # distinct from one provider call timing out. It is a valid terminal error:
+    # without it, building the failed RunResult raised a validation error while
+    # reporting the timeout, masking the real outcome.
+    "RUN_TIMEOUT",
     "CONTEXT_OVERFLOW",
     "TOOL_NOT_FOUND",
     "TOOL_VALIDATION_FAILED",

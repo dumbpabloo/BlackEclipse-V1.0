@@ -1,7 +1,7 @@
 ---
 title: Terminal, Shell & Process Subsystem
 status: Current
-last-verified: 2026-10-24
+last-verified: 2026-11-21
 ---
 
 # Terminal, Shell & Process Subsystem
@@ -263,6 +263,14 @@ scrubbed base environment.
 `terminal_run`/`shell_run`/`shell_spawn` predate this subsystem and remain for
 backward compatibility. The new `terminal/*` tools are the general surface; both
 share the same classifier (`code/shell_tools.py::_verdict`) and approval model.
+
+`shell_spawn` is now **watched**: `harness/background_jobs.watch_process` waits
+on the process in a daemon thread, and the graph drains the queued notice at its
+one step boundary (`inject_into_state`), appending a `<background-result
+kind="process">` message with the exit code and a redacted, 4 000-char output
+tail. The notice is delivered once and says not to poll; `process_output`
+remains available for a live log. Notices are per-run and in memory, so a run
+that has already ended is not resumed by one.
 
 ## Tests
 

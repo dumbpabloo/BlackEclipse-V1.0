@@ -63,8 +63,17 @@ def _periods_per_year(interval: str, asset_class: Optional[str]) -> float:
     return 252.0 * (6.5 * 3600 / seconds)
 
 
-def _returns(equity: list[float]) -> list[float]:
+def _returns(equity: list[float], initial_capital: Optional[float] = None) -> list[float]:
+    """Per-bar returns, optionally seeded with the pre-first-bar cash.
+
+    The account held ``initial_capital`` before the first recorded bar, so that
+    bar's return is measured from cash, not from itself. Without the seed the
+    first bar's P&L is missing from every mean, volatility and ratio computed
+    here — which is what the reference (`period_returns`) does and why it seeds.
+    """
     out: list[float] = []
+    if equity and initial_capital is not None and initial_capital > 0:
+        out.append(equity[0] / float(initial_capital) - 1.0)
     for i in range(1, len(equity)):
         prev = equity[i - 1]
         if prev and prev != 0:
@@ -72,8 +81,18 @@ def _returns(equity: list[float]) -> list[float]:
     return out
 
 
-def _drawdown_series(equity: list[float]) -> list[float]:
-    peak = equity[0] if equity else 0.0
+def _drawdown_series(equity: list[float], initial_capital: Optional[float] = None) -> list[float]:
+    """Drawdown path with the pre-first-bar cash as the initial high-water mark.
+
+    Starting the peak at ``equity[0]`` understates a first-bar loss: the account
+    held ``initial_capital`` before that bar, so a curve that opens at 95 after
+    risking 100 is in a 5% drawdown, not at zero. Parity with Vibe-Trading's
+    ``calc_metrics`` (``peak = equity.cummax().clip(lower=initial_cash)``).
+    """
+    start = equity[0] if equity else 0.0
+    if initial_capital is not None and initial_capital > start:
+        start = float(initial_capital)
+    peak = start
     out: list[float] = []
     for v in equity:
         if v > peak:
@@ -95,8 +114,8 @@ class MetricsEngine:
         self.inputs = inputs
         self.asset_class = asset_class
         self.periods = _periods_per_year(inputs.interval, asset_class)
-        self.returns = _returns(inputs.equity)
-        self.drawdowns = _drawdown_series(inputs.equity)
+        self.returns = _returns(inputs.equity, inputs.initial_capital)
+        self.drawdowns = _drawdown_series(inputs.equity, inputs.initial_capital)
 
     # ── returns ──────────────────────────────────────────────────────────────
     def total_return(self) -> Optional[float]:

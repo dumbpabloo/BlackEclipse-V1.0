@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { pickServableModel, shouldDropStoredChoice } from "./use-chat-model";
+import {
+  pickServableModel,
+  shouldDropStoredChoice,
+  shouldDropStoredLocalChoice,
+} from "./use-chat-model";
 import type { ChatModelProvider } from "./use-chat-model";
 
 function provider(overrides: Partial<ChatModelProvider>): ChatModelProvider {
@@ -48,6 +52,54 @@ describe("shouldDropStoredChoice", () => {
       shouldDropStoredChoice(
         { provider: "ollama", model: "llama3.1" },
         [provider({ id: "ollama", keyless: true, available: false })],
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("shouldDropStoredLocalChoice", () => {
+  const providers = [
+    provider({ id: "ollama", label: "Ollama", keyless: true, available: true }),
+    provider({ id: "opencode-go", label: "OpenCode Go", available: true }),
+  ];
+
+  it("drops a stale Ollama pick once a real provider is saved", () => {
+    expect(
+      shouldDropStoredLocalChoice({ provider: "ollama", model: "llama3.1" }, providers, "opencode-go"),
+    ).toBe(true);
+  });
+
+  it("keeps a deliberate pick of another keyed provider", () => {
+    expect(
+      shouldDropStoredLocalChoice(
+        { provider: "opencode", model: "glm-5.3" },
+        [provider({ id: "opencode", available: true }), providers[1]],
+        "opencode-go",
+      ),
+    ).toBe(false);
+  });
+
+  it("does nothing before the saved provider is known", () => {
+    expect(
+      shouldDropStoredLocalChoice({ provider: "ollama", model: "llama3.1" }, providers, "auto"),
+    ).toBe(false);
+    expect(
+      shouldDropStoredLocalChoice({ provider: "ollama", model: "llama3.1" }, providers, "mock"),
+    ).toBe(false);
+  });
+
+  it("keeps the local pick when the saved provider is that same local server", () => {
+    expect(
+      shouldDropStoredLocalChoice({ provider: "ollama", model: "llama3.1" }, providers, "ollama"),
+    ).toBe(false);
+  });
+
+  it("does not promote a saved provider that is not usable", () => {
+    expect(
+      shouldDropStoredLocalChoice(
+        { provider: "ollama", model: "llama3.1" },
+        [...providers, provider({ id: "opencode", available: false })],
+        "opencode",
       ),
     ).toBe(false);
   });

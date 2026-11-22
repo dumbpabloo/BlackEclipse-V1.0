@@ -46,18 +46,30 @@ async def start_plugins(service: Any) -> dict[str, Any]:
     if manager is None:
         return {"started": [], "failed": []}
     try:
-        return await manager.start_enabled()
+        result = await manager.start_enabled()
     except Exception:  # noqa: BLE001 - a plugin must never block boot
         import logging
 
         logging.getLogger("harness.plugins").warning("plugin startup failed", exc_info=True)
         return {"started": [], "failed": []}
+    from .hot_reload import PluginWatcher, watch_enabled
+
+    if watch_enabled():
+        watcher = PluginWatcher(manager)
+        await watcher.start()
+        manager.watcher = watcher
+        result = {**result, "watch": True}
+    return result
 
 
 async def stop_plugins(service: Any) -> None:
     manager = getattr(service, "plugins", None)
     if manager is None:
         return
+    watcher = getattr(manager, "watcher", None)
+    if watcher is not None:
+        await watcher.stop()
+        manager.watcher = None
     await manager.stop_all()
 
 

@@ -202,6 +202,26 @@ Reaching Stable requires **promotion**, never an in-place rewrite:
 `previous.json`), and restarts the window. See
 [`desktop/README.md`](../desktop/README.md#channels-stable-and-dev).
 
+## Coding tool surface
+
+The code-agent profile runs a 48-tool coding preset (`CODING_SURFACE` in
+`python/harness/code/policy.py`; 52 declared, the four ship actions are removed
+below `approve_external`): project/read/search, CIUE diagnostics, edit/write/
+apply, the local git commit path (stage/commit/branch/restore/stash), the
+verification path (`build_project`/`test_project`/`run_verification`/
+`execution_get`), `command_run`/`terminal_run`/`shell_spawn`, ship actions (still
+approval-gated), and the discovery pair. Runtime/container/cloud/orchestration/
+package/browser/computer tools are removed before the model sees them.
+
+- `BLACK_ECLIPSE_CODING_SURFACE=0` disables the preset (the full declared
+  surface returns).
+- `BLACK_ECLIPSE_CODING_EXTRA_TOOLS=container_run,package_install` adds named
+  tools back for the next run. The extras still pass through the autonomy
+  profile, so a write tool cannot be added to `plan_only`.
+- The model cannot widen its own surface. `tool_search` still names an outside
+  tool and marks it `outsideSurface` / `requiresEnable`; `tool_invoke` refuses
+  it.
+
 ## Commands
 
 | Command | Effect |

@@ -96,16 +96,35 @@ def test_plan_only_removes_all_git_writes_and_external():
 
 
 def test_edit_verify_has_git_writes_but_not_external():
+    # Two layers, asserted separately. The autonomy PROFILE classifies effects:
+    # every local git mutation survives `edit_verify`, every remote action does not.
+    profile = set(policy.allowed_tools("edit_verify", policy.GIT_TOOLS))
+    assert set(policy.GIT_WRITE_TOOLS) <= profile
+    assert not (set(policy.GIT_EXTERNAL_TOOLS) & profile)
+
+    # The BOUND surface additionally applies the coding preset. It keeps the
+    # commit path a coding run needs; the long tail stays outside the advertised
+    # surface (discoverable via `tool_search`, refused until an operator enables
+    # it by name).
     allowed = effective_allowlist(CODE_AGENT, _registry(), "edit_verify")
-    assert set(policy.GIT_WRITE_TOOLS) <= set(allowed)
-    assert "git_commit" in allowed
+    assert {"git_stage", "git_commit", "git_checkout"} <= allowed
     assert not (set(allowed) & set(policy.GIT_EXTERNAL_TOOLS))
     assert "git_push" not in allowed
 
 
 def test_approve_external_has_git_external():
+    # The profile permits every remote action at `approve_external` (each is still
+    # gated by a single-use operator approval at execution).
+    profile = set(policy.allowed_tools("approve_external", policy.GIT_TOOLS))
+    assert set(policy.GIT_EXTERNAL_TOOLS) <= profile
+
+    # The coding preset advertises only the ship tools; the git-engine remote
+    # long tail is outside the preset (discoverable via `tool_search`, refused
+    # until an operator enables it by name).
     allowed = effective_allowlist(CODE_AGENT, _registry(), "approve_external")
-    assert set(policy.GIT_EXTERNAL_TOOLS) <= set(allowed)
+    assert "tool_search" in allowed
+    assert not (set(allowed) & set(policy.GIT_EXTERNAL_TOOLS))
+    assert {"code_push", "code_open_pr"} <= allowed
 
 
 def test_code_agent_has_git_tools_declared():

@@ -16,6 +16,84 @@ from .adapter import AdapterUnavailable
 from .authorizer import evaluate_guardrails, money_intent_for, request_approval
 from .model import OrderIntent, TradeRefused
 from .policy import TradePolicy
+from .risk import assess_trade_risk, limits_from_connection
+
+
+def _num(value: Any, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number
+
+
+def _risk_summary(connection: Any, intent: OrderIntent, preview: dict[str, Any]) -> dict[str, Any] | None:
+    """The order's own risk, from the broker's facts already in the preview.
+
+    Uses only numbers the adapter returned (`price`, `stopLoss`, `volume`,
+    `tickValue`, `margin`, `account`, `spreadPoints`) - no second round-trip and
+    no estimate. Returns None when the order has no stop or the broker gave no
+    basis, so the card shows "not measured" rather than a zero.
+    """
+    stop = _num(preview.get("stopLoss")) or _num(intent.stop_loss)
+    price = _num(preview.get("price")) or _num(intent.price)
+    volume = _num(preview.get("volume")) or _num(intent.volume)
+    if stop <= 0 or price <= 0 or volume <= 0:
+        return None
+    distance = abs(price - stop)
+    if distance <= 0:
+        return None
+    tick_size = _num(preview.get("tickSize"))
+    tick_value = _num(preview.get("tickValue"))
+    contract = _num(preview.get("contractSize"))
+    if tick_size > 0 and tick_value > 0:
+        loss = volume * (distance / tick_size) * tick_value
+        basis = "tick-value"
+    elif contract > 0:
+        loss = volume * distance * contract
+        basis = "contract-size"
+    else:
+        return None
+    account = dict(preview.get("account") or {})
+    equity = _num(account.get("equity")) or _num(account.get("balance"))
+    if equity <= 0:
+        return None
+    risk_pct = loss / equity * 100.0
+    limits = limits_from_connection(getattr(connection, "config", None))
+    risk = assess_trade_risk(
+        account=account,
+        positions=[],
+        symbol=str(preview.get("symbol") or intent.symbol),
+        planned_risk=loss,
+        risk_pct=risk_pct,
+        estimated_margin=_num(preview.get("margin")) or None,
+        spread_points=_num(preview.get("spreadPoints")) or None,
+        point=_num(preview.get("point")),
+        tick_value=tick_value,
+        tick_size=tick_size,
+        distance=distance,
+        limits=limits,
+    )
+    take_profit = _num(preview.get("takeProfit")) or _num(intent.take_profit)
+    summary = {
+        "maxLoss": round(loss, 2),
+        "riskPctOfEquity": round(risk_pct, 4),
+        "basis": basis,
+        "equity": round(equity, 2),
+        "currency": account.get("currency") or None,
+        "verdict": risk["verdict"],
+        "warnings": list(risk["warnings"]),
+        "reasons": list(risk["reasons"]),
+        "spreadCost": risk["spreadCost"],
+        "spreadPctOfRisk": risk["spreadPctOfRisk"],
+        "marginUsedPct": (
+            round((_num(account.get("margin")) + _num(preview.get("margin"))) / equity * 100.0, 1)
+            if _num(preview.get("margin")) else None
+        ),
+    }
+    if take_profit > 0:
+        summary["rewardRisk"] = round(abs(take_profit - price) / distance, 2)
+    return summary
 
 
 def preview_order(
@@ -107,6 +185,13 @@ def preview_order(
     else:
         requires_typed = bool(verdict.requires_typed_confirmation)
         confirm_phrase = str(verdict.confirm_phrase) if requires_typed else None
+    risk_summary = _risk_summary(connection, intent, preview)
+    if risk_summary and risk_summary.get("verdict") == "block":
+        # An order that breaches the account's own risk limits is refused BEFORE
+        # an approval card exists. The operator gets the reason, not a card they
+        # should not approve.
+        allowed = False
+        reasons.extend(risk_summary.get("reasons") or [])
     approval = None
     if allowed and record_approval:
         approval = request_approval(
@@ -117,6 +202,7 @@ def preview_order(
             verdict,
             risk="critical" if execution_mode == "live" else "high",
             run_id=run_id,
+            risk_summary=risk_summary,
         )
         if str(approval.get("status")) == "denied":
             allowed = False
@@ -139,6 +225,7 @@ def preview_order(
         "preview": preview,
         "policy": policy,
         "guardrail": verdict.to_dict(),
+        "riskSummary": risk_summary,
         "approval": service._public_approval(approval),
         "requiresTypedConfirmation": requires_typed,
         "confirmPhrase": confirm_phrase,

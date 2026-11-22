@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getLLMConfig } from "@/lib/settings";
+import { getLLMConfig, llmKeyEnvVar } from "@/lib/settings";
 import { listModelProviders, listRuntimeModels } from "@/lib/harness";
 import { LLM_PRESETS } from "@/lib/agent/presets";
 import { resolveProviderKey } from "@/lib/provider-keys";
@@ -16,18 +16,33 @@ export const dynamic = "force-dynamic";
 // from the environment/vault — determined server-side where the vault lives, and
 // only ever reported as a boolean (a key is never returned).
 //
+// The active provider resolves its key through `llmKeyEnvVar`, the SAME helper
+// `getLLMConfig` uses, so an edited base URL or a named custom connection (whose
+// key lives under its own vault entry) is reported honestly instead of showing
+// as "needs a key" and disappearing from the composer.
+//
 // The runtime catalog is best-effort: when the Python runtime is unavailable the
 // declared presets are still returned (with their default model), so the picker
 // never renders empty.
 export async function GET() {
-  let active: { provider: string; model: string; baseUrl: string } = {
+  let active: { provider: string; model: string; baseUrl: string; connectionId?: string } = {
     provider: "auto",
     model: "",
     baseUrl: "",
   };
+  // True when the saved config has a resolvable credential (never exposed). A
+  // saved connection is therefore marked available even if its key sits under a
+  // non-preset vault slot (e.g. `CUSTOM_LLM_…` after an edited base URL).
+  let activeHasKey = false;
   try {
     const cfg = await getLLMConfig();
-    active = { provider: cfg.provider, model: cfg.model, baseUrl: cfg.baseUrl };
+    active = {
+      provider: cfg.provider,
+      model: cfg.model,
+      baseUrl: cfg.baseUrl,
+      ...(cfg.connectionId ? { connectionId: cfg.connectionId } : {}),
+    };
+    activeHasKey = Boolean(cfg.apiKey);
   } catch {
     // Settings unavailable — the picker still works from the preset list.
   }
@@ -95,19 +110,32 @@ export async function GET() {
       const declared = (cat?.models && cat.models.length ? cat.models : [preset.model]).filter(Boolean);
       // Prefer the last probe's replaced list; fall back to the accumulated one.
       const discovered = freshByProvider.get(preset.id) ?? discoveredByProvider.get(preset.id) ?? [];
-      const models = sortModelsNewestFirst(Array.from(new Set([...discovered, ...declared])).filter(Boolean));
-      let available = Boolean(preset.keyless);
-      if (!available && preset.envVar) {
-        try {
-          available = Boolean(await resolveProviderKey(preset.envVar));
-        } catch {
-          available = false;
+      const isActive = preset.id === active.provider;
+      const models = sortModelsNewestFirst(
+        Array.from(
+          new Set([...(isActive && active.model ? [active.model] : []), ...discovered, ...declared]),
+        ).filter(Boolean),
+      );
+      let available = Boolean(preset.keyless) || (isActive && activeHasKey);
+      if (!available) {
+        // Resolve the SAME slot the runtime reads: a named custom connection has
+        // its own key, and an edited base URL may store under `CUSTOM_LLM_…`.
+        const envVar = isActive
+          ? llmKeyEnvVar(active.baseUrl || preset.baseUrl, active.provider, active.connectionId) ??
+            preset.envVar
+          : preset.envVar;
+        if (envVar) {
+          try {
+            available = Boolean(await resolveProviderKey(envVar));
+          } catch {
+            available = false;
+          }
         }
       }
       return {
         id: preset.id,
         label: preset.name,
-        baseUrl: preset.baseUrl,
+        baseUrl: isActive ? active.baseUrl || preset.baseUrl : preset.baseUrl,
         keyless: Boolean(preset.keyless),
         envVar: preset.envVar ?? null,
         dynamicDiscovery: Boolean(cat?.dynamicDiscovery),

@@ -10,6 +10,7 @@ runtime:
   entrypoint: plugin:SecPlugin
 permissions:
   - network
+  - research.execute
 contributes:
   tools:
     - name: company_filings

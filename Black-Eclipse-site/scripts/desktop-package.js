@@ -442,7 +442,7 @@ function buildPacks() {
   const runtimeManifest = {
     schema: 1,
     version: pkgJson.version,
-    repository: process.env.BE_RELEASE_REPO || "dumbpabloo/BlackEclipse-V1.0",
+    repository: process.env.BE_RELEASE_REPO || "dumbpabloo/black-eclipse",
     allowedHosts: ["github.com", "objects.githubusercontent.com"],
     target: TARGET,
     packs: entries.map((entry) => ({

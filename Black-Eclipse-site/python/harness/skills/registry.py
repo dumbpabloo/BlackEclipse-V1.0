@@ -572,6 +572,10 @@ class SkillRegistry:
     def get(self, skill_id: str) -> Optional[LoadedSkill]:
         return self._skills.get(skill_id)
 
+    def unregister(self, skill_id: str) -> bool:
+        """Remove a live skill. Used by plugin unload; stored/user skills stay."""
+        return self._skills.pop(skill_id, None) is not None
+
     def load_stored(self, skill_id: str) -> Optional[LoadedSkill]:
         """Load a store-only skill (a learning draft) into the in-memory catalog.
 

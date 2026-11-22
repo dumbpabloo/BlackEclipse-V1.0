@@ -29,14 +29,20 @@ from .model import PluginRecord, PluginState, TrustLevel
 from .sdk import (
     Plugin,
     PluginToolError,
+    agent_contribution,
     command,
+    data_provider,
     event_handler,
     hook,
+    model_provider,
+    prompt_section,
+    research_provider,
     skill,
     tool,
     ui_panel,
     webhook,
     worker,
+    workflow_contribution,
 )
 
 __all__ = [
@@ -57,6 +63,12 @@ __all__ = [
     "worker",
     "webhook",
     "ui_panel",
+    "agent_contribution",
+    "workflow_contribution",
+    "prompt_section",
+    "model_provider",
+    "research_provider",
+    "data_provider",
     "PluginError",
     "ManifestError",
     "PermissionDenied",

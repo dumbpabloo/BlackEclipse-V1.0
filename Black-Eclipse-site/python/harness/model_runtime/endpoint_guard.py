@@ -46,19 +46,37 @@ class ResolvedEndpoint:
     addresses: tuple[str, ...]
 
 
-def is_public_address(value: str) -> bool:
-    """Whether an IP literal is a globally routable public address."""
+#: Fake-IP proxies (Clash, Surge, sing-box in TUN mode) answer every lookup from the
+#: RFC 2544 benchmarking range and resolve the real name themselves. Refusing that
+#: range refuses every endpoint on such a host, so it is allowed when the address came
+#: from a DNS lookup — never when it was written into the URL.
+_FAKE_IP_RANGE = ipaddress.ip_network("198.18.0.0/15")
+
+
+def is_public_address(value: str, *, resolved: bool = False) -> bool:
+    """Whether an address is a globally routable public endpoint.
+
+    ``is_private`` is not the question. It misses the shared address space
+    ``100.64.0.0/10``, which holds Alibaba Cloud's metadata service
+    (``100.100.100.200``) — reaching that from a user-supplied model endpoint is an
+    SSRF against credentials. ``is_global`` covers it together with loopback,
+    link-local, reserved and documentation ranges, and an IPv4-mapped IPv6 address is
+    judged by the IPv4 address it carries.
+
+    ``resolved`` marks an address that came from a DNS lookup: a fake-IP range answer
+    (``198.18.0.0/15``) is a local proxy's doing and is allowed there, while the same
+    address written literally into a URL is not.
+    """
     try:
         address = ipaddress.ip_address(value)
     except ValueError:
         return False
-    if address.is_private or address.is_loopback or address.is_link_local:
-        return False
-    if address.is_multicast or address.is_reserved or address.is_unspecified:
-        return False
-    if getattr(address, "is_site_local", False):
-        return False
-    return True
+    mapped = getattr(address, "ipv4_mapped", None)
+    if mapped is not None:
+        address = mapped
+    if resolved and address in _FAKE_IP_RANGE:
+        return True
+    return bool(address.is_global and not address.is_multicast)
 
 
 def pinning_enabled() -> bool:
@@ -121,7 +139,9 @@ def resolve_public_endpoint(
     if not addresses:
         raise EndpointBlocked("DNS_FAILED", f"no addresses for {host}")
     if not allow_private:
-        blocked = [address for address in addresses if not is_public_address(address)]
+        blocked = [
+            address for address in addresses if not is_public_address(address, resolved=True)
+        ]
         if blocked:
             raise EndpointBlocked(
                 "PRIVATE_RESOLUTION",

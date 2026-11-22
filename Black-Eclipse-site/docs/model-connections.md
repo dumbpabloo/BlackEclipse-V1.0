@@ -1,7 +1,7 @@
 ---
 title: Model connections — how an LLM provider is connected
 status: Current
-last-verified: 2026-11-20
+last-verified: 2026-11-21
 ---
 
 # Model connections
@@ -73,9 +73,11 @@ Server pieces:
     model), then the declared default.
   - `connectProvider` — **atomic**: a failed probe writes nothing. On success it
     stores the key under the same env var `getLLMConfig` reads, then persists the
-    active provider/base URL/model. A `custom` endpoint is marked `keyless`
-    because a key is optional, but a key the operator pasted is still stored
-    (under `CUSTOM_LLM_API_KEY`).
+    active provider/base URL/model, then records the models the probe found into
+    the durable snapshot (`lib/agent/discovered-models`) so the composer and the
+    Settings picker can show the provider's real catalog immediately. A `custom`
+    endpoint is marked `keyless` because a key is optional, but a key the
+    operator pasted is still stored (under `CUSTOM_LLM_API_KEY`).
   - `setActiveModel` — switch models for a connected provider.
 - Routes:
   - `POST /api/llm/connect` — `{ providerId, connectionId?, name?, baseUrl?, model?, apiKey?, authStyle?, apiKeyHeader?, apiKeyPrefix? }`
@@ -123,8 +125,25 @@ Authorization prefix is not supported by ChatOpenAI's public API.
 They are different gateways with different catalogs and limits. Go uses
 `OPENCODE_GO_API_KEY`; Zen uses `OPENCODE_API_KEY`. Connecting one never marks
 the other connected. A stored per-chat composer choice is dropped when its
-provider has no key, so the composer follows the provider you actually
-connected instead of showing the other gateway's models.
+provider has no key **or when it is a stale keyless local pick (Ollama/LM
+Studio) and a different provider is now saved** — so the composer follows the
+provider you actually connected instead of showing the other gateway's or the
+local server's models.
+
+### The composer follows the saved connection
+
+`GET /api/harness/chat/models` is the composer's option source. It resolves the
+ACTIVE provider's key through `llmKeyEnvVar` — the same helper `getLLMConfig`
+uses — so an edited base URL or a named custom connection (whose key lives under
+its own vault entry) is reported as available instead of "needs a key". It also
+adds the active model and any models recorded by the connect probe/discovery.
+
+The chat screen and the floating dock stay mounted while Settings is open, so a
+mount-only fetch kept showing the boot-time catalog (often only keyless Ollama).
+`lib/agent/llm-config-events.ts` broadcasts `eclipse:llm-changed`; every mounted
+composer re-fetches. Connect/activate/disconnect events carry `resetChoice`, so
+a stale per-chat pick is cleared and the newly connected provider becomes the
+default. The hook also re-fetches when the window becomes visible again.
 
 ### Provider-required session headers
 

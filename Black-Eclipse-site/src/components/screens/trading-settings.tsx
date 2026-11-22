@@ -512,9 +512,17 @@ function RiskLimits({
   onSaved: () => Promise<void>;
 }) {
   const config = connection.config ?? {};
+  const book = (config.risk ?? {}) as Record<string, number | undefined>;
   const [risk, setRisk] = useState(String(config.riskPerTradePct ?? 0));
   const [daily, setDaily] = useState(String(config.maxDailyLossPct ?? 0));
   const [notional, setNotional] = useState(String(config.maxSymbolNotional ?? 0));
+  // Account-level limits read by `harness/trade/risk.py` on every plan/preview.
+  const [bookRisk, setBookRisk] = useState(String(book.maxRiskPct ?? 2));
+  const [openMax, setOpenMax] = useState(String(book.maxOpenPositions ?? 10));
+  const [symbolMax, setSymbolMax] = useState(String(book.maxSymbolPositions ?? 3));
+  const [marginMax, setMarginMax] = useState(String(book.maxMarginPct ?? 50));
+  const [levelMin, setLevelMin] = useState(String(book.minMarginLevelPct ?? 150));
+  const [spreadMax, setSpreadMax] = useState(String(book.maxSpreadPctOfRisk ?? 25));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -533,6 +541,21 @@ function RiskLimits({
         if (Number.isFinite(value) && value > 0) next[key] = value;
         else delete next[key];
       }
+      const nextBook: Record<string, number> = {};
+      const bookFields: Array<[string, string]> = [
+        ["maxRiskPct", bookRisk],
+        ["maxOpenPositions", openMax],
+        ["maxSymbolPositions", symbolMax],
+        ["maxMarginPct", marginMax],
+        ["minMarginLevelPct", levelMin],
+        ["maxSpreadPctOfRisk", spreadMax],
+      ];
+      for (const [key, raw] of bookFields) {
+        const value = Number(raw);
+        if (Number.isFinite(value) && value > 0) nextBook[key] = value;
+      }
+      if (Object.keys(nextBook).length) next.risk = nextBook;
+      else delete next.risk;
       await updateBrokerConnection(connection.id, { config: next });
       await onSaved();
     } catch (err) {
@@ -558,6 +581,29 @@ function RiskLimits({
             onChange={(event) => setNotional(event.target.value)}
             className={inputClass}
           />
+        </Field>
+      </div>
+      <p className="pt-1 text-[10px] uppercase tracking-widest text-muted-foreground">
+        Account fit
+      </p>
+      <div className="grid grid-cols-3 gap-2">
+        <Field label="Max risk %" hint="Per plan, from the stop. Blocks above.">
+          <input value={bookRisk} onChange={(event) => setBookRisk(event.target.value)} className={inputClass} />
+        </Field>
+        <Field label="Max positions" hint="Open positions allowed.">
+          <input value={openMax} onChange={(event) => setOpenMax(event.target.value)} className={inputClass} />
+        </Field>
+        <Field label="Per symbol" hint="Positions allowed in one symbol.">
+          <input value={symbolMax} onChange={(event) => setSymbolMax(event.target.value)} className={inputClass} />
+        </Field>
+        <Field label="Margin %" hint="Margin after the order vs equity.">
+          <input value={marginMax} onChange={(event) => setMarginMax(event.target.value)} className={inputClass} />
+        </Field>
+        <Field label="Margin level %" hint="Broker floor before new risk.">
+          <input value={levelMin} onChange={(event) => setLevelMin(event.target.value)} className={inputClass} />
+        </Field>
+        <Field label="Spread / risk %" hint="Spread cost vs planned risk.">
+          <input value={spreadMax} onChange={(event) => setSpreadMax(event.target.value)} className={inputClass} />
         </Field>
       </div>
       {error && <p className="text-[10px] text-rose-300">{error}</p>}

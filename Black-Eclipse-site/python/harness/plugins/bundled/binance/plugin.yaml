@@ -10,6 +10,7 @@ runtime:
   entrypoint: plugin:BinancePlugin
 permissions:
   - network
+  - research.execute
 contributes:
   tools:
     - name: ticker

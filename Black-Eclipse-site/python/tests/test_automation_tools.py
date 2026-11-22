@@ -103,7 +103,11 @@ def test_full_bot_lifecycle_via_tools(ctx):
     assert isinstance(history["runs"], list)
 
     # delete
-    _, deleted = run(tools._delete({"botId": bot_id}, ctx))
+    # Deleting is destructive, so the tool asks for a confirmation first.
+    _, pending = run(tools._delete({"botId": bot_id}, ctx))
+    assert pending["needsConfirmation"] is True
+    _, deleted = run(tools._delete(
+        {"botId": bot_id, "confirm": True, "proposalId": pending["proposalId"]}, ctx))
     assert deleted["deleted"] is True
     _, gone = run(tools._get({"botId": bot_id}, ctx))
     assert gone["found"] is False
@@ -185,6 +189,8 @@ def test_bot_delete_purges_private_memory(ctx, monkeypatch):
         "forget_conversation",
         lambda conversation_id: (calls.append(conversation_id) or {"archived": []}),
     )
-    _, deleted = run(tools._delete({"botId": bot.id}, ctx))
+    _, pending = run(tools._delete({"botId": bot.id}, ctx))
+    _, deleted = run(tools._delete(
+        {"botId": bot.id, "confirm": True, "proposalId": pending["proposalId"]}, ctx))
     assert deleted["deleted"] is True
     assert calls == [f"bot-{bot.id}"]

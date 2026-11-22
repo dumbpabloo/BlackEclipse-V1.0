@@ -31,6 +31,7 @@ ECLIPSE_VERSION = "1.0.0"
 _ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 _CONTRIB_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_-]*$")
 _EVENT_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_.-]*[a-z0-9])?(?:\*)?$")
+_SERVICE_KEY_RE = re.compile(r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
 
 CONFIG_TYPES = {"string", "number", "boolean", "enum", "array", "object", "secret"}
 
@@ -93,6 +94,32 @@ class RuntimeSpec(BaseModel):
         if self.entrypoint and ":" not in self.entrypoint and not self.entrypoint.endswith(".py"):
             raise ValueError("runtime.entrypoint must be 'module:attribute' or a .py path")
         return self
+
+
+class ServiceDeclaration(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    key: str
+    version: int = 1
+
+    @field_validator("key")
+    @classmethod
+    def _key(cls, v: str) -> str:
+        if not _SERVICE_KEY_RE.match(v or ""):
+            raise ValueError(f"service key must match {_SERVICE_KEY_RE.pattern}")
+        return v
+
+
+class ServiceRequirement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    key: str
+    optional: bool = False
+
+    @field_validator("key")
+    @classmethod
+    def _key(cls, v: str) -> str:
+        if not _SERVICE_KEY_RE.match(v or ""):
+            raise ValueError(f"service key must match {_SERVICE_KEY_RE.pattern}")
+        return v
 
 
 class Dependency(BaseModel):
@@ -212,10 +239,25 @@ class WorkflowContribution(BaseModel):
     id: str
 
 
+class PromptContribution(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    scope: str = ""
+    order: int = 100
+
+
+class ModelContribution(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    provider: str = ""
+
+
 class Contributes(BaseModel):
     model_config = ConfigDict(extra="forbid")
     tools: list[ToolContribution] = Field(default_factory=list)
     skills: list[SkillContribution] = Field(default_factory=list)
+    prompts: list[PromptContribution] = Field(default_factory=list)
+    models: list[ModelContribution] = Field(default_factory=list)
     hooks: list[HookContribution] = Field(default_factory=list)
     events: Optional[EventContribution] = None
     commands: list[CommandContribution] = Field(default_factory=list)
@@ -229,9 +271,9 @@ class Contributes(BaseModel):
 
     @model_validator(mode="after")
     def _no_duplicate_names(self) -> "Contributes":
-        for field_name in ("tools", "skills", "hooks", "commands", "ui", "workers", "webhooks", "agents"):
+        for field_name in ("tools", "skills", "prompts", "models", "hooks", "commands", "ui", "workers", "webhooks", "agents"):
             items = getattr(self, field_name)
-            key = "id" if field_name in ("ui", "webhooks", "agents") else "name"
+            key = "id" if field_name in ("ui", "webhooks", "agents", "prompts") else "name"
             names = [getattr(i, key) for i in items]
             dupes = sorted({n for n in names if names.count(n) > 1})
             if dupes:
@@ -242,6 +284,8 @@ class Contributes(BaseModel):
         return {
             "tools": [t.name for t in self.tools],
             "skills": [s.name for s in self.skills],
+            "prompts": [p.id for p in self.prompts],
+            "models": [m.name for m in self.models],
             "hooks": [h.name for h in self.hooks],
             "commands": [c.name for c in self.commands],
             "ui": [u.id for u in self.ui],
@@ -250,6 +294,7 @@ class Contributes(BaseModel):
             "agents": [a.id for a in self.agents],
             "research_providers": [r.name for r in self.research_providers],
             "data_providers": [d.name for d in self.data_providers],
+            "workflows": [w.id for w in self.workflows],
         }
 
 
@@ -344,6 +389,8 @@ class PluginManifest(BaseModel):
     runtime: RuntimeSpec
     permissions: list[str] = Field(default_factory=list)
     dependencies: list[Dependency] = Field(default_factory=list)
+    provides: list[ServiceDeclaration] = Field(default_factory=list)
+    requires: list[ServiceRequirement] = Field(default_factory=list)
     contributes: Contributes = Field(default_factory=Contributes)
     configuration: list[ConfigField] = Field(default_factory=list)
     authentication: AuthenticationSpec = Field(default_factory=AuthenticationSpec)
@@ -386,7 +433,20 @@ class PluginManifest(BaseModel):
         self._check_sdk_compat()
         self._check_dependencies()
         self._check_config()
+        self._check_services()
         return self
+
+    def _check_services(self) -> None:
+        for label, keys in (
+            ("provides", [item.key for item in self.provides]),
+            ("requires", [item.key for item in self.requires]),
+        ):
+            dupes = sorted({key for key in keys if keys.count(key) > 1})
+            if dupes:
+                raise ValueError(f"duplicate {label} service(s): {', '.join(dupes)}")
+        overlap = sorted({item.key for item in self.provides} & {item.key for item in self.requires})
+        if overlap:
+            raise ValueError(f"a plugin cannot both provide and require: {', '.join(overlap)}")
 
     def _check_sdk_compat(self) -> None:
         if not semver.satisfies(SDK_VERSION, self.sdk.version):

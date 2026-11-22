@@ -92,6 +92,11 @@ class MarketConfig:
     # ── Circuit breaker ─────────────────────────────────────────────────────
     breaker_fail_threshold: int = field(default_factory=lambda: _env_int("HARNESS_MARKET_BREAKER_THRESHOLD", 4))
     breaker_reset_s: float = field(default_factory=lambda: _env_float("HARNESS_MARKET_BREAKER_RESET_S", 60.0))
+    #: Cap for the per-provider exponential backoff: after repeated failures the
+    #: retry waits ``breaker_reset_s * 2^(failures-1)`` up to this many seconds.
+    breaker_lifetime_s: float = field(
+        default_factory=lambda: _env_float("HARNESS_MARKET_BREAKER_LIFETIME_S", 300.0)
+    )
     # ── Cache ───────────────────────────────────────────────────────────────
     cache_enabled: bool = field(default_factory=lambda: _env_bool("HARNESS_MARKET_CACHE", True))
     cache_ttl_seconds: dict[str, int] = field(

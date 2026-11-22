@@ -43,6 +43,69 @@ def parse_query(payload: Mapping[str, Any]) -> QueryRequest:
     return QueryRequest.model_validate(dict(payload))
 
 
+#: Widget metadata is INTENT, not data. OpenBB does not put widget values in the
+#: request — fetching them needs a `get_widget_data` round trip the bridge does not
+#: implement — so the block says so plainly. Without that sentence a model sees
+#: "widget: AAPL price" and may answer from memory instead of fetching.
+MAX_WIDGETS = 10
+MAX_WIDGET_VALUE_CHARS = 200
+MAX_PARAMS_PER_WIDGET = 8
+
+WIDGET_VALUES_NOT_ATTACHED = (
+    "Only names and parameters are available — their values are NOT attached, so "
+    "use your own data tools to fetch anything you need instead of guessing."
+)
+
+
+def _clip(value: Any, limit: int = MAX_WIDGET_VALUE_CHARS) -> str:
+    text = str(value)
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def _field(obj: Any, name: str, default: Any = None) -> Any:
+    """Read ``name`` from a mapping or an object, tolerating both spellings."""
+    if obj is None:
+        return default
+    if isinstance(obj, Mapping):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+
+def _widget_block(widgets: list[Any]) -> str:
+    """Render widget/dashboard metadata as INTENT, never as fetched values."""
+    if not widgets:
+        return ""
+    lines = [f"<workspace-widgets>\n{WIDGET_VALUES_NOT_ATTACHED}"]
+    for widget in widgets[:MAX_WIDGETS]:
+        if not isinstance(widget, Mapping):
+            continue
+        name = _field(widget, "name") or "Unnamed widget"
+        header = f"- {name}"
+        origin = _field(widget, "origin")
+        if origin:
+            header += f" (source: {origin})"
+        description = _field(widget, "description")
+        if description:
+            header += f": {_clip(description)}"
+        lines.append(header)
+        params = _field(widget, "params") or []
+        summaries = []
+        for param in list(params)[:MAX_PARAMS_PER_WIDGET]:
+            p_name = _field(param, "name")
+            if p_name is None:
+                continue
+            value = _field(param, "current_value")
+            summaries.append(
+                f"{p_name}={_clip(value, 60)}" if value is not None else str(p_name)
+            )
+        if summaries:
+            lines.append(f"    params: {', '.join(summaries)}")
+    remaining = len(widgets) - MAX_WIDGETS
+    if remaining > 0:
+        lines.append(f"  ...and {remaining} more widget(s).")
+    return "\n".join(lines) + "\n</workspace-widgets>"
+
+
 def _context_block(request: QueryRequest) -> str:
     items = [item for item in request.context if item.name or item.description or item.data]
     if not items:
@@ -68,8 +131,9 @@ def prepare(payload: Mapping[str, Any] | QueryRequest) -> PreparedQuery:
     if last.role != "user":
         raise BridgeError("NO_USER_TURN", "the last message must be from the user")
     user_text = last.clipped(MAX_MESSAGE_CHARS)
-    block = _context_block(request)
-    user_message = f"{user_text}\n\n{block}" if block else user_text
+    blocks = [block for block in (_context_block(request),
+                                  _widget_block(list(request.widgets or []))) if block]
+    user_message = f"{user_text}\n\n" + "\n\n".join(blocks) if blocks else user_text
     return PreparedQuery(
         messages=history,
         user_message=user_message,

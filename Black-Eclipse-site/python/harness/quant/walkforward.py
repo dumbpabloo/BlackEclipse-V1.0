@@ -42,6 +42,13 @@ class WalkForwardConfig:
     initial_capital: float = 100_000.0
     risk_free_rate: float = 0.0
     anchored: bool = False
+    #: Bars at the end of the timeline that no train or test window may touch.
+    #: 0 keeps the historical behaviour; >0 reserves a final holdout so selection
+    #: never sees the data the verdict is read from (the reference harness's
+    #: ``holdout_bars``).
+    holdout_bars: int = 0
+    #: Cap on the number of folds, oldest first (the reference's ``max_folds``).
+    max_windows: Optional[int] = None
 
 
 def _aggregate(metrics_list: list[dict[str, Any]]) -> dict[str, Any]:
@@ -76,6 +83,13 @@ class WalkForwardEngine:
         cfg = self.config
         step = cfg.step_bars or cfg.test_bars
         n = len(self.timeline)
+        if cfg.holdout_bars < 0:
+            raise WalkForwardError("holdout_bars cannot be negative")
+        if cfg.max_windows is not None and cfg.max_windows < 0:
+            raise WalkForwardError("max_windows cannot be negative")
+        # A reserved holdout is never part of a train or test window, so the
+        # verdict is read from bars that selection could not see.
+        limit = n - cfg.holdout_bars
         out: list[tuple[int, int, int, int]] = []
         start = 0
         while True:
@@ -83,9 +97,11 @@ class WalkForwardEngine:
             train_end = start + cfg.train_bars           # exclusive
             test_start = train_end
             test_end = test_start + cfg.test_bars        # exclusive
-            if test_end > n:
+            if test_end > limit:
                 break
             out.append((train_start, train_end, test_start, test_end))
+            if cfg.max_windows is not None and len(out) >= cfg.max_windows:
+                break
             start += step
         return out
 

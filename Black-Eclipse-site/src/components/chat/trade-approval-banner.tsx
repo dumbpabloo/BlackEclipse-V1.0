@@ -238,6 +238,39 @@ export function TradeApprovalBanner({ onCancel }: { onCancel?: () => void } = {}
                 <p className="mt-1 text-[12.5px] font-semibold text-foreground">
                   {approval.actionSummary || 'Order awaiting confirmation'}
                 </p>
+                {(() => {
+                  const risk = approval.preview?.riskSummary;
+                  if (!risk) return null;
+                  const currency = risk.currency ? ` ${risk.currency}` : '';
+                  const rr =
+                    risk.rewardRisk != null ? ` · reward:risk ${risk.rewardRisk}:1` : '';
+                  return (
+                    <div className="mt-1.5 space-y-1" data-testid="trade-risk-summary">
+                      <p
+                        className={cn(
+                          'text-[10.5px] font-medium',
+                          risk.verdict === 'block' ? 'text-rose-300' : 'text-foreground/90',
+                        )}
+                      >
+                        Max loss {risk.maxLoss.toLocaleString()}
+                        {currency} ({risk.riskPctOfEquity.toFixed(2)}% of equity){rr}
+                        {risk.spreadPctOfRisk != null
+                          ? ` · spread ${risk.spreadPctOfRisk.toFixed(0)}% of risk`
+                          : ''}
+                      </p>
+                      {(risk.reasons?.length ? risk.reasons : risk.warnings ?? []).map(
+                        (line) => (
+                          <p
+                            key={line}
+                            className="text-[10px] leading-relaxed text-amber-300/90"
+                          >
+                            {line}
+                          </p>
+                        ),
+                      )}
+                    </div>
+                  );
+                })()}
                 <p className="mt-1 text-[10.5px] leading-relaxed text-muted-foreground/80">
                   {ORDER_PREVIEW_NOTICE}
                 </p>

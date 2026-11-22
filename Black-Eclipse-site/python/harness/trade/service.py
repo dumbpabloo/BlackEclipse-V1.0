@@ -313,7 +313,7 @@ class BrokerService:
             check_mandate_creation(
                 self, bot_id=bot_id, bot_version=bot_version,
                 max_margin=float(payload.get("maxMargin") or 0),
-                mode=mode,
+                max_orders=int(payload.get("maxOrders") or 0), mode=mode,
             )
         mandate = self.mandates.create(
             connection=connection,
@@ -1027,6 +1027,18 @@ class BrokerService:
         from .symbols import symbol_info  # noqa: PLC0415 - avoids an import cycle
 
         return symbol_info(self, connection_id, symbol)
+
+    def trade_plan(
+        self, connection_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Size a trade from equity, the stop and the broker's symbol limits.
+
+        Read-only: no order, no approval. The body lives in `trade/plan.py` so
+        this service stays below the module size ceiling.
+        """
+        from .plan import build_trade_plan  # noqa: PLC0415 - avoids an import cycle
+
+        return build_trade_plan(self, connection_id, payload)
 
     def ledger_orders(
         self, connection_id: Optional[str] = None, limit: int = 50,

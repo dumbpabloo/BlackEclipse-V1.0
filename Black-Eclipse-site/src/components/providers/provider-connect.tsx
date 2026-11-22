@@ -42,6 +42,7 @@ import {
   CUSTOM_AUTH_STYLES,
   type CustomAuthStyle,
 } from "@/lib/agent/custom-auth";
+import { notifyLlmConfigChanged } from "@/lib/agent/llm-config-events";
 
 export interface ProviderConnectResult {
   providerId: string;
@@ -294,6 +295,10 @@ export function ProviderConnect({
       };
       setResult(next);
       setPhase("done");
+      // Tell every mounted composer (the chat screen and the floating dock are
+      // separate instances) that the saved config changed, and let it replace a
+      // stale local/Ollama pick with this newly connected provider.
+      notifyLlmConfigChanged({ resetChoice: true });
       onConnected?.(next);
     } catch (err) {
       setError({
@@ -364,6 +369,9 @@ export function ProviderConnect({
       const data = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string };
       if (res.ok && data.ok) {
         setResult((current) => (current ? { ...current, model: nextModel } : current));
+        // The active model changed; refresh every composer's model label without
+        // discarding their per-chat provider choice.
+        notifyLlmConfigChanged();
       } else {
         setError({ message: data.message || "Could not switch model." });
       }

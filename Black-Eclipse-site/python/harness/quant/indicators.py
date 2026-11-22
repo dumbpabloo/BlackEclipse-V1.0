@@ -122,17 +122,23 @@ def rsi(values: np.ndarray, period: int) -> np.ndarray:
     if n < period + 1:
         return out
     delta = np.diff(values.astype(float))
-    gains = np.where(delta > 0, delta, 0.0)
-    losses = np.where(delta < 0, -delta, 0.0)
-    avg_gain = rma(gains, period)
-    avg_loss = rma(losses, period)
+    # A missing bar makes its delta unknown: keep the NaN instead of turning it into
+    # a zero gain, so the reading stays undefined while the state still carries.
+    gains = np.where(np.isnan(delta), np.nan, np.where(delta > 0, delta, 0.0))
+    losses = np.where(np.isnan(delta), np.nan, np.where(delta < 0, -delta, 0.0))
+    avg_gain = _rma_forward(gains, period)
+    avg_loss = _rma_forward(losses, period)
     for i in range(period, n):
+        if np.isnan(gains[i - 1]) or np.isnan(losses[i - 1]):
+            continue  # this bar's delta is unknown, so the reading is undefined
         g = avg_gain[i - 1]
         l = avg_loss[i - 1]
         if np.isnan(g) or np.isnan(l):
             continue
         if l == 0:
-            out[i] = 100.0
+            # Parity with Vibe-Trading's `compute_rsi`: no losses and no gains is
+            # UNDEFINED (NaN), not 100. Only "gains, no losses" is 100.
+            out[i] = np.nan if g == 0 else 100.0
         else:
             rs = g / l
             out[i] = 100.0 - (100.0 / (1.0 + rs))

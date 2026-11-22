@@ -165,6 +165,25 @@ def parse_record(line: str) -> Optional[dict[str, Any]]:
     return row
 
 
+#: Cash-market and odd-lot ``TPMERC`` codes, as published in the COTAHIST layout.
+CASH_MARKET = 10
+ODD_LOT_MARKET = 20
+
+
+def map_symbol(code: str) -> tuple[str, int]:
+    """``PETR4.SA`` -> (``PETR4``, 10); ``PETR4F.SA`` -> (``PETR4F``, 20).
+
+    Parity with Vibe-Trading's `backtest/loaders/b3_cotahist_loader.py::map_symbol`.
+    The odd-lot market is selected by a trailing ``F`` that follows a fraction
+    digit, so a ticker whose ``F`` is part of its name is not misread as odd-lot.
+    """
+    ticker = str(code or "").strip().upper()
+    if ticker.endswith(".SA"):
+        ticker = ticker[:-3]
+    odd_lot = ticker.endswith("F") and len(ticker) >= 2 and ticker[-2].isdigit()
+    return ticker, ODD_LOT_MARKET if odd_lot else CASH_MARKET
+
+
 def parse_records(text: str) -> list[dict[str, Any]]:
     """Parse a whole file. Blank lines are ignored; the header/trailer are dropped."""
     rows: list[dict[str, Any]] = []

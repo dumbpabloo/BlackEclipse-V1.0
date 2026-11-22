@@ -46,6 +46,43 @@ EXECUTION_LOG_MIGRATIONS: tuple[Migration, ...] = (
 #: The canonical sources. A new plane must add itself here.
 SOURCES = frozenset({"run", "fabric", "graph", "task", "orchestration"})
 
+#: How many events a reader may replay in one call, mirroring the reference bus's
+#: bounded buffer. A reconnect replays from the buffer, never from the whole log.
+DEFAULT_REPLAY_LIMIT = 500
+
+
+def replay_after(
+    events: list[dict[str, Any]],
+    last_event_id: Optional[str] = None,
+    *,
+    replay_all: bool = False,
+) -> list[dict[str, Any]]:
+    """Events strictly AFTER ``last_event_id`` (reference replay semantics).
+
+    Ported from Vibe-Trading's `session/events.py::_replay_locked`, and the three
+    branches are the point:
+
+    * **no id** — return nothing unless ``replay_all``: a first connect must fetch
+      history deliberately, not race the live stream.
+    * **id found** — everything after it, in order.
+    * **id not found** (evicted or from another session) — nothing, unless
+      ``replay_all``, in which case the whole buffer. Silently restarting from the
+      beginning is how a client shows duplicate events; saying "I cannot resume"
+      and re-sending everything on request is honest.
+    """
+    if not last_event_id:
+        return list(events) if replay_all else []
+    found = False
+    out: list[dict[str, Any]] = []
+    for event in events:
+        if found:
+            out.append(event)
+        elif event.get("id") == last_event_id:
+            found = True
+    if not found and replay_all:
+        return list(events)
+    return out
+
 
 class ExecutionEventLog:
     """Append + read the one execution log over the agent-memory connection."""
@@ -128,6 +165,23 @@ class ExecutionEventLog:
         ).fetchall()
         return [self._row(row) for row in rows]
 
+    def replay(
+        self,
+        entity_id: str,
+        last_event_id: Optional[str] = None,
+        *,
+        replay_all: bool = False,
+        limit: int = DEFAULT_REPLAY_LIMIT,
+    ) -> list[dict[str, Any]]:
+        """Reconnect recovery: what to send a client that saw ``last_event_id``.
+
+        The buffer is bounded like the reference's (last ``limit`` events), so a
+        long-dead client is told it cannot resume by getting an empty list rather
+        than a flood — unless it explicitly asks for ``replay_all``.
+        """
+        events = self.list(entity_id, limit=limit)
+        return replay_after(events, last_event_id, replay_all=replay_all)
+
     @staticmethod
     def _row(row: Any) -> dict[str, Any]:
         try:
@@ -146,4 +200,10 @@ class ExecutionEventLog:
         }
 
 
-__all__ = ["EXECUTION_LOG_MIGRATIONS", "SOURCES", "ExecutionEventLog"]
+__all__ = [
+    "DEFAULT_REPLAY_LIMIT",
+    "EXECUTION_LOG_MIGRATIONS",
+    "SOURCES",
+    "ExecutionEventLog",
+    "replay_after",
+]

@@ -5,12 +5,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // the composer selector depends on.
 
 const getLLMConfig = vi.fn();
+const llmKeyEnvVar = vi.fn();
 const listModelProviders = vi.fn();
 const listRuntimeModels = vi.fn();
 const resolveProviderKey = vi.fn();
 const readDiscoveredModels = vi.fn();
 
-vi.mock("@/lib/settings", () => ({ getLLMConfig: (...a: unknown[]) => getLLMConfig(...a) }));
+vi.mock("@/lib/settings", () => ({
+  getLLMConfig: (...a: unknown[]) => getLLMConfig(...a),
+  llmKeyEnvVar: (...a: unknown[]) => llmKeyEnvVar(...a),
+}));
 vi.mock("@/lib/harness", () => ({
   listModelProviders: (...a: unknown[]) => listModelProviders(...a),
   listRuntimeModels: (...a: unknown[]) => listRuntimeModels(...a),
@@ -24,11 +28,19 @@ import { GET } from "@/app/api/harness/chat/models/route";
 
 beforeEach(() => {
   getLLMConfig.mockReset();
+  llmKeyEnvVar.mockReset();
   listModelProviders.mockReset();
   listRuntimeModels.mockReset();
   resolveProviderKey.mockReset();
   readDiscoveredModels.mockReset();
   getLLMConfig.mockResolvedValue({ provider: "deepseek", model: "deepseek-chat", baseUrl: "https://api.deepseek.com/v1" });
+  llmKeyEnvVar.mockImplementation((_baseUrl: string, provider?: string) => {
+    if (provider === "deepseek") return "DEEPSEEK_API_KEY";
+    if (provider === "openai") return "OPENAI_API_KEY";
+    if (provider === "opencode-go") return "OPENCODE_GO_API_KEY";
+    if (provider === "custom") return "CUSTOM_LLM_API_KEY";
+    return undefined;
+  });
   listModelProviders.mockResolvedValue([
     { id: "deepseek", models: ["deepseek-chat", "deepseek-reasoner"], dynamicDiscovery: false },
     { id: "ollama", models: ["llama3.1"], dynamicDiscovery: true },
@@ -137,5 +149,44 @@ describe("GET /api/harness/chat/models", () => {
     const body = await res.json();
     const ollama = body.providers.find((p: { id: string }) => p.id === "ollama");
     expect(ollama.served).toEqual([]);
+  });
+
+  it("marks the active provider available from the saved credential", async () => {
+    // The key can live under a slot the preset env var does not name (an edited
+    // base URL, a vault-only entry). `getLLMConfig` resolved one, so the picker
+    // must not report the active provider as "needs a key" and hide it.
+    getLLMConfig.mockResolvedValue({
+      provider: "opencode-go",
+      model: "kimi-k3",
+      baseUrl: "https://opencode.ai/inference/go/openai/v1",
+      apiKey: "sk-real",
+    });
+    const res = await GET();
+    const body = await res.json();
+    const go = body.providers.find((p: { id: string }) => p.id === "opencode-go");
+    expect(go.available).toBe(true);
+    expect(go.models).toContain("kimi-k3");
+    expect(body.active.provider).toBe("opencode-go");
+  });
+
+  it("resolves a named custom connection's own key and reports its endpoint", async () => {
+    getLLMConfig.mockResolvedValue({
+      provider: "custom",
+      model: "company-llm-1",
+      baseUrl: "https://llm.company.com/v1",
+      connectionId: "conn-1",
+      apiKey: "",
+    });
+    llmKeyEnvVar.mockReturnValue("CUSTOM_CONNECTION_CONN-1_API_KEY");
+    resolveProviderKey.mockImplementation(async (envVar: string) =>
+      envVar === "CUSTOM_CONNECTION_CONN-1_API_KEY" ? "gw-key" : null,
+    );
+    const res = await GET();
+    const body = await res.json();
+    const custom = body.providers.find((p: { id: string }) => p.id === "custom");
+    expect(custom.available).toBe(true);
+    expect(custom.baseUrl).toBe("https://llm.company.com/v1");
+    expect(custom.models).toContain("company-llm-1");
+    expect(body.active.connectionId).toBe("conn-1");
   });
 });

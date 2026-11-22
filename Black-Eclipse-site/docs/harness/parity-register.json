@@ -1,0 +1,1105 @@
+{
+  "reference": "HKUDS/Vibe-Trading (analysis: docs/harness/vibe-trading-analysis.md)",
+  "note": "One row per reference module and per gap-register item, each with a status and at least one path that must exist. `python/tests/test_parity_register.py` fails when a path disappears, when an item loses its status, or when a deferred item has no recorded decision. Statuses: ported = the mechanism was transcribed; equivalent = Eclipse already had it under a different shape; not_applicable = the product shape differs; deferred = a written decision to not do it. `tests` + `testSymbol` are the behaviour half: each claim about a mechanism must name a test file that contains that symbol, so a row cannot pass on file presence alone. `behaviour` is the numeric half: a row may cite tests that assert the reference's own values on a shared fixture, which is what separates 'we have a module with that name' from 'our module computes what theirs computes'. Behavioural comparisons that found a difference are recorded in the row's `note`: a register that only ever says 'equivalent' is not being read carefully. Two more rows got numeric comparisons after the first four: research_artifacts (evidence multiset diff) and br_data (B3 cash/odd-lot symbol mapping). Eight rows now carry a behaviour comparison; the rest remain on file/test/symbol and are named as such. Thirty-two rows now carry a behaviour comparison \u2014 PARITY COMPLETE (scheduled_research is now wired, not library-only); the rest remain on file/test/symbol and are named as such.",
+  "statuses": [
+    "ported",
+    "equivalent",
+    "not_applicable",
+    "deferred"
+  ],
+  "modules": [
+    {
+      "module": "tools",
+      "reference": "126 files / 44,018 lines",
+      "status": "ported",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/tool_disclosure.py",
+        "Black-Eclipse-site/python/harness/tool_schema_load.py"
+      ],
+      "note": "The tool surface was equivalent, but there was NO guard against a shell command that kills every Python process by name \u2014 `pkill python`, `taskkill /IM python.exe`, `powershell Stop-Process -Name python`. That kills the HARNESS mid-run: the command looks successful and then the agent's own process is gone. Ported the reference's check (per shell segment so `&& pkill python` is caught, quotes flattened, case-insensitive, actionable refusal) and wired it into code/shell.py BEFORE the sandbox spawns, so the refusal costs nothing and the harness stays alive. One shared limit is stated: a bare `get-process python | stop-process` without a powershell prefix is not matched, in either codebase.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_tool_disclosure_bm25.py",
+        "Black-Eclipse-site/python/tests/test_tool_schema_load.py"
+      ],
+      "testSymbol": "tool_disclosure",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier17.py",
+          "symbol": "broad_python_kill_error",
+          "checks": "fifteen broad Python-kill spellings refused (pkill/killall/sudo, taskkill /IM, PowerShell Stop-Process by name and by pipe, hidden after && or ; or a newline, any case) and twelve targeted or unrelated commands allowed, including `kill -9 <pid>`, `pkill -f uvicorn` and a quoted mention"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier17.py",
+          "symbol": "test_run_refuses_without_spawning",
+          "checks": "the refusal happens BEFORE a process is spawned (exit 126, nothing ran) and an ordinary command still executes"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_shell_sandbox_parity.py",
+          "symbol": "from harness.code import shell",
+          "checks": "the pre-existing shell contract (scrubbed env, sandboxed run)"
+        }
+      ]
+    },
+    {
+      "module": "factors",
+      "reference": "496 files / 26,195 lines (5 zoos / 460 alphas)",
+      "status": "ported",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/factors/zoo",
+        "Black-Eclipse-site/python/harness/factors/panel.py",
+        "Black-Eclipse-site/python/harness/factors/contracts.py"
+      ],
+      "note": "Refusal on absent declared inputs (MISSING_INPUT) was already right. What was missing is the reference's per-field STATUS and POINT-IN-TIME safety: failed vs unknown, assumed when a source is named, and the honest rule that a fundamental with only a filing date stays unknown (a one-bar shift is protection, not proof). pitSafe is true only for verified. Ported as field_availability/availability_mode beside the existing refusal, so 'runnable' and 'knowable as of when' are separate statements.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_factor_panel.py",
+        "Black-Eclipse-site/python/tests/test_alpha101_zoo.py"
+      ],
+      "testSymbol": "harness.factors",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier15.py",
+          "symbol": "field_availability",
+          "checks": "the per-field status decision order: a required-but-absent input is failed, an optional one is unknown, a sourced bar is assumed, a fundamental stays UNKNOWN with its reason even when present and sourced, membership needs the point-in-time flag, an explicit status wins, and pitSafe is true only for verified"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier15.py",
+          "symbol": "availability_mode",
+          "checks": "the availability mode by field kind (bar close / filing date / session date / effective date / unknown) on twelve fields"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier15.py",
+          "symbol": "require_inputs",
+          "checks": "the existing MISSING_INPUT refusal still names every missing input and agrees with the status view on the same fixture"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_alpha_zoo_strict_bench.py",
+          "symbol": "harness.factors",
+          "checks": "the zoo catalogue and the strict benchmark"
+        }
+      ]
+    },
+    {
+      "module": "trading",
+      "reference": "102 files / 19,077 lines (19 connectors)",
+      "status": "equivalent",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/trade",
+        "Black-Eclipse-site/python/harness/trade/registry.py",
+        "Black-Eclipse-site/python/harness/trade/capability_matrix.py"
+      ],
+      "note": "The mandate store and preview path were equivalent. The behavioural comparison against the reference's live mandate gate found the fail-open cap handling above (shared with the live row) and confirmed the shared verdicts: symbol not permitted, oversized single order and position count all deny the way that gate denies them.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_broker_layer.py"
+      ],
+      "testSymbol": "harness.trade",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier8.py",
+          "symbol": "TradePolicy",
+          "checks": "exclude-list, single-order notional and position-count decisions match the mandate gate's verdicts on shared previews, and an unverifiable cap denies"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_broker_orders.py",
+          "symbol": "harness.trade",
+          "checks": "mandate creation, order preview, submission and the daily brake"
+        }
+      ]
+    },
+    {
+      "module": "channels",
+      "reference": "41 files / 19,086 lines (19 platforms)",
+      "status": "equivalent",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/channels",
+        "Black-Eclipse-site/python/harness/channels/registry.py"
+      ],
+      "note": "The provider specs were already parity-grade (19 families, inbound modes, config fields). What was missing is the reference's status union: describe() now includes names that are configured but not implemented, flagged known=false, so an operator cannot believe a channel is on when it is not. Reading it also found a wrong docstring claim: PUSH/POLL are capability sets, not a three-way partition (a 'both' provider sits in both), and the code was right while the comment was not.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_channels_registry.py"
+      ],
+      "testSymbol": "channels",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier3.py",
+          "symbol": "R.describe",
+          "checks": "the status surface returns every provider plus any configured name, flags a configured-but-unimplemented channel as known=false instead of dropping it, and holds the push/poll/outbound invariant"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_channels_registry.py",
+          "symbol": "channels",
+          "checks": "19 provider families, config-field secrets and build_provider refusals"
+        }
+      ]
+    },
+    {
+      "module": "backtest",
+      "reference": "95 files / 29,105 lines (15 engines, 45 loaders, 6 optimizers)",
+      "status": "equivalent",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/quant/engine.py",
+        "Black-Eclipse-site/python/harness/quant/optimize.py",
+        "Black-Eclipse-site/python/harness/quant/datasets.py",
+        "Black-Eclipse-site/python/harness/quant/data.py"
+      ],
+      "note": "Two real defects found by comparing numbers: the drawdown high-water mark started at the first observed equity, so a FIRST-BAR LOSS reported 0% drawdown, and the per-bar return series dropped that bar entirely (the reference seeds the first return with initial_cash). Both fixed. One divergence is deliberate and now quantified rather than hidden: Eclipse's Sortino uses the sample downside deviation (n-1, pinned by test_quant_audit_fixes) where the reference uses the population RMS, so the values differ by exactly sqrt((n-1)/n).",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_quant_engine.py"
+      ],
+      "testSymbol": "from harness.quant import engine",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier6.py",
+          "symbol": "reference_drawdown",
+          "checks": "the drawdown path matches the reference on four fixtures including a first-bar loss, because the high-water mark is seeded with initial cash rather than the first observation"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier6.py",
+          "symbol": "reference_sharpe",
+          "checks": "Sharpe agrees to 1e-7 on a shared fixture (the reference's 1e-10 denominator epsilon is the only gap), and Sortino differs by exactly sqrt((n-1)/n) because Eclipse deliberately uses the sample downside deviation"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier6.py",
+          "symbol": "reference_sortino_population",
+          "checks": "profit_factor is None (not 0) when nothing lost, and the loss streak matches the reference walk"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_quant_metrics.py",
+          "symbol": "harness.quant",
+          "checks": "the metric catalog, definitions and exposure statistics"
+        }
+      ]
+    },
+    {
+      "module": "quantlib",
+      "reference": "28 files / 16,370 lines (22 named math modules)",
+      "status": "equivalent",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/stats",
+        "Black-Eclipse-site/python/harness/stats/formula.py"
+      ],
+      "note": "The deflated Sharpe already used the Bailey-Lopez de Prado form with NON-excess kurtosis and the Euler-Mascheroni expected-maximum bar. Two things were missing: a standalone probabilistic_sharpe_ratio (with a benchmark, the reference's 30-observation floor, the kurtosis>=1 check and the inconsistent-moments refusal) and benjamini_hochberg FDR control, which is the right tool when the question is 'which of these 462 factors are real' rather than 'is the best one real'.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_stats_formula.py"
+      ],
+      "testSymbol": "harness.stats.formula",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier7.py",
+          "symbol": "reference_psr",
+          "checks": "the probabilistic Sharpe ratio is compared to the reference closed form on 96 (sharpe, observations, benchmark, skew, kurtosis) combinations to 1e-12, and refuses T<30, an excess kurtosis and inconsistent moments"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier7.py",
+          "symbol": "reference_bh",
+          "checks": "Benjamini-Hochberg equals the reference on six p-value sets at three FDR levels, with monotone adjusted p-values in the caller's order"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier7.py",
+          "symbol": "reference_expected_max",
+          "checks": "the deflated-Sharpe chain (expected max of N trials then PSR against it) matches the reference end to end"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_quant_multiple_testing.py",
+          "symbol": "harness.quant",
+          "checks": "the pre-existing DSR and CSCV/PBO behaviour"
+        }
+      ]
+    },
+    {
+      "module": "cli",
+      "reference": "45 files / 12,736 lines",
+      "status": "equivalent",
+      "eclipse": [
+        "Black-Eclipse-site/src",
+        "Black-Eclipse-site/scripts/desktop-refresh.js"
+      ],
+      "note": "The CLI REPL was retired in favour of the desktop window, whose slash palette is TypeScript. What was never ported is the MATCHING CONTRACT, so it lived only in TS: the reference's scoring ladder (prefix/substring/subsequence), alias resolution before scoring, registry-order tie-breaking, and '/'-only matching. Ported as a surface-neutral Python module (harness/slash_commands.py) so any command surface \u2014 palette, jobs, future CLI \u2014 can share one scoring rule instead of re-deriving it.",
+      "noTestReason": "There is no Python module to import: the CLI replacement is the desktop window, whose surface is covered by TypeScript tests under src/ rather than by a harness module.",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier23.py",
+          "symbol": "fuzzy_score",
+          "checks": "the scoring ladder is the reference's: prefix 100+len, substring 50+len, subsequence 10+matched, no match 0, bare '/' 1 \u2014 with prefix > substring > subsequence pinned"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier23.py",
+          "symbol": "match_commands",
+          "checks": "token parsing ('/me arg' -> 'me', '/' -> '', no slash -> ''), a plain question matching nothing, aliases resolved before scoring, ties broken by registry order, and a fresh list returned"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier23.py",
+          "symbol": "find_exact",
+          "checks": "exact lookup by name or alias, and None for an unknown command"
+        }
+      ]
+    },
+    {
+      "module": "api",
+      "reference": "34 files / 9,851 lines (32 route modules)",
+      "status": "equivalent",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/routers",
+        "Black-Eclipse-site/python/harness/main.py"
+      ],
+      "note": "Config values were already redacted BY KEY NAME (channels/config.py) and trace spans in session_index, but a QUERY STRING was not: `GET /v1/events?api_key=secret` reached the access log verbatim, and from there the proxy log, browser history and any Referer header. Ported the reference's narrow rule (keep the parameter name, replace the value, leave every other line untouched) plus its logging Filter, installed idempotently so an in-process restart cannot stack filters.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_quant_routes.py"
+      ],
+      "testSymbol": "harness.routers.quant",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier22.py",
+          "symbol": "redact_query_secrets",
+          "checks": "the value of api_key=/ticket= is replaced while the NAME survives, for several secrets per line, any case, a quote-terminated value, and an idempotent second pass; ordinary text is returned unchanged"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier22.py",
+          "symbol": "RedactionFilter",
+          "checks": "the logging filter redacts both the formatted message and the template, leaves non-string arguments alone, never drops a record, and install_log_redaction is idempotent"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_quant_routes.py",
+          "symbol": "harness.routers",
+          "checks": "the pre-existing API surface contract"
+        }
+      ]
+    },
+    {
+      "module": "live",
+      "reference": "28 files / 8,336 lines (mandates + kill switch)",
+      "status": "equivalent",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/trade/mandates.py",
+        "Black-Eclipse-site/python/harness/trade/service.py",
+        "Black-Eclipse-site/python/harness/trade/authority.py"
+      ],
+      "note": "The pre-trade policy SKIPPED a cap when its field was missing, so a broker preview that omitted margin walked past a configured margin cap \u2014 fail-OPEN, the opposite of the reference's explicit contract ('any unparseable input denies'). Fixed for margin, volume, notional and open-position count. Two structural differences are stated rather than hidden: Eclipse returns EVERY reason (one response can list all breaches) where the reference returns the FIRST breach with a kind that routes it to DENY or PAUSE; and spread stays best-effort because some connectors do not publish it.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_trade_mandate_mode.py",
+        "Black-Eclipse-site/python/tests/test_broker_orders.py"
+      ],
+      "testSymbol": "mandate",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier8.py",
+          "symbol": "TradePolicy",
+          "checks": "a configured cap whose field cannot be read now DENIES (the reference's fail-closed contract) on four caps, while the same cap allows a verifiable order and 0 still means off"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_trade_policy.py",
+          "symbol": "harness.trade.policy",
+          "checks": "per-trade risk, per-symbol notional, spread and position caps"
+        }
+      ]
+    },
+    {
+      "module": "agent",
+      "reference": "24 files / 7,332 lines (hand-written ReAct + 5-layer context)",
+      "status": "equivalent",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/agents.py",
+        "Black-Eclipse-site/python/harness/graph.py",
+        "Black-Eclipse-site/python/harness/compaction.py"
+      ],
+      "note": "The five-layer context strategy was already there (G2). Comparing the layer-2 fold against the reference found the DEFAULTS were too eager: 1200/400/400 folded a ~2 KB tool result that the next turn then had to re-fetch, where the reference folds at 2400 and preserves 900+500. Adopted the reference's three numbers; the fold itself already beat the reference in two ways (the marker names the exact omitted count AND a sha256 of the full original, and folding is idempotent).",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_graph_agent_node.py"
+      ],
+      "testSymbol": "harness.agents",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier11.py",
+          "symbol": "COLLAPSE_MIN_CHARS",
+          "checks": "the zero-cost fold uses the reference's numbers (min 2400, head 900, tail 500), a text exactly at the threshold is untouched, one char past it folds with the exact omitted count, the head and tail are preserved byte-for-byte, and the digest verifies the original"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier11.py",
+          "symbol": "collapse_text",
+          "checks": "the fold is parameterised, so the reference's constants are reproducible, and folding is idempotent where the reference would fold its own marker again"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_history_compaction.py",
+          "symbol": "harness.compaction",
+          "checks": "the turn-level compaction and dropped-context block"
+        }
+      ]
+    },
+    {
+      "module": "providers",
+      "reference": "15 files / 5,564 lines",
+      "status": "equivalent",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/models.py",
+        "Black-Eclipse-site/python/harness/model_runtime"
+      ],
+      "note": "The guard existed and refused loopback/RFC1918/link-local, but it ALLOWED 100.100.100.200 \u2014 Alibaba Cloud's metadata service in the shared 100.64.0.0/10 space, which is_private does not cover \u2014 so a user-supplied model endpoint could reach cloud metadata credentials. Switched to the reference's predicate (is_global and not multicast, IPv4-mapped unwrapped). The opposite bug was also fixed: the guard refused 198.18.0.0/15 in every form, which is the range Clash/Surge/sing-box TUN fake-IP proxies answer from, breaking every endpoint on such a host; it is now allowed only when the address came from DNS.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_models.py"
+      ],
+      "testSymbol": "from harness import models",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier14.py",
+          "symbol": "SHARED_SPACE",
+          "checks": "the endpoint predicate on 20 blocked addresses (loopback, RFC1918, link-local metadata, multicast, reserved, documentation, IPv6 ULA, IPv4-mapped, and the 100.64/10 shared space) and 4 public ones"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier14.py",
+          "symbol": "resolve_public_endpoint",
+          "checks": "the URL-level guard: a metadata literal, a hostname resolving to metadata, one bad answer among good ones, the fake-IP carve-out for a DNS answer only, allow_private for local models, and the named scheme/host refusals"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_endpoint_guard.py",
+          "symbol": "harness.model_runtime",
+          "checks": "the pre-existing guard contract (pinning flag, resolver injection)"
+        }
+      ]
+    },
+    {
+      "module": "data_gateway",
+      "reference": "28 files / 4,738 lines (38 sources)",
+      "status": "equivalent",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/market/router.py",
+        "Black-Eclipse-site/python/harness/sources"
+      ],
+      "note": "Selection, probe budget and breaker state existed, but the breaker used a FLAT cooldown: a provider that failed once and one that had been down all morning were retried at the same cadence. Ported the reference's exponential schedule (min(lifetime, cooldown*2^(failures-1))) into mcp.circuit.backoff_cooldown_s and wired the market router to it with a 300s cap; every other breaker keeps the flat cooldown because lifetime_s defaults to None. Confirmed both routers only reorder the candidates they are handed.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_router_probe_budget.py"
+      ],
+      "testSymbol": "harness.market.router",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier10.py",
+          "symbol": "backoff_cooldown_s",
+          "checks": "the retry schedule is min(lifetime, cooldown*2^(failures-1)) on three base/lifetime pairs and eight failure counts, doubles per failure, caps at the lifetime, and cannot overflow at 10,000 failures"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier10.py",
+          "symbol": "effective_cooldown_s",
+          "checks": "the breaker opens, becomes half-open after the EFFECTIVE cooldown, re-arms from now on a failed probe, resets on success, and stays flat when no lifetime is configured"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier10.py",
+          "symbol": "attempt_order",
+          "checks": "the router only reorders the candidates it is given, never adding a source outside the capability/asset-class filter"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_router_probe_budget.py",
+          "symbol": "harness.market.router",
+          "checks": "one half-open probe per scope per cooldown, with cross-scope evidence"
+        }
+      ]
+    },
+    {
+      "module": "swarm",
+      "reference": "13 files / 4,446 lines (DAG + 30 preset teams)",
+      "status": "ported",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/team",
+        "Black-Eclipse-site/python/harness/team/preset_library.py"
+      ],
+      "note": "Layering was already correct and matched the reference partition on every shared fixture. One real difference: the cycle error said only 'the task graph contains a dependency cycle' where the reference names the path, so an operator had to hunt for it; the message now carries the cycle (via detect_cycle). validate_graph already reported unknown dependencies and duplicate ids, which the reference's validate_dag does not.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_team_presets.py"
+      ],
+      "testSymbol": "preset_library",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier9.py",
+          "symbol": "reference_layers",
+          "checks": "the layer PARTITION equals the reference Kahn on eight DAG shapes (linear, diamond, two roots, disconnected, deep, wide), each prerequisite lands in an earlier layer, and the diamond's two middle tasks share a layer"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier9.py",
+          "symbol": "validate_graph",
+          "checks": "a cycle raises and NAMES the path (the reference prints it; Eclipse did not), an unknown dependency is a validation error, and readiness agrees with the layering"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_team_graph.py",
+          "symbol": "harness.team",
+          "checks": "the wider team graph contract (status projection, roll-ups)"
+        }
+      ]
+    },
+    {
+      "module": "portfolio",
+      "reference": "13 files / 3,645 lines",
+      "status": "equivalent",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/portfolio",
+        "Black-Eclipse-site/python/harness/portfolio/risk.py"
+      ],
+      "note": "Read-only aggregation was equivalent. The FX conversion was compared numerically: both divide by units-per-USD, and both fail closed on a missing/zero rate (the reference raises, Eclipse returns None so the position is labelled unavailable rather than valued at a made-up number).",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_portfolio_risk_performance.py"
+      ],
+      "testSymbol": "harness.portfolio",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_numeric_parity.py",
+          "symbol": "reference_to_usd",
+          "checks": "to_base(native, fx) equals the reference's value/rate on a 724000 CNY fixture, and both refuse a missing or zero rate"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_portfolio_risk_performance.py",
+          "symbol": "harness.portfolio",
+          "checks": "weights, exposure and performance aggregation on a known basket"
+        }
+      ]
+    },
+    {
+      "module": "shadow_account",
+      "reference": "11 files / 2,915 lines (journal -> rules -> replay -> report)",
+      "status": "equivalent",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/trade_learning",
+        "Black-Eclipse-site/python/harness/quant/report_export.py"
+      ],
+      "note": "Journal -> rules -> replay -> report was equivalent. Comparing the RSI numerically found two real divergences, both fixed: Eclipse returned 100 for a flat series (the reference calls that undefined, NaN) and its Wilder smoothing stopped permanently after a missing bar instead of skipping it.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_report_export_figures.py"
+      ],
+      "testSymbol": "harness.quant.report_export",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_numeric_parity.py",
+          "symbol": "reference_rsi",
+          "checks": "the Wilder RSI the shadow extractor reads matches shadow_account/indicators.py::compute_rsi to 1e-12 on a 60-bar walk, including warmup NaN, flat-price NaN and missing-bar resumption"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_trade_learning.py",
+          "symbol": "harness.trade_learning",
+          "checks": "roundtrip mining, rule playback and the metrics they report"
+        }
+      ]
+    },
+    {
+      "module": "strategy_discovery",
+      "reference": "9 files / 2,678 lines",
+      "status": "equivalent",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/quant/discovery",
+        "Black-Eclipse-site/python/harness/quant/discovery/library.py"
+      ],
+      "note": "The facade/store existed, but there was NO arithmetic for whether evidence is still any good. Ported the reference's pure helpers with its constants: coverage anchored to month-END, the quality ladder (10 trades, 730 days), read-time decay with the exact threshold on the stricter side and an undatable window STALE fail-closed, the log breakeven fee with None instead of infinity, and the buffered borderline bands. The gating age is the EVIDENCE window's, never last_verified \u2014 a refresh of unchanged artifacts must not keep a dead row fresh.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_quant_discovery.py"
+      ],
+      "testSymbol": "harness.quant.discovery",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier19.py",
+          "symbol": "coverage_days_from_ranges",
+          "checks": "coverage anchored to the LAST day of the end month, widest range wins, malformed ranges contribute nothing, and the quality ladder (10 trades / 730 days) is trades-then-coverage"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier19.py",
+          "symbol": "classify_decay",
+          "checks": "decay from the evidence window's own age: fresh/aging/stale with the exact threshold on the STRICTER side, an undatable window stale fail-closed, age clamped at zero, and last_verified reported but never gating"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier19.py",
+          "symbol": "breakeven_fee_bps",
+          "checks": "the ln(1+r)/(2*trades*size)*1e4 identity, sizing scaling, and None (never infinity) for no trades, a <=-100% return, non-finite input or non-positive size"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier19.py",
+          "symbol": "is_borderline",
+          "checks": "the buffered borderline bands and the stable warning prefixes (insufficient-trades / short-coverage / cost-sensitive)"
+        }
+      ]
+    },
+    {
+      "module": "memory",
+      "reference": "8 files / 2,592 lines (lifecycle, decay, compression)",
+      "status": "ported",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/eclipse_memory",
+        "Black-Eclipse-site/python/harness/eclipse_memory/service.py"
+      ],
+      "note": "Storage, retention and retrieval existed, but NOTHING moved a memory's importance on feedback: quality was a static column. Ported the reference's reinforcement arithmetic (event deltas, 0.7x system discount, 0.5 per-session cap, [0,1] clamp) and its GC thresholds as pure functions in eclipse_memory/quality.py, so the decision is testable without a store.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_memory_lifecycle.py"
+      ],
+      "testSymbol": "harness.eclipse_memory",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier5.py",
+          "symbol": "REFERENCE_DELTAS",
+          "checks": "every event delta matches the reference for system and user sources at three starting qualities, the 0.7x system discount, the [0,1] clamp, and the 0.5 per-session cap refusing rather than overshooting"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier5.py",
+          "symbol": "gc_action",
+          "checks": "archive < 0.15, delete < 0.05 and only with enable_delete, never below 7 days"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_memory_lifecycle.py",
+          "symbol": "harness.eclipse_memory",
+          "checks": "retention/expiry sweep and the maintenance lease"
+        }
+      ]
+    },
+    {
+      "module": "scheduled_research",
+      "reference": "9 files / 2,455 lines (playbooks + verdict)",
+      "status": "equivalent",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/jobs",
+        "Black-Eclipse-site/python/harness/jobs/prompt_policy.py",
+        "Black-Eclipse-site/python/harness/automation"
+      ],
+      "note": "Playbooks/templates and the capability rule (G13) were equivalent, but there was NO two-phase proposal step for a destructive job change. Ported the reference's state machine (jobs/proposals.py: 15-minute TTL, one-way status, idempotent commit, system jobs untouchable at propose AND at commit) and WIRED it into automation/tools.py::_delete, so deleting a bot now returns a proposal and only a committed, single-use, bot-matched confirmation removes it. Two existing tests that deleted in one call were updated to the two-step flow rather than exempted from it.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_job_prompt_policy.py"
+      ],
+      "testSymbol": "from harness.jobs import prompt_policy",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier13.py",
+          "symbol": "TTL_MS",
+          "checks": "the 15-minute TTL, exactly-at-the-deadline commits, one second past it refuses and marks the record expired, and an id is srp_+32 hex validated before any path is built"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier13.py",
+          "symbol": "is_system_job",
+          "checks": "pending -> committed/discarded/expired is one-way, commit is idempotent, and a system job can never be created or cancelled by a proposal \u2014 including a hand-edited proposal re-checked at commit"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier13.py",
+          "symbol": "_run_delete",
+          "checks": "the WIRING: bot_delete now returns a 15-minute proposal, the confirming call deletes exactly once, a proposal cannot be reused, a proposal for another bot is refused, and a system job is never deleted"
+        }
+      ]
+    },
+    {
+      "module": "session",
+      "reference": "9 files / 2,252 lines (SSE bus + FTS5 search)",
+      "status": "equivalent",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/execution_log.py",
+        "Black-Eclipse-site/python/harness/event_system"
+      ],
+      "note": "One append-only log existed, but there was NO replay-by-id: a client that reconnected could only re-read everything. Ported the reference's three-branch replay (replay_after/replay) with the bounded buffer, and the branch that matters most is the third: an ID that is gone returns nothing unless replay_all, because silently restarting is how a client shows duplicate events.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_execution_log.py"
+      ],
+      "testSymbol": "harness.execution_log",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier3.py",
+          "symbol": "reference_replay",
+          "checks": "reconnect replay by last_event_id matches the reference on seven branch fixtures: no id yields nothing unless replayAll, a found id yields everything after it, an evicted id yields nothing rather than a silent restart"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_execution_log.py",
+          "symbol": "harness.execution_log",
+          "checks": "cross-plane sequence allocation and per-entity ordering"
+        }
+      ]
+    },
+    {
+      "module": "entities",
+      "reference": "4 files / 2,199 lines (non-bar asset spine)",
+      "status": "ported",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/entities",
+        "Black-Eclipse-site/python/harness/entities/cashflow.py",
+        "Black-Eclipse-site/docs/harness/non-bar-assets.md"
+      ],
+      "note": "The spine existed but was three kinds short of the reference and only checked the sign when the caller spelled the kind canonically. Fixed: all fifteen kinds, normalize_kind() on construction, valuation status DERIVED from the kind (a NAV can no longer be counted as income by passing is_valuation=False), and translate_flows() with per-flow-date rates, a refusal on a rate gap, and opt-in flagged stale reuse.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_entities_cashflow.py"
+      ],
+      "testSymbol": "harness.entities.cashflow",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier4.py",
+          "symbol": "REFERENCE_KINDS",
+          "checks": "the sign table is the reference's fifteen kinds, every kind enforces its direction both ways, kind labels normalize across spellings, and valuation kinds are excluded from total()"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier4.py",
+          "symbol": "translate_flows",
+          "checks": "translation uses each flow's own settlement date, a gap raises instead of forward-filling, stale reuse is opt-in and flagged, and provenance is kept on every translated flow"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_entities_cashflow.py",
+          "symbol": "harness.entities",
+          "checks": "XIRR/TVPI, holder-perspective refusals and the series totals"
+        }
+      ]
+    },
+    {
+      "module": "strategy_store",
+      "reference": "8 files / 1,719 lines (SDM artifacts + decay state machine)",
+      "status": "equivalent",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/quant/store.py",
+        "Black-Eclipse-site/python/harness/quant/strategy.py",
+        "Black-Eclipse-site/python/harness/quant/decay.py"
+      ],
+      "note": "Persistence and the strategy model were equivalent, but the DECAY STATE MACHINE was absent: Eclipse only had an alpha-decay-by-horizon helper. It was ported as harness/quant/decay.py after a behavioural comparison, because a path check could not tell a store apart from a state machine. The `equivalent` label here was too generous and is corrected by the behaviour column.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_quant_store.py"
+      ],
+      "testSymbol": "harness.quant.store",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_quant_store.py",
+          "symbol": "harness.quant.store",
+          "checks": "artifact persistence and trial/hypothesis linkage"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_quant_decay_parity.py",
+          "symbol": "harness.quant import decay",
+          "checks": "the reference's decay thresholds, >= boundaries, worst-of aggregation and 3/2/1/3 consecutive-reading transitions, value for value"
+        }
+      ]
+    },
+    {
+      "module": "scheduling",
+      "reference": "6 files / 1,395 lines (kernel + trigger grammar)",
+      "status": "equivalent",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/automation",
+        "Black-Eclipse-site/python/harness/automation/dispatcher.py"
+      ],
+      "note": "The cron matcher was already parity-grade and stronger than the reference in one way (it accepts a-b/N steps and refuses name aliases with named codes). What was missing is the DST policy: next_fire did wall-clock arithmetic with no zone awareness, so a daily 02:30 job could land inside the spring-forward gap and a fall-back hour could fire twice. Ported the reference's resolution (local_wall_time_to_epoch_ms / next_fire_epoch_ms).",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_automation_bot_parity.py"
+      ],
+      "testSymbol": "harness.automation",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier5.py",
+          "symbol": "local_wall_time_to_epoch_ms",
+          "checks": "a spring-forward gap resolves to None (skipped, not shifted), a fall-back fold resolves to its first occurrence, and an impossible date never fires within the reference's 6*366+1 day horizon"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_jobs_cron.py",
+          "symbol": "parse_cron",
+          "checks": "field parsing, the Vixie day-of-month/day-of-week OR rule and the refusal codes"
+        }
+      ]
+    },
+    {
+      "module": "goal",
+      "reference": "5 files / 1,311 lines (research goals)",
+      "status": "equivalent",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/goals",
+        "Black-Eclipse-site/python/harness/tasks/goal.py"
+      ],
+      "note": "There was NO guard at all: 'Buy 100 shares of NVDA now' was an accepted research goal. Ported the reference's pattern set and wired it into GoalRuntime.create, so the refusal happens at the creation seam (GoalError EXECUTION_OBJECTIVE) instead of mid-run. The two deliberate non-matches are preserved and tested: a bare asset noun is not a cue, and 'long-term'/'short-term' are horizons, not the long/short verbs.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_c4_goals.py"
+      ],
+      "testSymbol": "from harness.goals import",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier8.py",
+          "symbol": "reject_execution_objective",
+          "checks": "the reference's accept/reject table: thirteen order phrasings refused (verb+cue, opens-with-verb, verb+quantity, Chinese cues) and nine research phrasings accepted, including 'long-term'/'short-term' horizons that a word boundary alone would misfire on"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier8.py",
+          "symbol": "EXECUTION_OBJECTIVE",
+          "checks": "goal creation refuses an execution goal BEFORE dispatching a task"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_c4_goals.py",
+          "symbol": "harness.goals",
+          "checks": "goal creation, gating and completion"
+        }
+      ]
+    },
+    {
+      "module": "research_artifacts",
+      "reference": "7 files / 1,182 lines (immutable revisions + diffs)",
+      "status": "ported",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/artifacts",
+        "Black-Eclipse-site/python/harness/artifacts/compare.py"
+      ],
+      "note": "Revisions and a deterministic diff existed, but the byte comparison was checksum-only and there was NO evidence diff \u2014 the thing a research reader re-checks. Ported the reference's multiset evidence comparison (added/removed/unchangedCount/orderChanged) and wired it into the report and the Markdown. Content is still compared by checksum, not by line diff (stated).",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_artifact_compare.py"
+      ],
+      "testSymbol": "harness.artifacts",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier2.py",
+          "symbol": "reference_evidence",
+          "checks": "the evidence diff is a multiset comparison matching the reference on seven fixtures: duplicates counted, a pure reordering reported as orderChanged, and additions/removals in source order"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_artifact_compare.py",
+          "symbol": "harness.artifacts",
+          "checks": "metadata added/removed/changed, provenance scalars, size delta and the markdown rendering"
+        }
+      ]
+    },
+    {
+      "module": "governance",
+      "reference": "3 files / 1,141 lines (hash-chained ledger + methodology manifest)",
+      "status": "ported",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/governance/ledger.py",
+        "Black-Eclipse-site/python/harness/governance/manifest.py"
+      ],
+      "note": "The chained ledger and methodology manifest were ported earlier; comparing BEHAVIOUR found three capabilities missing and added them: a STRUCTURED break (verify_report with reason codes) instead of an exception sentence, refusal to EXTEND an already-broken chain (it only refused a torn tail before, so a valid suffix could sit on an edited earlier record), and an offline-verifiable export with an envelope hash. The manifest gained readable `extra` dimensions (provider/model) and verify_hash. Two FORMAT differences are stated, not 'fixed': our seq is 0-based and hashes carry no sha256: prefix, where the reference uses 1-based seq and prefixed digests.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_governance_ledger.py",
+        "Black-Eclipse-site/python/tests/test_governance_manifest.py"
+      ],
+      "testSymbol": "harness.governance",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier16.py",
+          "symbol": "verify_report",
+          "checks": "the structured break contract: ok/recordCount/firstBreak with the five reason codes (malformed_json, missing_fields, seq_gap, prev_hash_mismatch, hash_mismatch), which record broke, never raising"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier16.py",
+          "symbol": "append_refusing_a_broken_chain",
+          "checks": "a tampered history is REFUSED rather than extended with a valid-looking suffix, a sound chain still appends, and a torn tail is refused by the plain append"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier16.py",
+          "symbol": "verify_hash",
+          "checks": "the manifest's extra dimensions are readable and hashed, a hand edit is caught by re-derivation, timestamp/runId stay out of the digest, and the manifest round-trips through JSON with its hash intact"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier16.py",
+          "symbol": "export",
+          "checks": "the offline export carries every record, its verification and an envelope hash that changes when an exported record is edited"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_governance_ledger.py",
+          "symbol": "harness.governance",
+          "checks": "tamper detection (edit, delete, reorder, forged own-hash) and the torn-tail refusal"
+        }
+      ]
+    },
+    {
+      "module": "br_data",
+      "reference": "11 files / 1,033 lines (B3, CVM, BCB, Tesouro)",
+      "status": "ported",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/br_data",
+        "Black-Eclipse-site/python/harness/br_data/cotahist.py",
+        "Black-Eclipse-site/docs/harness/brazil-market-data.md"
+      ],
+      "note": "The parser and store were already parity-grade. What was missing is the symbol convention the reference uses to reach the right market: map_symbol() now strips .SA and chooses TPMERC 10 vs 20 by a trailing F that follows a fraction digit, verified value-for-value against the reference loader.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_br_cotahist.py"
+      ],
+      "testSymbol": "harness.br_data",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier2.py",
+          "symbol": "reference_map_symbol",
+          "checks": "PETR4.SA -> (PETR4, cash 10) and PETR4F.SA -> (PETR4F, odd lot 20) on twelve inputs, including the single-letter 'F' that must NOT be an odd lot"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_br_cotahist.py",
+          "symbol": "harness.br_data",
+          "checks": "fixed-width 245-char parsing, two implied decimals, lot factor"
+        }
+      ]
+    },
+    {
+      "module": "openbb_bridge",
+      "reference": "6 files / 864 lines (OpenBB Workspace custom agent)",
+      "status": "ported",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/openbb_bridge",
+        "Black-Eclipse-site/python/harness/routers/openbb.py",
+        "Black-Eclipse-site/docs/harness/openbb-bridge.md"
+      ],
+      "note": "Context items were injected; the request's WIDGETS were not. The reference renders them as INTENT and says plainly that their values are NOT attached \u2014 OpenBB does not put widget values in /v1/query, so a model shown 'widget: AAPL price' would answer from memory instead of fetching. Ported the block with the reference's numeric limits (10 widgets, 200-char values, 8 params each, '...and N more') and wired it after the context block, so Eclipse no longer ships that gap.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_openbb_bridge.py"
+      ],
+      "testSymbol": "harness.openbb_bridge",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier20.py",
+          "symbol": "WIDGET_VALUES_NOT_ATTACHED",
+          "checks": "the widget block states that values are NOT attached and to fetch them rather than guess, carries names/source/params as intent, and is fenced"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier20.py",
+          "symbol": "MAX_WIDGETS",
+          "checks": "the reference's numeric limits: 10 widgets with an '...and N more' line, a 200-char value clip, 8 parameters per widget, an unnamed widget labelled not dropped, and junk in the array tolerated"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier20.py",
+          "symbol": "test_attached_context_still_comes_through_alongside_widgets",
+          "checks": "context items and the widget block coexist, context first"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_openbb_bridge.py",
+          "symbol": "harness.openbb_bridge",
+          "checks": "the pre-existing bridge contract (history replay, fencing, key names)"
+        }
+      ]
+    },
+    {
+      "module": "research_lab",
+      "reference": "6 files / 736 lines (cost sensitivity + frozen walk-forward)",
+      "status": "equivalent",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/quant/walkforward.py",
+        "Black-Eclipse-site/python/harness/quant/robustness.py"
+      ],
+      "note": "Select-on-train then freeze was equivalent, and a cost-sensitivity grid existed. The FOLD ARITHMETIC differed: windows looped to the end of the timeline with no reserved holdout, so a verdict could be read from bars selection had seen. holdout_bars/max_windows were added with the reference's formula and defaults that preserve the old fold set (holdout_bars=0).",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_quant_research.py"
+      ],
+      "testSymbol": "harness.quant.walkforward",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_quant_walkforward_parity.py",
+          "symbol": "boundaries",
+          "checks": "fold test-starts equal the reference's range(train, n-holdout-test+1, test)[:max_folds] on five shared fixtures, and a reserved holdout is never inside a test window"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_quant_research.py",
+          "symbol": "WalkForwardEngine",
+          "checks": "in-sample/out-of-sample aggregation and IS/OOS divergence"
+        }
+      ]
+    },
+    {
+      "module": "hypotheses",
+      "reference": "3 files / 635 lines (durable hypothesis registry)",
+      "status": "ported",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/quant/store.py",
+        "Black-Eclipse-site/python/harness/quant/discovery/hypotheses.py"
+      ],
+      "note": "Pre-registration (statement + acceptance rule before a trial) existed in quant/store.py, which is the methodological core. What was missing is the reference registry CONTRACT: a DERIVED id (hyp_+12 hex of title|created_at, so a re-import is idempotent), a closed status vocabulary, and a ranked search whose limit=0 really returns zero rather than a floor of one. Ported as a pure module (harness/hypotheses/registry.py); storage stays with the existing store.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_quant_desk.py"
+      ],
+      "testSymbol": "harness.quant.store",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier18.py",
+          "symbol": "hypothesis_id",
+          "checks": "the id is hyp_+12 hex of sha256('title|created_at'), stable across calls, case/space-insensitive in the title, different per timestamp, and gets _2/_3 only on a real collision"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier18.py",
+          "symbol": "validate_status",
+          "checks": "the five-status vocabulary, lower-casing, and a refusal that names every allowed status"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier18.py",
+          "symbol": "search",
+          "checks": "token-overlap ranking with recency tie-break, status filtering, links included in the haystack, limit clamped to 0..100 where 0 means ZERO results, and CJK titles searchable per character"
+        }
+      ]
+    },
+    {
+      "module": "core",
+      "reference": "3 files / 693 lines (subprocess backtest runner + run state)",
+      "status": "equivalent",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/quant/engine.py",
+        "Black-Eclipse-site/python/harness/quant/store.py"
+      ],
+      "note": "Eclipse runs declarative strategies in-process (no generated-code subprocess by design), so the reference's subprocess runner is a stated non-goal. But the RUN STATE contract was missing: three terminal statuses where CANCELLED is distinct from FAILED (a user stop is not an outage \u2014 conflating them made the reference's reports contradict its own chat history), failed requiring a reason, success forbidding one, and a flush+fsync+rename write so a crash cannot leave a truncated state file that reads as 'still running'.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_quant_runner.py"
+      ],
+      "testSymbol": "harness.quant",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier23.py",
+          "symbol": "state_payload",
+          "checks": "three terminal statuses with CANCELLED distinct from FAILED, failed requiring a reason, success forbidding one, the default cancel reason, and an unknown status refused with the vocabulary"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier23.py",
+          "symbol": "write_state",
+          "checks": "the state write is flush+fsync+rename: readable JSON, no temporary file survives, and a later state replaces an earlier one"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_quant_runner.py",
+          "symbol": "harness.quant",
+          "checks": "the pre-existing in-process run path"
+        }
+      ]
+    },
+    {
+      "module": "channelsui",
+      "reference": "8 files / 366 lines (WebUI channel adapters)",
+      "status": "not_applicable",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/channels/registry.py"
+      ],
+      "note": "The adapters exist to embed chat in Vibe's WebUI. Eclipse is a desktop app whose channel surface is outbound delivery, so there is no WebUI to embed into."
+    },
+    {
+      "module": "pixel_agents",
+      "reference": "3 files / 315 lines (manual research task board)",
+      "status": "equivalent",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/spawn/board.py"
+      ],
+      "note": "Eclipse's board (spawn/board.py) is a generic key/value board \u2014 write/read/search \u2014 with no notion of a TASK that is assigned, completed, and whose load is derived. Ported the reference's office rules as pure functions (spawn/office_rules.py): a completed task cannot be reassigned, a re-completion PRESERVES the first result (a retry must not rewrite the answer), and load is derived from the tasks rather than stored. The SQLite layer stays out of scope and is not claimed.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_c5_blackboard.py"
+      ],
+      "testSymbol": "from harness.spawn import BoardStore",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier21.py",
+          "symbol": "assign",
+          "checks": "assignment rules: explicit agent, auto-assign by role==workstream, an actionable refusal when nothing matches, an unknown id refused, and a COMPLETED task cannot be assigned \u2014 with the input task left unmutated"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier21.py",
+          "symbol": "complete",
+          "checks": "completion records status+result, a SECOND completion PRESERVES the first result, and an over-long or empty result is refused rather than truncated silently"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier21.py",
+          "symbol": "dashboard",
+          "checks": "load DERIVED from assigned-unfinished tasks with busy/idle, counts consistent with each other, labelled manual_planning, inputs unmutated"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier21.py",
+          "symbol": "PRIORITIES",
+          "checks": "the reference's vocabularies (low/normal/high, Operator/Senior/Lead) and field limits (100/200/2000)"
+        }
+      ]
+    },
+    {
+      "module": "security",
+      "reference": "5 files / 248 lines (injection scanner + workspace access)",
+      "status": "equivalent",
+      "eclipse": [
+        "Black-Eclipse-site/python/harness/security",
+        "Black-Eclipse-site/python/harness/security/floor.py"
+      ],
+      "note": "No shared scanner existed: injection warnings lived in three unrelated places and external text was never defanged against chat-template tokens. Ported the reference's scanner (five rules with severities, one finding per rule, never rewriting because of a finding) plus neutralize_special_tokens, which covers the AI/DeepSeek fullwidth-bar family, Llama [INST]/<<SYS>>/<s> and Gemma turn tokens and is wired into browser.policy.wrap_untrusted \u2014 the single choke point every browser observation passes through.",
+      "tests": [
+        "Black-Eclipse-site/python/tests/test_security_core.py"
+      ],
+      "testSymbol": "harness.security",
+      "behaviour": [
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier12.py",
+          "symbol": "scan_prompt_injection",
+          "checks": "the reference's five rules fire on their own cases (10 positives), ordinary research prose produces none (6 negatives), at most one finding per rule in a stable order, and the match excerpt is single-line and bounded at 120 chars"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier12.py",
+          "symbol": "neutralize_special_tokens",
+          "checks": "all twenty chat-template control tokens are defanged and visually identical, the transform is idempotent, clean text is returned as the same object, a 10 KB pseudo-token cannot backtrack, and the payload helper appends warnings with dotted field paths"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_vibe_parity_tier12.py",
+          "symbol": "wrap_untrusted",
+          "checks": "the browser's untrusted-content choke point defangs control tokens, so a page cannot forge a role boundary"
+        },
+        {
+          "test": "Black-Eclipse-site/python/tests/test_browser_hardening.py",
+          "symbol": "harness.browser",
+          "checks": "the browser's existing injection boundary and domain policy"
+        }
+      ]
+    }
+  ],
+  "gaps": [
+    {
+      "id": "G1",
+      "item": "deferred tool exposure",
+      "status": "done",
+      "where": "Black-Eclipse-site/python/harness/tool_schema_load.py"
+    },
+    {
+      "id": "G2",
+      "item": "context collapse + iterative summary",
+      "status": "done",
+      "where": "Black-Eclipse-site/python/harness/compaction.py"
+    },
+    {
+      "id": "G3",
+      "item": "router probe budget",
+      "status": "done",
+      "where": "Black-Eclipse-site/python/harness/market/router.py"
+    },
+    {
+      "id": "G4",
+      "item": "capability matrix + drift gate",
+      "status": "done",
+      "where": "Black-Eclipse-site/python/harness/trade/capability_matrix.py"
+    },
+    {
+      "id": "G5",
+      "item": "endpoint DNS pinning (validation)",
+      "status": "done",
+      "where": "Black-Eclipse-site/python/harness/model_runtime/endpoint_guard.py"
+    },
+    {
+      "id": "G6",
+      "item": "market execution rules",
+      "status": "done",
+      "where": "Black-Eclipse-site/python/harness/quant/market_rules.py"
+    },
+    {
+      "id": "G7",
+      "item": "alpha zoo",
+      "status": "done",
+      "where": "Black-Eclipse-site/python/harness/factors/zoo"
+    },
+    {
+      "id": "G8",
+      "item": "strict bench (random control + OOS)",
+      "status": "done",
+      "where": "Black-Eclipse-site/python/harness/factors/strict_bench.py"
+    },
+    {
+      "id": "G9",
+      "item": "team preset library",
+      "status": "done",
+      "where": "Black-Eclipse-site/python/harness/team/preset_library.py"
+    },
+    {
+      "id": "G10",
+      "item": "result paging",
+      "status": "done",
+      "where": "Black-Eclipse-site/python/harness/tool_outputs.py"
+    },
+    {
+      "id": "G11",
+      "item": "memory lifecycle",
+      "status": "done",
+      "where": "Black-Eclipse-site/python/harness/eclipse_memory/service.py"
+    },
+    {
+      "id": "G12",
+      "item": "artifact revision diff",
+      "status": "done",
+      "where": "Black-Eclipse-site/python/harness/artifacts/compare.py"
+    },
+    {
+      "id": "G13",
+      "item": "scheduled-prompt capability rule",
+      "status": "done",
+      "where": "Black-Eclipse-site/python/harness/jobs/prompt_policy.py"
+    },
+    {
+      "id": "G14",
+      "item": "non-bar entities + Brazil data + OpenBB bridge",
+      "status": "done",
+      "where": "Black-Eclipse-site/python/harness/entities"
+    }
+  ]
+}

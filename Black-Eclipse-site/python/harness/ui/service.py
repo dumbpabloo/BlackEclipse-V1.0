@@ -112,6 +112,8 @@ class UiService:
         # runtime (never a second loop). `tasks` is the shared TaskManager; None
         # simply means engineering is unavailable (the tools report it honestly).
         self.engineering = UiEngineering(self, tasks)
+        self._dynamic_panels: dict[str, Any] = {}
+        self._dynamic_meta: dict[str, dict[str, Any]] = {}
         self._hydrate_registered_components()
 
     def _hydrate_registered_components(self) -> None:
@@ -124,6 +126,42 @@ class UiService:
     @property
     def catalog(self) -> UiCatalog:
         return self._catalog
+
+    # -- kernel/plugin dynamic panels ----------------------------------------
+
+    def register_dynamic_panel(
+        self, panel_id: str, handler: Any, *, meta: Optional[dict[str, Any]] = None,
+    ) -> Any:
+        if not panel_id or not callable(handler):
+            raise UiError("UI_DYNAMIC_PANEL_INVALID", "a dynamic panel needs an id and a handler")
+        previous = self._dynamic_panels.get(panel_id)
+        previous_meta = self._dynamic_meta.get(panel_id)
+        self._dynamic_panels[panel_id] = handler
+        self._dynamic_meta[panel_id] = dict(meta or {})
+
+        def dispose() -> None:
+            if self._dynamic_panels.get(panel_id) is handler:
+                if previous is None:
+                    self._dynamic_panels.pop(panel_id, None)
+                    self._dynamic_meta.pop(panel_id, None)
+                else:
+                    self._dynamic_panels[panel_id] = previous
+                    self._dynamic_meta[panel_id] = previous_meta or {}
+
+        return dispose
+
+    def dynamic_panels(self) -> list[dict[str, Any]]:
+        return [
+            {"id": panel_id, **self._dynamic_meta.get(panel_id, {})}
+            for panel_id in self._dynamic_panels
+        ]
+
+    def render_dynamic_panel(self, panel_id: str, ctx: Any = None) -> dict[str, Any]:
+        handler = self._dynamic_panels.get(panel_id)
+        if handler is None:
+            raise UiError("UI_DYNAMIC_PANEL_NOT_FOUND", f"unknown dynamic panel {panel_id!r}")
+        value = handler(ctx) if ctx is not None else handler()
+        return value if isinstance(value, dict) else {"type": "markdown", "text": str(value)}
 
     # ── catalog ───────────────────────────────────────────────────────────────
 

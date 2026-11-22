@@ -36,8 +36,8 @@ const HOOKS_DIR = path.join(ROOT, ".githooks");
 // The canonical identity for this repository. The noreply address is derived
 // from the GitHub account id, so it is inherently linked to the account and
 // always counts — unlike a personal email that may be unverified.
-const CANONICAL_NAME = "desimarijuana";
-const CANONICAL_EMAIL = "121116805+desimarijuana@users.noreply.github.com";
+const CANONICAL_NAME = "dumbpabloo";
+const CANONICAL_EMAIL = "121116805+dumbpabloo@users.noreply.github.com";
 // Addresses known to produce uncredited commits. Replaced automatically.
 // Keep personal addresses OUT of the repository: supply them locally instead,
 // comma-separated, e.g. GIT_COMMIT_BAD_EMAILS="old@example.com,other@example.com".

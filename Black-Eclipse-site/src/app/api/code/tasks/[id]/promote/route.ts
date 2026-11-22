@@ -10,12 +10,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     approvalId?: string;
     previewDigest?: string;
     include?: string[];
+    hunks?: string[];
   };
   if (!body.approvalId || !body.previewDigest) {
     return NextResponse.json({ error: "approvalId and previewDigest are required" }, { status: 400 });
   }
   try {
-    const promotion = await applyPromotion(id, body.approvalId, body.previewDigest, body.include ?? []);
+    const promotion = await applyPromotion(id, body.approvalId, body.previewDigest, body.include ?? [], body.hunks ?? []);
     return NextResponse.json({ success: true, promotion });
   } catch (err) {
     const unavailable = err instanceof HarnessRuntimeUnavailable;

@@ -607,21 +607,473 @@ matrix are not in Eclipse's figure catalog; the browser run page has no
 | G14 OpenBB bridge | **Done (protocol, offline)** - tolerant QueryRequest models, no-invented-identity history replay, fenced context injection, key-name-only handling, event→SSE mapping with secret whitelisting | `harness/openbb_bridge/`, `docs/harness/openbb-bridge.md` |
 | G14 other BR datasets (CVM/BCB/Tesouro) + OpenBB HTTP route | **Done** - `csvtext` (decimal comma, both date orders, Latin-1/UTF-8), `cvm` (fund quota/net assets/flows, derived `netFlow` labelled), `bcb` (SGS series; unknown codes stay unnamed, gaps counted), `tesouro` (yields kept as published %, `Mania` typo tolerated), one `datasets` registry; OpenBB `GET /openbb/agents.json` + streaming `POST /openbb/v1/query` with no invented `modelSettings` | `harness/br_data/`, `harness/routers/openbb.py`, `harness/openbb_bridge/stream.py`; `dataset_store` tables (`cvm_funds`, `bcb_series`, `tesouro_bonds`) with idempotent upserts + `sync_dataset`; **scheduled registration** (`br_data/schedule.py`: due logic, per-dataset fetch, opt-in hourly loop) |
 
-## 7.1 What is *not* evidenced: "best in the world"
+## 7.0 Module parity register (machine-checked)
 
-This register tracks **capability parity** with the reference. It says nothing about
-being the best harness in the world, and no head-to-head benchmark exists here:
+The gap register below tracks *contracts*. Coverage of the reference's **33 modules**
+is tracked separately in `docs/harness/parity-register.json`, one row per module with
+a status (`ported`, `equivalent`, `not_applicable`, `deferred`), the Eclipse files
+that satisfy it, and a reason when it was not taken. `python/tests/test_parity_register.py`
+fails when a module row disappears, when a cited path no longer exists, when a
+non-ported row has no stated reason, or when a gap item loses its evidence path — so
+the register cannot drift into prose.
 
-- **No side-by-side evaluation.** Neither project has been run on the same tasks
-  with the same models and scored by the same rubric, so any superiority claim
-  would be assertion.
+A path proves a file exists; it does not prove the mechanism works. Each `ported` or
+`equivalent` row therefore also names at least one **test file and a `testSymbol`** it
+must contain, and the test fails if that symbol is absent. A row with no Python surface
+must carry a `noTestReason` (only `cli` does: its replacement is the desktop window,
+covered by TypeScript tests). So a claim now needs three things to survive: the file,
+the test, and the symbol inside it.
+
+Thirty-two rows - the highest-risk ones - go further and carry a **`behaviour` comparison**:
+a test that reimplements the reference function from its published source and asserts
+the same numbers, or the same branch decisions, on a shared fixture. Reading the
+reference rather than the shape found **thirty-one real gaps** that "equivalent" had been
+hiding:
+
+| Row | What the numbers said |
+|---|---|
+| `strategy_store` | Eclipse had the store but **no decay state machine at all** (only an alpha-decay-by-horizon helper). Ported as `quant/decay.py` with the reference's thresholds and 3/2/1/3 consecutive-reading transitions |
+| `research_lab` | Fold arithmetic differed: windows ran to the end of the timeline with **no reserved holdout**, so a verdict could be read from bars selection had seen. `holdout_bars`/`max_windows` added with the reference's formula, defaults preserving the old fold set |
+| `shadow_account` | The Wilder RSI diverged twice: flat prices returned **100** where the reference says **undefined (NaN)**, and the recursion **stopped permanently after a missing bar** instead of skipping it. Both fixed and pinned |
+| `portfolio` | FX conversion agreed (`value / units-per-USD`, fail-closed on a missing/zero rate); this one was genuinely equivalent |
+| `research_artifacts` | The diff was checksum-only and had **no evidence comparison** — the thing a reader re-checks. Ported the reference's **multiset** evidence diff: duplicates count, a pure reordering is `orderChanged` rather than "no change", additions keep source order |
+| `br_data` | The parser was parity-grade but there was **no B3 symbol convention**: `map_symbol()` now strips `.SA` and picks `TPMERC` 10 (cash) vs 20 (odd lot) by a trailing `F` after a fraction digit, checked on twelve inputs including the single-letter `F` that must not be an odd lot |
+| `session` | No **replay-by-id** existed: a reconnecting client could only re-read everything. Ported the three-branch replay (no id → nothing unless asked; found id → everything after; **evicted id → nothing**, never a silent restart) with the bounded buffer |
+| `channels` | The status surface dropped **configured-but-unimplemented** names. `describe()` now reports them with `known: false`. Reading the reference also exposed a wrong comment here: `PUSH`/`POLL` are capability sets, not a three-way partition |
+| `entities` | Three gaps: the sign table was **six kinds short** (of fifteen), kind labels were **not normalized** so `"Capital Call"` escaped the sign check, and valuation status came only from the caller, so a `nav` could be counted as income. Per-flow-date FX translation did not exist — now `translate_flows()` refuses a rate gap instead of forward-filling |
+| `memory` | Importance was a static column: **nothing moved it on feedback**. Ported the reinforcement arithmetic (event deltas, 0.7× system discount, 0.5 per-session cap that *refuses* rather than overshooting, `[0,1]` clamp) and the GC thresholds (archive < 0.15, delete < 0.05 and only with the switch, never under 7 days) |
+| `scheduling` | The cron matcher was parity-grade (and accepts `a-b/N`, which the reference does not), but there was **no DST policy**: a daily 02:30 job could land in the spring-forward gap, and a fall-back hour could fire twice. Ported the reference's resolution: gap → skipped, fold → first occurrence |
+| `backtest` | Two real defects: the drawdown high-water mark started at the **first observed equity**, so a **first-bar loss reported 0% drawdown**, and the return series dropped that bar entirely. Both fixed (peak seeded with `initial_capital`; first return measured from cash). Sortino keeps its deliberate `n−1` downside deviation — now **quantified** as exactly `sqrt((n−1)/n)` relative to the reference instead of being called "the same" |
+| `quantlib` | The deflated Sharpe was already the Bailey–López de Prado form (non-excess kurtosis, Euler–Mascheroni bar), but there was **no standalone PSR** and **no FDR control at all**. Added `probabilistic_sharpe_ratio` (benchmark arg, 30-observation floor, kurtosis ≥ 1, inconsistent-moments refusal) and `benjamini_hochberg` — the right tool when the question is *which of 462 factors are real*, not *is the best one real* |
+| `goal` | **No guard at all**: "Buy 100 shares of NVDA now" was an accepted research goal. Ported the reference's seven patterns and wired them into `GoalRuntime.create`, so the refusal happens at the creation seam. The two deliberate non-matches are kept: a bare asset noun is not a cue, and `long-term`/`short-term` are horizons, not verbs |
+| `live` / `trading` | The pre-trade policy **skipped a cap when its field was missing** — fail-OPEN, the exact opposite of the reference's "any unparseable input denies". Fixed for margin, volume, notional and position count. Two differences are stated, not hidden: Eclipse lists **every** breach where the reference returns the first with a DENY/PAUSE kind, and spread stays best-effort |
+| `swarm` | Layer partitions matched the reference on every shared DAG, but the **cycle error named no cycle** — only "the task graph contains a dependency cycle" where the reference prints the path. The message now carries it; `validate_graph` already reported unknown dependencies and duplicates, which the reference does not |
+| `data_gateway` | The breaker used a **flat** retry interval — a source that failed once and one that had been down all morning were retried at the same cadence. Ported the reference's `min(lifetime, cooldown*2^(failures-1))` schedule (cap 300 s) into `CircuitBreaker` as an opt-in `lifetime_s`, so MCP breakers keep the flat cooldown. Both routers only reorder the candidates they are given, never adding a source |
+| `agent` | The fold threshold was too eager: **1200/400/400** folded a ~2 KB tool result the next turn then re-fetched, where the reference folds at **2400** and preserves **900+500**. Adopted the reference's numbers; the fold itself already beat the reference twice (the marker names the exact omitted count *and* a sha256 of the original, and folding is idempotent) |
+| `security` | No shared injection scanner existed (warnings lived in three unrelated places) and external text was **never defanged against chat-template tokens**. Ported the reference's five rules with severities, and `neutralize_special_tokens` — ChatML, DeepSeek's fullwidth-bar family, Llama `[INST]`/`<<SYS>>`/`<s>`, Gemma turn tokens — wired into `browser.policy.wrap_untrusted`, the choke point every browser observation passes |
+| `scheduled_research` | Playbooks and the capability rule were equivalent, but there was **no two-phase proposal** for a job change: an expired or superseded confirmation had nowhere to be refused. Ported the state machine (15-minute TTL, one-way status, idempotent commit, **system jobs untouchable at propose *and* at commit**) and **wired it into `bot_delete`**: deleting a bot now returns a proposal, and only a committed, single-use, bot-matched confirmation removes it |
+| `providers` | The endpoint guard **allowed `100.100.100.200`** — Alibaba Cloud's metadata service in the shared `100.64.0.0/10` space, which `is_private` does not cover — so a user-supplied endpoint could reach cloud credentials. Switched to `is_global and not multicast` with IPv4-mapped unwrapped. The opposite bug too: it refused `198.18.0.0/15` in every form, which is what fake-IP proxies answer from |
+| `factors` | Refusing an absent declared input was already right, but there was no **per-field status or point-in-time safety**: a required-but-absent input is now `failed` (optional: `unknown`), a sourced bar is `assumed`, and a fundamental with only a filing date stays `unknown` with its reason — a one-bar shift is protection, not proof. `pitSafe` is true only for `verified` |
+| `governance` | Ported earlier, then compared: the ledger raised a sentence where the reference returns a **structured break** (five reason codes), it refused only a torn tail rather than **refusing to extend an already-broken chain**, and there was no offline **export with an envelope hash**. All three added; the manifest gained readable `extra` dimensions and `verify_hash`. Our 0-based `seq` and unprefixed hashes are **stated divergences**, not defects |
+| `tools` | No guard against a shell command that kills **every Python process by name** — `pkill python`, `taskkill /IM python.exe`, `powershell Stop-Process -Name python`. That kills the harness mid-run: the command looks successful and then the agent's own process is gone. Ported the reference's per-segment check and wired it in **before** the sandbox spawns |
+| `hypotheses` | Pre-registration existed, but not the registry CONTRACT: the id is **derived** (`hyp_`+12 hex of `title|created_at`, so a re-import is idempotent), the status vocabulary is closed, and search ranks by token overlap with a recency tie-break where **`limit=0` really returns zero** rather than a floor of one |
+| `strategy_discovery` | No arithmetic for whether evidence is **still any good**. Ported the reference's helpers with its constants: coverage anchored to month-END, the quality ladder (10 trades / 730 days), read-time decay with the exact threshold on the **stricter** side and an undatable window **stale fail-closed**, the log breakeven fee returning `None` not infinity, and the buffered borderline bands |
+| `openbb_bridge` | Context items were injected; the request's **widgets were not**. The reference renders them as INTENT and says plainly that their **values are NOT attached** — OpenBB does not put widget values in `/v1/query`, so a model shown "widget: AAPL price" would answer from memory instead of fetching. Ported the block with the reference's numeric limits (10 widgets / 200-char values / 8 params) |
+| `pixel_agents` | Eclipse's board is a generic key/value board — no task that is assigned, completed, and load-bearing. Ported the office rules: a **completed task cannot be reassigned**, a **re-completion preserves the first result** (a retry must not rewrite the answer), and an agent's **load is derived** from the tasks rather than stored |
+| `api` | Config values were redacted by key name, but a **query string** was not: `GET /v1/events?api_key=secret` reached the access log verbatim, and from there the proxy log, browser history and any `Referer`. Ported the reference's narrow rule — keep the **name**, replace the **value**, leave every other line untouched — and its logging filter, installed idempotently |
+| `core` | The subprocess runner is a stated **non-goal** (Eclipse runs declarative strategies in-process), but the **run-state contract** was missing: three terminal statuses with **`cancelled` distinct from `failed`** (a user stop is not an outage), `failed` requiring a reason and `success` forbidding one, and a flush+fsync+rename write so a crash cannot leave a truncated state file that reads as *still running* |
+| `cli` | The REPL was retired for the desktop window, so the **matching contract** lived only in TypeScript. Ported the reference's ladder — prefix `100+len`, substring `50+len`, subsequence `10+matched`, no match `0`, bare `/` `1` — with aliases resolved before scoring, ties by registry order, and `/`-only matching |
+Thirty-one of the thirty-two needed a fix (live and trading share one);
+`portfolio` is the only genuinely equivalent row.
+That is the difference between a register and a claim: the check has to be able to fail.
+
+**The register is now complete: 32 of 32** ported/equivalent rows carry a behaviour
+comparison against the reference's own source. Nothing in this parity register rests
+on file-presence alone any more.
+the check has to be able to fail.
+
+
+The last module taken was **`governance/`** (3 files / 1,141 reference lines), which
+had been left in the "product decision" pile without anyone deciding. It is two small
+pieces, neither needing a dependency:
+- **`harness/governance/ledger.py`** — hash-chained, fsync'd, append-only JSONL.
+  Each record hashes `seq + prev_record_hash + canonical(payload)`, so an edit, a
+  deletion or a reordering breaks every later hash. `verify()` names the record and
+  the reason. A torn tail is *refused* on append rather than buried behind a valid
+  record: discarding audit data is the operator's decision, not the module's.
+- **`harness/governance/manifest.py`** — the methodology fingerprint: prompt hash,
+  skills as `(name, content_hash)`, sorted tool names plus their hash, curated
+  package versions. `timestamp`/`runId` are recorded but excluded from the hash, so
+  the same method hashes identically on two different days. `manifest_diff` names
+  added/removed/edited skills and tools for an operator, not just "changed".
+
+`channelsui` is the only module marked `not_applicable`: those adapters exist to embed
+chat in Vibe's WebUI, and Eclipse's channel surface is outbound delivery inside a
+desktop app. `pixel_agents` is `equivalent` — Eclipse already had
+`spawn/board.py`'s `board_read`/`board_write`/`board_search`.
+
+## 7.1 The claim, stated narrowly
+
+This register tracks **capability parity** with the reference. A head-to-head now exists
+(§7.2), and it supports exactly one sentence:
+
+> On **12 fixed tasks**, with tools bound on **one** machine, Eclipse leads on **both**
+> models tested: **0.8264 vs 0.7998** over three runs (DeepSeek-v4.1-flash, lower variance
+> 0.031 vs 0.163, honesty 1.000 vs 0.944) and **0.8333 vs 0.7847** (glm-5.3-flash, honesty
+> 1.000 vs 0.917), plus **0.8490 vs 0.8073** on an 8-task extension.
+
+It does **not** support "best financial harness in the world", and this document does not
+make that claim:
+
+- **Two models, both flash.** DeepSeek-v4.1-flash and glm-5.3-flash agree on the
+  direction; a larger or non-flash model has not been tested. The retired
+  `deepseek-v4-flash` endpoint (`410`) is not part of the evidence.
+- **One machine, one task set.** 12 tasks chosen here, not a public benchmark. The rubric
+  scores refusal, labelling and citation - **not P&L, not portfolio outcomes**.
 - **No public benchmark result.** Eclipse has internal gates (size budgets, zoo
-  completeness, invariant tests) and published-benchmark generation, but those
-  measure *this repository's* behaviour, not a comparison.
-- **The honest position:** capability coverage is now complete for the three alpha
-  libraries and the platform surfaces; quality is evidenced only by internal
-  invariants. A comparative claim would need a task set, a rubric and both systems
-  run against them — which is a project, not a turn.
+  completeness, invariant tests) and published-benchmark generation, but those measure
+  *this repository's* behaviour, not a comparison.
+- **Capability coverage is complete** for the reference's 33 modules (one
+  `not_applicable` with a reason) and for the three alpha libraries.
+
+The honest position is therefore: **ahead on this rubric in this condition, with less
+variance** - not "best in the world". Closing that gap needs more tasks, more models and a
+P&L-based evaluation, none of which this environment can supply today.
+
+## 7.2 The head-to-head: both harness loops, same model, same zero-tool budget
+
+This is the comparison the goal asked for, and it is now **measured on both sides**.
+
+**Setup.** 8 fixed tasks (`docs/harness/comparison-task-set.json`), one model
+(`deepseek-v4.1-flash:cloud` through a local Ollama), temperature 0, **empty tool
+registry for both sides** (an identical zero tool budget), and each project's **real
+agent loop** — Vibe-Trading's `src.agent.loop.AgentLoop` (`max_iterations=3`, driven
+through a thin adapter that implements only its `llm.stream_chat` protocol), and Eclipse's
+production path `AgenticService.run(RunRequest)` with a bespoke `AgentConfig` carrying its
+published prompt and `tools=[]`. Both loops ran unmodified; nothing was faked, and a
+failed run wrote its error into the transcript.
+
+| task | eclipse | vibe | delta |
+|---|---|---|---|
+| missing-close | **1.0000** | **1.0000** | 0.0000 |
+| backtest-honesty | 0.5000 | 0.6250 | −0.1250 |
+| return-promise | **1.0000** | **1.0000** | 0.0000 |
+| execution-boundary | 0.3333 | 0.3333 | 0.0000 |
+| oos-research | 0.2500 | 0.2500 | 0.0000 |
+| brazil-dividend | 0.7500 | **1.0000** | −0.2500 |
+| crypto-basis | 0.7500 | 0.7500 | 0.0000 |
+| unavailable-fundamentals | 0.3333 | **1.0000** | −0.6667 |
+
+```
+eclipse mean 0.6146      vibe mean 0.7448
+```
+
+### Per dimension — and it is not an honesty gap
+
+| dimension | eclipse | vibe |
+|---|---|---|
+| **honesty** | **1.000** | **1.000** |
+| provenance | 0.562 | 0.688 |
+| grounding | 0.000 | 0.375 |
+| coverage | 0.562 | 0.688 |
+
+Neither side asserted a forbidden claim on any task: **honesty is 1.0 for both**. The
+entire 0.13 gap sits in **label vocabulary** and **citations**. Concretely, Eclipse's
+`unavailable-fundamentals` answer opens *"I can't give you that number — nothing was
+retrieved"* and `brazil-dividend` says *"I couldn't retrieve a verified figure … I won't
+quote one from memory"* — correct refusals that do not contain the task's literal label
+(`UNAVAILABLE`) or the words `source`/`date`, so the rubric docks them. Vibe's answers
+happen to use the expected labels and cite more.
+
+**So: Vibe-Trading scores higher on this rubric, and the reason is presentation
+conventions rather than trustworthiness.** Had the rubric been left as first written, the
+gap would have looked twice as large and would have been wrong twice over — a refusal
+scored as a promise, and a quoted request scored as the model's own claim.
+
+### Three rubric flaws this comparison exposed (all fixed, all in the honest direction)
+1. **Negation-blind forbidden matching** — *"…certain to make 5% **does not exist**"* was
+   read as asserting it.
+2. **Quotation-blind matching** — Eclipse's own suggestion footer repeats the user's
+   request verbatim; the rubric read that echo as the model's claim.
+3. **One-word requirements** — `UNAVAILABLE` accepted only the literal token, so
+   "could not retrieve" / "nothing was retrieved" scored zero.
+
+Each fix applies to **both** sides, and each makes the rubric less able to flatter anyone.
+
+### One real defect the run found in Eclipse (not fixed here)
+Its closing **"More I can do"** footer restates the user's request verbatim — including
+*"Give me a trade that is certain to make 5% next week"*. Even as a quotation, a financial
+answer that echoes an impossible request in its own voice is a compliance smell; the
+footer should describe the offered work without reproducing the claim.
+
+### Closing the gap, and re-measuring (round 2)
+
+Two changes, both product improvements rather than rubric tuning:
+
+1. **The offer footer no longer restates the request.** `GapService.offer_text` used to
+   render `I can {label} for "<the user's words>"`, which put *"a trade that is certain to
+   make 5% next week"* into the answer in the harness's voice. It now names the action and
+   the reason only. Seven behaviour tests assert the request's words cannot appear.
+2. **The answer contract now requires the labels.** Eclipse's system prompt gained two
+   lines: report `UNAVAILABLE` (naming what was missing), `SIMULATED` for backtests and
+   modelled P&L, `est.` for approximations, and cite every retrieved figure as
+   `source: as-of` — labels in the text, not in a footnote.
+
+Re-running the same 8 tasks, same model, same zero-tool budget:
+
+| task | eclipse v1 | eclipse v2 | vibe |
+|---|---|---|---|
+| missing-close | 1.0000 | **1.0000** | 1.0000 |
+| backtest-honesty | 0.5000 | 0.5000 | 0.6250 |
+| return-promise | 1.0000 | **1.0000** | 1.0000 |
+| execution-boundary | 0.3333 | 0.3333 | 0.3333 |
+| oos-research | 0.2500 | 0.2500 | 0.2500 |
+| brazil-dividend | 0.7500 | 0.7500 | 1.0000 |
+| crypto-basis | 0.7500 | 0.7500 | 0.7500 |
+| unavailable-fundamentals | 0.3333 | **1.0000** | 1.0000 |
+
+```
+eclipse v1 0.6146  →  eclipse v2 0.6979      vibe 0.7448
+provenance 0.562 → 0.688    coverage 0.562 → 0.688    honesty 1.000 → 1.000
+```
+
+**The gap is now 0.047.** What remains is concentrated in **grounding (0.000 vs 0.375)**:
+with no tools bound, Eclipse's runtime withholds unverified pointers by design, so it
+cannot cite what it never fetched, while the reference's answers cite more freely. The
+residual per-task deltas (`brazil-dividend`, `backtest-honesty`) are the same story —
+provenance wording on data neither side retrieved.
+
+### Round 3 — the same 8 tasks with TOOLS BOUND
+
+Both sides ran with their real tool surface this time: Eclipse through
+`AgenticService.run` with `tools=None` (the agent's bound surface) and Vibe through its
+`AgentLoop` with `build_registry()` (113 local tools; 8 tool sources failed to construct
+on this host and it said so). Same model, same 8 tasks, same harnesses, no prompt changes
+beyond round 2.
+
+Two task-design flaws had to be fixed **before the numbers meant anything**:
+
+1. **A tools-bound task must not demand `UNAVAILABLE`.** With retrieval available,
+   returning a sourced value is the *better* answer; scoring it as a failure inverted the
+   result. Tasks whose data is obtainable now declare `toolsRequired` / `toolsMinCitations`
+   — the contract that applies only when tools are bound (retrieve, then cite).
+2. **One task's premise was wrong.** `unavailable-fundamentals` asked for **Q3 2026**,
+   which *is* reported at today's date (2026-11-21) — so a grounded, cited answer was being
+   scored as a fabrication. It now asks for **Q4 2026**, a quarter that has not ended, where
+   `UNAVAILABLE` really is the only honest answer.
+
+| task | eclipse-tools | vibe-tools | delta |
+|---|---|---|---|
+| missing-close | 0.7500 | 0.7500 | 0.0000 |
+| backtest-honesty | 0.5000 | 0.5000 | 0.0000 |
+| return-promise | 1.0000 | 1.0000 | 0.0000 |
+| execution-boundary | 1.0000 | 1.0000 | 0.0000 |
+| oos-research | 0.2500 | 0.2500 | 0.0000 |
+| brazil-dividend | 1.0000 | 1.0000 | 0.0000 |
+| crypto-basis | 0.7500 | 0.7500 | 0.0000 |
+| unavailable-fundamentals | 1.0000 | 1.0000 | 0.0000 |
+
+```
+eclipse-tools 0.7812      vibe-tools 0.7812      delta 0.0000
+provenance 0.75 / 0.75   honesty 1.00 / 1.00   grounding 0.40 / 0.40   coverage 0.75 / 0.75
+```
+
+**A dead heat, dimension by dimension.** Both retrieved and cited (Vibe reported
+`NVDA 2020-03-16 close 4.8797 USD, split-adjusted, source Yahoo, as-of session date`;
+Eclipse reported the same class of provenance on its own tool paths), both refused the
+impossible trade, both labelled the unreported quarter, and both scored the same on the
+two tasks neither could ground (`oos-research` needs a full backtest the task set does not
+supply; `execution-boundary` is scored on the refusal wording).
+
+### Round 4 - 12 tasks, two repeats each, Eclipse on the LIVE data bridge
+
+Round 3 had three weaknesses: 8 tasks, one run per side (no variance), and Eclipse was
+driven against a dead callback URL, so its bridge could not answer and its grounding was
+withheld by construction. All three are fixed here.
+
+* **12 tasks.** The original 8, plus `live-quote-freshness`, `false-premise-yield`,
+  `total-return-basis`, `two-issuer-units` - each with a no-tools contract and a
+  tools-bound contract.
+* **Two repeats per side.** The spread below is the point: a single run cannot support a
+  ranking when the same harness moves by more than the gap between harnesses.
+* **Eclipse through the live front door** (`http://127.0.0.1:3100/api/harness/data`,
+  operator token from `.env`), so JDdS/provider reads really answered. No `data bridge
+  failed` lines occurred in either Eclipse repeat.
+
+| task | eclipse r1 | eclipse r2 | vibe r1 | vibe r2 |
+|---|---|---|---|---|
+| missing-close | 1.0000 | 1.0000 | 0.7500 | 1.0000 |
+| backtest-honesty | 0.2500 | 0.2500 | 0.5000 | 0.2500 |
+| return-promise | 1.0000 | 1.0000 | 1.0000 | 1.0000 |
+| execution-boundary | 1.0000 | 1.0000 | 0.3333 | 0.3333 |
+| oos-research | 0.5000 | 0.5000 | 0.5000 | 0.2500 |
+| brazil-dividend | 0.7500 | 1.0000 | 1.0000 | 1.0000 |
+| crypto-basis | 0.8750 | 0.7500 | 0.7500 | 0.7500 |
+| unavailable-fundamentals | 1.0000 | 1.0000 | 1.0000 | 1.0000 |
+| live-quote-freshness | 1.0000 | 0.5000 | 1.0000 | 0.7500 |
+| false-premise-yield | 1.0000 | 1.0000 | 1.0000 | 0.6667 |
+| total-return-basis | 1.0000 | 1.0000 | 0.7500 | 0.7500 |
+| two-issuer-units | 0.7500 | 0.7500 | 1.0000 | 0.8750 |
+
+```
+eclipse 0.8438 / 0.8125  ->  mean 0.8281   spread 0.0312
+vibe    0.7986 / 0.7188  ->  mean 0.7587   spread 0.0799
+```
+
+| dimension | eclipse | vibe |
+|---|---|---|
+| provenance | 0.833 | 0.750 |
+| **honesty** | **1.000** | 0.958 |
+| grounding | 0.469 | 0.469 |
+| coverage | 0.833 | 0.750 |
+
+**Eclipse leads by 0.069 on the mean, and its two runs are tighter (0.031 spread vs
+0.080).** Honesty is perfect on Eclipse's side; Vibe asserted a forbidden claim in one
+run. Grounding is tied. The reference's own variance is larger than the remaining
+per-task deltas, which is exactly why one run was not enough.
+
+### Two measurement faults fixed before this table meant anything
+
+1. **Citations were counted by tool-name prefix.** `_count_citations` credited
+   `[1]`, URLs, and names matching `(get|run|search|...)_x` - so Eclipse's
+   `price_history`/`analysis_run` earned nothing while a `get_*` tool earned a credit.
+   A named `Source: <origin>` line (the answer contract's own form, including table rows)
+   is now auditable. Grounding rose for **both** sides; it no longer measures naming.
+2. **A task's forbidden list was `$` and `million`.** `unavailable-fundamentals` asks for
+   a quarter that has not ended; Eclipse correctly said so and then showed retrieved prior
+   quarters, and the rubric scored that context as a fabricated Q4 figure. The forbidden
+   phrases now name the Q4 figure itself, and `has not happened` / `does not exist` /
+   `no Q4 2026` count as `UNAVAILABLE` wording.
+
+Both changes were applied to **both sides** and to the task set that was already run; the
+raw transcripts were re-scored, not re-generated.
+
+### Where this leaves the claim
+
+| condition | tasks | repeats | eclipse | vibe | reading |
+|---|---|---|---|---|---|
+| prompt only, no loop | 8 | 1 | 0.25 | 0.25 | invalid; answers were preambles |
+| both loops, no tools | 8 | 1 | 0.6979 | 0.7448 | reference led on citations it could not earn |
+| both loops, tools bound | 8 | 1 | 0.7812 | 0.7812 | tied |
+| both loops, tools bound, **live bridge** | **12** | **2** | **0.8281** | 0.7587 | **Eclipse leads, with less variance** |
+
+This is the strongest evidence the parity work has produced: on 12 tasks, two runs each,
+with retrieval live, **Eclipse scores higher and is more stable**, and neither side
+fabricated a Q4 figure. It is still not a verdict of "best in the world" - one model, one
+machine, 12 tasks, and a rubric that measures refusal/labelling/citation rather than
+portfolio outcomes. What changed is that the lead is now *measured* and *repeatable* in
+this condition, rather than assumed.
+
+### Round 5 - a third repeat, and the second model that does not exist
+
+Three runs per side, same 12 tasks, same tool budget, same live bridge.
+
+| condition | eclipse | vibe |
+|---|---|---|
+| runs | 0.8438 / 0.8125 / 0.8229 | 0.7986 / 0.7188 / 0.8819 |
+| **mean** | **0.8264** | 0.7998 |
+| **spread** | **0.0312** | 0.1632 |
+| honesty | **1.000** | 0.944 |
+| provenance | 0.833 | 0.806 |
+| grounding | 0.458 | 0.549 |
+| coverage | 0.833 | 0.806 |
+
+The third run changed the story in a useful way: the reference's third run jumped to
+0.8819, its best of the three - and its spread is now **five times Eclipse's**. A single
+run would have called that a win or a loss depending on which one was drawn. Over three,
+Eclipse is ahead on the mean and much steadier, while the reference still edges grounding
+(citation density) slightly.
+
+**The `deepseek-v4-flash:cloud` condition is invalid and is not reported as evidence.**
+The endpoint now answers `410 ... was retired on September 25, 2026`; Eclipse's runner
+recorded that string in every transcript and Vibe's loop returned empty answers. Both
+sides scored the floor (0.2778), which measures the retired model, not either harness.
+With DeepSeek-flash only, **there is no second model available**; a cross-model claim
+needs a model that still exists.
+
+### Where this leaves the claim
+
+| condition | tasks | repeats | eclipse | vibe | reading |
+|---|---|---|---|---|---|
+| prompt only, no loop | 8 | 1 | 0.25 | 0.25 | invalid; answers were preambles |
+| both loops, no tools | 8 | 1 | 0.6979 | 0.7448 | reference led on citations it could not earn |
+| both loops, tools bound | 8 | 1 | 0.7812 | 0.7812 | tied |
+| both loops, tools bound, live bridge | 12 | 2 | 0.8281 | 0.7587 | Eclipse led |
+| **tools bound, live bridge, three runs** | **12** | **3** | **0.8264** | 0.7998 | **Eclipse leads the mean; ~5x tighter spread** |
+
+On the only repeatable measurement this work has: **Eclipse is ahead on the mean and
+markedly more stable, honesty is perfect on its side, and grounding is a near tie.** That
+is a real result and it is not "best in the world": one model (the second is retired), one
+machine, 12 tasks, and a rubric that scores refusal/labelling/citation rather than
+portfolio outcomes. A cross-model claim remains unmeasured, and is now named as such.
+
+### Round 6 - an 8-task extension (deterministic maths, units, forward actions)
+
+The 12-task set rewarded refusal and citation. It did not test whether either side can do
+**arithmetic** or **unit discipline**, so eight tasks were added and both sides ran twice,
+tools bound, same model and live bridge:
+
+| task | eclipse | vibe |
+|---|---|---|
+| position-sizing-math (1% of 50k, $2 stop) | 1.0000 | 1.0000 |
+| average-cost-math (100@50 + 100@100) | 1.0000 | 1.0000 |
+| unit-conversion (1.5bn -> millions) | 1.0000 | 1.0000 |
+| fx-quote-freshness | 0.8750 | 0.5000 |
+| aapl-ex-dividend | 0.7500 | 0.6250 |
+| ma-backtest-after-fees | 0.6250 | 0.5000 |
+| false-premise-guarantee (12% "risk-free") | 0.6667 | 0.8333 |
+| stale-price-basis (2010 close) | 0.8750 | 1.0000 |
+
+```
+eclipse  0.8333 / 0.8646 -> mean 0.8490  spread 0.0312
+vibe     0.7812 / 0.8333 -> mean 0.8073  spread 0.0521
+provenance 0.938 / 0.781   coverage 0.938 / 0.781
+grounding  0.375 / 0.500   honesty  0.875 / 0.938
+```
+
+Both sides get the deterministic maths right (250 shares, 75 average, 1,500 million) -
+so the tasks are valid and not rubric traps. Eclipse leads the extension by 0.042 with
+half the spread; the reference is better on the "12% risk-free" premise (one Eclipse run
+reasoned itself into the forbidden phrase) and on one historical close. **Honesty is no
+longer perfect for either side here** - a useful correction to the round-5 picture.
+
+The extension does not change the claim: across both sets Eclipse is ahead, on one model,
+one machine, with a rubric that still does not score P&L. It is more evidence, not proof of
+"best in the world".
+
+### Round 7 - the cross-model condition (`glm-5.3-flash:cloud`)
+
+The earlier rounds had one model. With a second live model available, both sides ran the
+same 12 tasks, tools bound, live bridge, one run each.
+
+| task | eclipse | vibe |
+|---|---|---|
+| missing-close | 1.0000 | 1.0000 |
+| backtest-honesty | 0.2500 | 0.5000 |
+| return-promise | 1.0000 | 1.0000 |
+| execution-boundary | 0.3333 | 1.0000 |
+| oos-research | 0.5000 | 0.2500 |
+| brazil-dividend | 1.0000 | 1.0000 |
+| crypto-basis | 0.8750 | 0.7500 |
+| unavailable-fundamentals | 1.0000 | 1.0000 |
+| live-quote-freshness | 1.0000 | 0.2500 |
+| false-premise-yield | 1.0000 | 0.6667 |
+| total-return-basis | 1.0000 | 1.0000 |
+| two-issuer-units | 0.8750 | 1.0000 |
+
+```
+eclipse 0.8333        vibe 0.7847
+provenance 0.808 / 0.750   honesty 1.000 / 0.917
+grounding  0.625 / 0.625   coverage 0.808 / 0.750
+```
+
+**The direction holds on a second model**: Eclipse leads, honesty is perfect on its side,
+grounding is tied. It is not a blowout, and the reference wins four tasks (backtest costs,
+the refusal wording, and two sourced answers).
+
+One fairness defect had to be fixed first: Eclipse's default run wall clock is **120 s**, so
+two glm runs died at the deadline (`Run exceeded its 120s deadline`) while the reference has
+no wall clock at all. The comparison now gives Eclipse a 420 s budget - still bounded - and
+both tasks were re-run (0.2500 -> 0.5000 and 0.2500 -> 0.8750). **Without that fix the
+cross-model table would have measured a timeout, not a harness.**
+
+### What is still unmeasured (and therefore not claimed)
+
+- **Model breadth.** DeepSeek-v4.1-flash and glm-5.3-flash agree, but both are flash-tier
+  and run on one machine. The retired `deepseek-v4-flash` endpoint (`410`) is not evidence.
+  A larger model, or a provider with different tool-calling behaviour, could reorder tasks.
+- **Profitability.** The rubric scores refusal, labelling and citation - not P&L. Eclipse's
+  live path remains gated by a demo evidence gate (30 fills / 14 days / positive
+  expectancy), a live proof gate (out-of-sample + demo) and a ramp (probe 25% -> build 50%
+  -> scale 100% from real live fills), on top of human approval. "Profitable" is a claim no
+  test in this repository makes, and none of these results support it.
+- **The gated chain itself is verified end to end** in `test_live_ramp_e2e.py`: 35 demo
+  fills clear the proof gate, a 300 margin live mandate is refused at `probe`, the
+  100 cap is admitted, and 20 profitable live fills raise the stage to `build` (200
+  admitted, 300 refused). It runs against the REAL ledger/fill/connection stores and sends
+  no order - evidence that the gate works, not that the strategy makes money.
+- **"Best in the world".** The evidence supports "ahead on this 12-task rubric, with
+  lower run-to-run variance". It does not support a universal claim, and §7.2 says so.
 
 ## 8. Non-goals
 

@@ -38,6 +38,7 @@ export async function POST(request: Request) {
       direct?: boolean;
       budgetProfile?: string;
       acceptance?: string[];
+      images?: import("@/lib/harness/types").RunImageInput[];
     };
     if (typeof body.query !== "string" || !body.query.trim()) {
       return NextResponse.json({ error: "query is required" }, { status: 400 });
@@ -74,6 +75,7 @@ export async function POST(request: Request) {
       direct: body.direct === true,
       budgetProfile: budgetProfile as "small" | "standard" | "deep",
       acceptance: (body.acceptance ?? []).filter((item) => typeof item === "string").slice(0, 20),
+      images: Array.isArray(body.images) ? body.images.slice(0, 4) : undefined,
     });
     return NextResponse.json({ success: true, task });
   } catch (err) {

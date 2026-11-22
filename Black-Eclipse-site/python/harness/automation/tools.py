@@ -15,8 +15,11 @@ claimed until the store confirms it.
 from __future__ import annotations
 
 import json
+import threading
+import time
 from typing import Any, Optional
 
+from ..jobs.proposals import TTL_MS as PROPOSAL_TTL_MS, ProposalError, commit, is_system_job, new_proposal
 from ..tools import ToolContext, ToolDefinition, ToolRegistry
 
 TOOL_NAMES = (
@@ -232,6 +235,31 @@ def _build_trigger(args: dict[str, Any]) -> dict[str, Any]:
 #: Trigger kinds that make a bot run BY ITSELF. A manual bot only runs when the
 #: user (or `bot_run`) asks, so it needs no schedule approval.
 _AUTONOMOUS_TRIGGERS = ("cron", "interval", "one_time", "event", "condition")
+
+#: Pending delete confirmations, keyed by proposal id. In-process and single-use:
+#: the reference persists proposals to disk, but a confirmation that outlives the
+#: runtime has no scheduler to act on it, so keeping it in memory is the honest scope
+#: (stated here rather than implied).
+_PENDING: dict[str, dict[str, Any]] = {}
+_PENDING_LOCK = threading.Lock()
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _remember_proposal(proposal: dict[str, Any]) -> None:
+    with _PENDING_LOCK:
+        # Drop anything already past its deadline so the map cannot grow forever.
+        now = _now_ms()
+        for key in [k for k, v in _PENDING.items() if int(v.get("expiresAt") or 0) < now]:
+            _PENDING.pop(key, None)
+        _PENDING[str(proposal["proposalId"])] = proposal
+
+
+def _take_proposal(proposal_id: str) -> Optional[dict[str, Any]]:
+    with _PENDING_LOCK:
+        return _PENDING.pop(proposal_id, None)
 
 _SCHEDULE_NEEDS_APPROVAL = (
     "This needs your go-ahead first: I've asked to set up (or start) a scheduled "
@@ -587,6 +615,47 @@ async def _run(args: dict[str, Any], _ctx: ToolContext) -> tuple[str, Any]:
 async def _delete(args: dict[str, Any], _ctx: ToolContext) -> tuple[str, Any]:
     service = _require_service()
     bot_id = str(args.get("botId") or "")
+    # A scheduled bot owns a durable side effect, so deleting one takes two steps:
+    # a proposal with a 15-minute deadline, then a commit. An expired or superseded
+    # confirmation can no longer remove a running schedule, which is the failure mode
+    # the reference's proposals exist to prevent.
+    if is_system_job(bot_id):
+        return (
+            f"Bot {bot_id!r} is a scheduler-owned system job and cannot be deleted.",
+            {"deleted": False, "reason": "system_job"},
+        )
+    if not bool(args.get("confirm")):
+        proposal = new_proposal("cancel", now_ms=_now_ms(), job_id=bot_id)
+        _remember_proposal(proposal)
+        minutes = PROPOSAL_TTL_MS // 60_000
+        return (
+            f"Deleting bot {bot_id!r} is irreversible, so it needs confirmation. "
+            f"Call bot_delete again with confirm=true and proposalId="
+            f"{proposal['proposalId']} within {minutes} minutes.",
+            {
+                "deleted": False,
+                "needsConfirmation": True,
+                "proposalId": proposal["proposalId"],
+                "expiresAt": proposal["expiresAt"],
+            },
+        )
+    proposal_id = str(args.get("proposalId") or "")
+    proposal = _take_proposal(proposal_id)
+    if proposal is None:
+        return (
+            "That confirmation is unknown or already used. Start again with "
+            "bot_delete without confirm to get a fresh proposal.",
+            {"deleted": False, "reason": "unknown_proposal", "proposalId": proposal_id},
+        )
+    if str(proposal.get("jobId")) != bot_id:
+        return (
+            "That confirmation was issued for a different bot. Nothing was deleted.",
+            {"deleted": False, "reason": "proposal_mismatch"},
+        )
+    try:
+        commit(proposal, now_ms=_now_ms(), executor_ready=True, job_exists=True)
+    except ProposalError as exc:
+        return (f"Nothing was deleted: {exc}", {"deleted": False, "reason": "proposal_rejected"})
     ok = service.delete(bot_id)
     if not ok:
         return f"No bot {bot_id!r}.", {"deleted": False}

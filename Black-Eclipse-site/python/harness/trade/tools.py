@@ -197,6 +197,134 @@ async def broker_quote(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
     )
 
 
+async def broker_symbol_info(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    symbol = str(args.get("symbol") or "").strip()
+    if not symbol:
+        return (
+            "A symbol is required (for example EURUSD or XAUUSD).",
+            {"status": "SYMBOL_REQUIRED"},
+        )
+    result = service.symbol_info(_pick(service, args), symbol)
+    if not result.get("available"):
+        return _unavailable_text(result), result
+    facts = result["data"]
+    volume = (
+        f"{facts.get('volumeMin', 0):g}-{facts.get('volumeMax', 0):g} "
+        f"(step {facts.get('volumeStep', 0):g})"
+        if facts.get("volumeMax")
+        else "unavailable"
+    )
+    sessions = (
+        "reported" if facts.get("sessionsAvailable") else "not reported by the broker"
+    )
+    tick_value = facts.get("tickValue")
+    money = (
+        f"{tick_value:g} per tick per lot ({facts.get('currencyProfit') or '?'} "
+        f"-> {facts.get('currencyMargin') or 'account'})"
+        if tick_value
+        else "not reported (sizing falls back to contract size)"
+    )
+    return (
+        f"{facts.get('symbol')}: {facts.get('description') or 'instrument'}\n"
+        f"trade mode {facts.get('tradeMode')} - digits {facts.get('digits')} - "
+        f"point {facts.get('point', 0):g} - tick {facts.get('tickSize', 0):g}\n"
+        f"contract size {facts.get('contractSize', 0):g} - volume {volume}\n"
+        f"stops level {facts.get('stopsLevelPoints', 0)} pts - "
+        f"spread {facts.get('spreadPoints', 0)} pts\n"
+        f"tick value {money}; sessions {sessions}",
+        result,
+    )
+
+
+async def trade_plan(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    connection_id = str(args.get("connectionId") or "").strip()
+    if not connection_id:
+        connection_id = _pick(service, args)
+    payload = {
+        "symbol": args.get("symbol"),
+        "side": args.get("side"),
+        "entry": args.get("entry"),
+        "stop": args.get("stop"),
+        "target": args.get("target"),
+        "riskPct": args.get("riskPct"),
+    }
+    result = service.trade_plan(connection_id, payload)
+    if not result.get("available"):
+        return _unavailable_text(result), result
+    if not result.get("allowed"):
+        reason = (result.get("reasons") or ["the plan was refused"])[0]
+        return f"Trade plan refused: {reason}", result
+    risk = result.get("risk") or {}
+    lines = [result.get("summary") or "Trade plan"]
+    if result.get("entrySource"):
+        lines.append(
+            f"Entry source: {result['entrySource']}; "
+            f"plan id {result.get('planId')}"
+        )
+    if risk.get("warnings"):
+        lines.extend(f"- {item}" for item in risk["warnings"])
+    if risk.get("unmeasured"):
+        lines.append("Not measured: " + "; ".join(risk["unmeasured"]))
+    lines.append(
+        "This is a plan, not an order. Call order_preview with this exact "
+        "volume and stop to create the approval card."
+    )
+    return "\n".join(lines), result
+
+
+async def risk_supervisor(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    from .supervisor_api import supervisor_report  # noqa: PLC0415
+
+    report = supervisor_report(service)
+    portfolio = report["portfolio"]
+    equity = portfolio.get("equity")
+    margin_pct = portfolio.get("marginPct")
+    lines = [
+        f"Portfolio: {portfolio['verdict'].upper()} - "
+        f"equity {equity if equity is not None else 'unavailable'}, "
+        f"margin {margin_pct if margin_pct is not None else 'n/a'}%, "
+        f"{portfolio.get('openPositions')} open position(s)"
+    ]
+    lines.extend(f"- STOP: {reason}" for reason in portfolio.get("reasons") or [])
+    lines.extend(f"- watch: {warning}" for warning in portfolio.get("warnings") or [])
+    if portfolio.get("unmeasured"):
+        lines.append("- unmeasured: " + "; ".join(portfolio["unmeasured"]))
+    bots = report.get("bots") or []
+    if bots:
+        lines.append("Bots:")
+        for bot in bots:
+            lines.append(
+                f"- {bot['automationId']}: {bot['verdict']} - "
+                f"{bot['trades']} closed trade(s), realized {bot['realizedPnl']:,.2f}, "
+                f"{bot['consecutiveLosses']} consecutive loss(es)"
+            )
+            lines.extend(f"    {reason}" for reason in bot.get("reasons") or [])
+    else:
+        lines.append("No bot with a recorded order yet.")
+    return "\n".join(lines), report
+
+
+async def risk_supervisor_apply(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    from .supervisor_api import supervisor_apply  # noqa: PLC0415
+
+    result = supervisor_apply(service)
+    paused = result.get("paused") or []
+    failed = result.get("failed") or []
+    if paused:
+        text = "Paused underperforming bot(s): " + ", ".join(paused)
+    else:
+        text = "No bot needed to be paused."
+    if failed:
+        text += "\nCould not pause: " + "; ".join(
+            f"{item['automationId']} ({item['error']})" for item in failed
+        )
+    return text, result
+
+
 async def order_preview(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
     service = _service(ctx)
     connection_id = str(args.get("connectionId") or "").strip()
@@ -663,12 +791,62 @@ def register_broker_tools(registry: Any) -> None:
         },
     )
     _def(
+        "broker_symbol_info",
+        "Read the broker's own static facts for one instrument: contract size, "
+        "volume minimum/step/maximum, tick size and tick value in the account "
+        "currency, stops level, trade mode and sessions. Read-only. Call this "
+        "before sizing a trade - never assume a contract size.",
+        broker_symbol_info,
+        {
+            "type": "object",
+            "properties": {
+                "connectionId": connection_id,
+                "symbol": {"type": "string"},
+            },
+            "required": ["symbol"],
+        },
+    )
+    _def(
+        "trade_plan",
+        "Turn a trade idea into a sized, risk-checked plan: read the account "
+        "equity and the symbol's own limits, place the entry at the operator's "
+        "price or the broker's quote, and compute the largest volume whose "
+        "stop-out stays inside `riskPct` of equity (default 1%). Also checks the "
+        "account fit (open positions, concentration, margin, spread) and returns "
+        "max loss, % of equity and reward:risk. Sends nothing and creates no "
+        "approval. A refusal (minimum lot too large, stop too tight) names the "
+        "exact correction. Use its volume and stop in `order_preview`.",
+        trade_plan,
+        {
+            "type": "object",
+            "properties": {
+                "connectionId": connection_id,
+                "symbol": {"type": "string"},
+                "side": {"type": "string", "enum": ["buy", "sell"]},
+                "entry": {"type": "number"},
+                "stop": {"type": "number"},
+                "target": {"type": "number"},
+                "riskPct": {"type": "number"},
+            },
+            "required": ["symbol", "side", "stop"],
+        },
+    )
+    _def(
+        "risk_supervisor",
+        "Read the account-level trading supervisor: total margin vs equity, "
+        "open positions, equity loss since the day/week open, and each bot's "
+        "realized result after costs. `block` means no new entries. Read-only.",
+        risk_supervisor,
+        {"type": "object", "properties": {}},
+    )
+    _def(
         "order_preview",
         "Validate an order (demo or live) against broker constraints, the "
         "connection's limits and the money guardrails, then request a single-use "
         "operator approval. On a live connection the operator confirms the "
         "approval card in chat and types the LIVE phrase; this tool NEVER sends "
-        "an order.",
+        "an order. For a new entry, call `broker_symbol_info` and `trade_plan` "
+        "first; never guess a volume.",
         order_preview,
         {
             "type": "object",
@@ -878,8 +1056,32 @@ def register_broker_tools(registry: Any) -> None:
     )
 
 
+def register_supervisor_tools(registry: Any) -> None:
+    """The supervisor's STAND-DOWN tool, kept out of the read-only broker set.
+
+    Every broker tool is read-only by contract (`test_broker_layer`); pausing a
+    bot is a state change, so it is registered here and marked write/high. The
+    PERIODIC sweep uses the service directly and needs no tool at all.
+    """
+    from harness.tools import ToolDefinition  # noqa: PLC0415
+
+    registry.register(ToolDefinition(
+        name="risk_supervisor_apply",
+        description=(
+            "Run the supervisor's stand-down: pause every bot that has taken "
+            "enough real fills and is still unprofitable after costs, or is on a "
+            "losing streak. It pauses future triggers and never closes positions."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        handler=risk_supervisor_apply,
+        permission="write",
+        risk="high",
+    ))
+
+
 __all__ = [
     "BROKER_TOOLS",
+    "register_supervisor_tools",
     "broker_account",
     "broker_bars",
     "broker_connections",
@@ -888,9 +1090,13 @@ __all__ = [
     "broker_orders",
     "broker_positions",
     "broker_quote",
+    "broker_symbol_info",
     "broker_reconciliation",
     "order_ledger",
     "order_preview",
+    "trade_plan",
+    "risk_supervisor",
+    "risk_supervisor_apply",
     "order_submit",
     "position_close",
     "position_modify",
@@ -905,7 +1111,11 @@ BROKER_TOOLS = [
     "broker_positions",
     "broker_orders",
     "broker_quote",
+    "broker_symbol_info",
     "broker_bars",
+    "trade_plan",
+    "risk_supervisor",
+    "risk_supervisor_apply",
     "order_preview",
     "order_submit",
     "position_close",

@@ -9,8 +9,11 @@ Failure of the security gates is always a refusal, never a fallback:
   * `HARNESS_CODE_MODE=1` is required (operator opt-in).
   * the child runs through `code/sandbox.py` (process-tree kill, scrubbed env,
     no network, CPU/memory caps); if no isolation primitive exists, it refuses.
-  * only READ-ONLY tools can cross the bridge. Effectful tools must be called
-    directly so the graph's budget, approval, idempotency and recovery apply.
+  * a READ-ONLY tool crosses the bridge freely; an EFFECTFUL one crosses only
+    when the run has an effect authorizer, and `registry.execute` then applies
+    that same approval chain, the run's surface, the effect token and the
+    widening cap. A run without an authorizer refuses, and `tool_code` cannot
+    recurse.
   * the child starts in a fresh temp directory, so a relative `.env` read finds
     nothing.
 """
@@ -222,17 +225,26 @@ def _answer_tool_call(
     tool = registry.get(name) if hasattr(registry, "get") else None
     if tool is None:
         return {"ok": False, "error": f"unknown tool {name!r}"}
-    if getattr(tool, "permission", "read") != "read":
+    if name in ("tool_code",):
+        return {"ok": False, "error": "tool_code cannot call itself"}
+    surface = getattr(ctx, "allowed", None)
+    if surface is not None and name not in surface:
+        return {"ok": False, "error": f"{name!r} is outside this run's surface"}
+    effectful = getattr(tool, "permission", "read") != "read"
+    if effectful and getattr(ctx, "authorize_effect", None) is None:
         return {
             "ok": False,
             "error": (
-                f"{name!r} is effectful; call it directly so approval and "
-                "idempotency apply"
+                f"{name!r} is effectful and this run has no approval chain; call it "
+                "directly so the graph's authorizer applies"
             ),
         }
     try:
         future = asyncio.run_coroutine_threadsafe(
-            registry.execute(name, f"cm_{call_number}", args, ctx), loop,
+            registry.execute(
+                name, f"cm_{call_number}", args, ctx, allowed=surface,
+            ),
+            loop,
         )
         result = future.result(timeout=max(1.0, remaining))
     except Exception as exc:  # noqa: BLE001 - a tool failure is data
@@ -309,11 +321,12 @@ def register_code_mode_tool(registry: Any) -> None:
     registry.register(ToolDefinition(
         name="tool_code",
         description=(
-            "Run a short Python program that calls READ-ONLY tools through "
+            "Run a short Python program that calls tools through "
             "`tools.call(name, **args)` / `tools.text(name, **args)` and sets "
             "`result`. Process-isolated, no network, 20 tool calls max. Use it "
-            "to loop, filter or join data across several tool results. Effectful "
-            "tools must be called directly."
+            "to loop, filter or join work across several tool results. Read-only "
+            "tools run directly; an EFFECTFUL tool runs only through this run's "
+            "approval chain (and is refused without one)."
         ),
         input_schema={
             "type": "object",

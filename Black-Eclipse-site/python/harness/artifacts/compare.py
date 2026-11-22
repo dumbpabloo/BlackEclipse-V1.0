@@ -19,10 +19,58 @@ Scope, stated honestly:
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from collections import Counter
+from typing import Any, Mapping, Optional, Sequence
 
 #: Metadata keys whose values may be long; the report keeps them bounded.
 MAX_VALUE_CHARS = 300
+
+
+def _canonical(item: Any) -> str:
+    """Stable identity for an evidence item: sorted keys, no whitespace."""
+    import json
+
+    return json.dumps(item, sort_keys=True, separators=(",", ":"), default=str, ensure_ascii=False)
+
+
+def _ordered_unmatched(items: Sequence[Any], unmatched: Counter) -> list[Any]:
+    """Items still present in ``unmatched``, in their original order.
+
+    Order preservation matters: "the same evidence, reordered" is a different fact
+    from "the same evidence", and a reader wants to see which line moved.
+    """
+    remaining = unmatched.copy()
+    out: list[Any] = []
+    for item in items:
+        key = _canonical(item)
+        if remaining[key] > 0:
+            out.append(item)
+            remaining[key] -= 1
+    return out
+
+
+def compare_evidence(left: Sequence[Any], right: Sequence[Any]) -> dict[str, Any]:
+    """Multiset comparison of two evidence lists (parity with the reference).
+
+    Ported from Vibe-Trading's `research_artifacts/comparison.py`
+    (``_evidence_comparison``). Counted, not set-based: citing the same source twice
+    and then once is a removal, and a reordering with no additions or removals is
+    reported as ``orderChanged`` rather than as "no change".
+    """
+    left_keys = [_canonical(item) for item in left]
+    right_keys = [_canonical(item) for item in right]
+    left_counts = Counter(left_keys)
+    right_counts = Counter(right_keys)
+    added = _ordered_unmatched(right, right_counts - left_counts)
+    removed = _ordered_unmatched(left, left_counts - right_counts)
+    order_changed = not added and not removed and left_keys != right_keys
+    return {
+        "added": added,
+        "removed": removed,
+        "unchangedCount": sum((left_counts & right_counts).values()),
+        "orderChanged": order_changed,
+        "changed": bool(added or removed or order_changed),
+    }
 
 
 def _get(version: Any, name: str) -> Any:
@@ -95,6 +143,13 @@ def compare_versions(left: Any, right: Any) -> dict[str, Any]:
         or any(item["changed"] for item in fields.values())
     )
 
+    left_evidence = _get(left, "evidence")
+    right_evidence = _get(right, "evidence")
+    evidence = None
+    if isinstance(left_evidence, (list, tuple)) and isinstance(right_evidence, (list, tuple)):
+        evidence = compare_evidence(left_evidence, right_evidence)
+        any_change = any_change or evidence["changed"]
+
     return {
         "artifactId": _get(left, "artifact_id") or _get(right, "artifact_id"),
         "fromVersion": _get(left, "version_number"),
@@ -106,6 +161,7 @@ def compare_versions(left: Any, right: Any) -> dict[str, Any]:
         },
         "provenance": provenance,
         "fields": fields,
+        "evidence": evidence,
         "metadata": {
             "added": added,
             "removed": removed,
@@ -156,9 +212,16 @@ def to_markdown(report: Mapping[str, Any]) -> str:
         lines.append(f"- Metadata removed: {', '.join(meta['removed'])}")
     if meta.get("changed"):
         lines.append(f"- Metadata changed: {', '.join(meta['changed'])}")
+    evidence = report.get("evidence")
+    if evidence:
+        lines.append(
+            f"- Evidence: {evidence['unchangedCount']} unchanged, "
+            f"{len(evidence['added'])} added, {len(evidence['removed'])} removed"
+            + (", reordered" if evidence["orderChanged"] else "")
+        )
     if not report.get("changed"):
         lines.append("- No difference in the stored record.")
     return "\n".join(lines) + "\n"
 
 
-__all__ = ["compare_revisions", "compare_versions", "to_markdown"]
+__all__ = ["compare_evidence", "compare_revisions", "compare_versions", "to_markdown"]

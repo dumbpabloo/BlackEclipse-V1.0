@@ -1,7 +1,7 @@
 ---
 title: Code File System Subsystem
 status: Current
-last-verified: 2026-11-12
+last-verified: 2026-11-21
 ---
 
 # Code File System Subsystem
@@ -83,6 +83,25 @@ whole file → rewrite whole file".
 
 - **Ambiguity is refused.** `replace_text` with a repeated target returns
   `AMBIGUOUS_PATCH` and the candidate lines; it never replaces the first hit.
+  `code_edit`'s `replaceAll` (or `count=0` at the engine) is the explicit way to
+  change every occurrence.
+- **Tolerant matching (2026-11-21).** Literal edits are tried in tiers, best
+  first: exact bytes (tolerating the file's LF/CRLF convention) → typographic
+  look-alikes (curly quotes, en/em dashes, NBSP/thin spaces) → per-line trailing
+  whitespace. The fuzzy tiers run on an LF view and map spans back, so a CRLF
+  file matches the text `read_file` showed without shifting offsets. A miss
+  returns the closest numbered lines in `details["hint"]` (`_miss_hint`, 12 lines
+  × 200 chars) — never the whole file.
+- **Replacement endings.** A replacement written with `\n` into a CRLF file is
+  converted to the file's dominant ending, so an edit cannot silently mix
+  endings. A regex replacement is normalized the same way.
+- **Media reads (2026-11-21).** `read_file` recognises PNG/JPEG/GIF/WebP/PDF by
+  MAGIC BYTES, not extension, up to 20 MiB (`code/media.py`). It returns a media
+  payload and the tool turn appends a real `image_url` (images) or `file` (PDF)
+  part after the tool result, so the next model step can see it. Any other binary
+  still refuses `BINARY_FILE`; media reads use a read-only `allow_ignored`
+  resolution (images are in the write-ignore globs) while protected paths stay
+  blocked.
 - **Stale detection.** Every mutable op accepts `expectedHash`; a mismatch
   returns `STALE_FILE` with expected/actual hashes.
 - **Atomic writes.** `write_text_atomic` writes a temp file, fsyncs, and
@@ -93,6 +112,20 @@ whole file → rewrite whole file".
   trees) before mutation; `multi_file_patch` validates ALL patches before writing
   ANY, and rolls back on failure — a half-applied multi-file change never
   survives. Safety does NOT depend on Git.
+- **Post-write formatter (2026-11-21).** After the atomic write, the PROJECT's
+  formatter runs on that one file: local `prettier` (a configured dependency or
+  config file), configured `ruff`, `gofmt`, or a configured `rustfmt`
+  (`code/formatting.py`). It is bounded (10 s, 1 MiB), runs through the sandbox,
+  and is non-fatal; `BE_FORMAT_ON_EDIT=0` disables it. The diff and hash describe
+  the formatted bytes. When formatting changed the text, the exact-content
+  verification is skipped (whitespace differs) and the syntax/hash checks still
+  run.
+- **Post-write diagnostics (2026-11-21).** The result carries diagnostics for the
+  changed file. Structural syntax checks run synchronously; LSP diagnostics run
+  in a daemon thread with a 2 s deadline and only when the CIUE runtime already
+  has state for the workspace (`code/post_edit.py`). A slow server degrades to
+  `lsp: "timeout"` with the structural result; the edit never waits on it. The
+  model-facing text names the formatter and up to five diagnostics.
 
 ## File checkpoints (`code/checkpoints.py`, W7)
 
@@ -112,8 +145,15 @@ W7 adds a *turn-level* undo surface on top of it:
   over 10 MB are never captured or restored. `policy.is_protected` /
   `policy.is_ignored` remain the authority.
 - **Modes.** `HARNESS_FILE_CHECKPOINTS=off|warn|enforce` (`on` aliases
-  `enforce`). `warn` records a failed snapshot and lets the write proceed;
-  `enforce` refuses the write rather than lose the undo point.
+  `enforce`). **Default `warn` (2026-11-21):** snapshots are taken for every
+  coding turn; a missing snapshot is recorded and the write proceeds. `enforce`
+  refuses the write rather than lose the undo point.
+- **Per-turn undo (2026-11-21).** The graph stamps `ctx.checkpoint_turn` at each
+  tool turn, so the file service takes ONE snapshot per turn (not per run).
+  `checkpoint_undo_turn` restores every tracked file to the snapshot taken
+  before the latest turn; the Code screen's snapshot panel exposes it as
+  "Undo last turn". The restore is approval-gated and takes a `pre-restore`
+  snapshot, so the undo is itself undoable.
 - **Restore.** `checkpoint_list` / `checkpoint_diff` are read-only;
   `checkpoint_restore` is effectful and approval-gated. A restore takes a
   `pre-restore` snapshot first, defaults to the named paths, and `all` is

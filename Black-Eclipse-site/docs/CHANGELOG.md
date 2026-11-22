@@ -6,6 +6,16 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-22
 
+- **release: the parity + autonomous-trade safety work and the comparison evidence land
+  together.** This commit carries the Vibe-Trading parity register and alpha zips (32/32,
+  101/158/191), the trade stack (plan/sizing, account-fit risk, supervisor, proof gate,
+  live ramp, live autonomy documented as enabled and earned), the coding-surface commit +
+  verification path, `RUN_TIMEOUT` as a legal terminal error, and the 20-task two-sided
+  comparison (DeepSeek 0.8264 vs 0.7998; GLM 0.8333 vs 0.7847; extension 0.8490 vs 0.8073).
+  Full suite green: vitest 5,226; Python 13,530 across four shards; eval gates ALL PASS.
+  docs updated: docs/trading.md, docs/harness/vibe-trading-analysis.md, docs/NAVIGATION.md,
+  docs/environments.md, docs/harness/coding-parity-opencode.md, docs/CHANGELOG.md.
+
 - **fix(desktop): resolve the Python runtime and harness source from the project root, not the process cwd.** A pinned
   desktop release runs Next with a cwd inside `releases/stable/<build>`, so `findPython()` looked for
   `scripts/vendor/python` there and reported “Python with agent dependencies not found”; the spawn also looked for

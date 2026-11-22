@@ -26,8 +26,13 @@ def test_the_benchmark_runs_both_variants_and_reports_a_verdict():
     assert report.single.model_calls == len(task.goals) + 1
     # parent call + one per part + the final combination.
     assert report.fanout.model_calls == len(task.goals) + 2
-    assert "adopted" in report.verdict
-    assert "latencyGain" in report.verdict
+    # The VERDICT SHAPE is asserted here; the adoption DECISION itself is pure and
+    # is covered by `adoption_verdict` tests below. Asserting `adopted is True`
+    # from a real wall-clock run made this test fail under machine load (the
+    # fan-out edge is milliseconds), which is a property of the scheduler, not
+    # of the benchmark.
+    assert {"adopted", "reason", "latencyGain", "qualityDelta"} <= set(report.verdict)
+    assert report.verdict["qualityDelta"] == 0.0
 
 
 def test_a_quality_regression_vetoes_adoption_even_when_faster():

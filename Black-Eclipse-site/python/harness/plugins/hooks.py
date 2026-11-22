@@ -84,6 +84,16 @@ class HookRegistry:
             if not self._hooks[name]:
                 del self._hooks[name]
 
+    def unregister(self, plugin_id: str, name: str) -> bool:
+        hooks = self._hooks.get(name, [])
+        kept = [hook for hook in hooks if hook.plugin_id != plugin_id]
+        removed = len(kept) != len(hooks)
+        if kept:
+            self._hooks[name] = kept
+        elif name in self._hooks:
+            del self._hooks[name]
+        return removed
+
     def registered(self, plugin_id: Optional[str] = None) -> list[dict[str, Any]]:
         out = []
         for name, hooks in self._hooks.items():

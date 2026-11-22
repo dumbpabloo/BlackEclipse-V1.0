@@ -10,7 +10,7 @@
 # Override intentionally with:  GIT_COMMIT_ALLOWED_EMAIL=<email> git commit ...
 # or skip (not recommended):    SKIP_IDENTITY_CHECK=1 git commit ...
 
-expected_email="121116805+desimarijuana@users.noreply.github.com"
+expected_email="121116805+dumbpabloo@users.noreply.github.com"
 allowed_email="${GIT_COMMIT_ALLOWED_EMAIL:-$expected_email}"
 actual_email="$(git config --get user.email 2>/dev/null)"
 actual_name="$(git config --get user.name 2>/dev/null)"

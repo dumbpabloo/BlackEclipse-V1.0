@@ -88,6 +88,7 @@ def request_approval(
     *,
     risk: str = "high",
     run_id: str = "",
+    risk_summary: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Create (or reuse) the single-use approval for this exact order.
 
@@ -109,6 +110,10 @@ def request_approval(
             "margin": preview.get("margin"),
             "spreadPoints": preview.get("spreadPoints"),
             "retcode": preview.get("retcode"),
+            # The order's own max loss / % of equity / reward:risk, computed from
+            # the broker's numbers. The approval card renders it, so the operator
+            # approves a sized risk, not just a symbol and a volume.
+            "riskSummary": risk_summary,
         },
         "guardrail": {
             "decision": getattr(guardrail, "decision", None),

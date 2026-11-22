@@ -19,9 +19,13 @@ def _allowed(reg: ToolRegistry, autonomy: str | None) -> set[str]:
     allowed, _prompt = resolve_surface(ECLIPSE_AGENT, reg, {}, autonomy)
     return set(allowed or ())
 
+# The read half of the coding preset. `workspace_read`/`workspace_list`/
+# `workspace_diff` are the older workspace tools and are now OUTSIDE the preset;
+# `read_file`/`list_directory`/`search_text` are the replacements, and
+# `workspace_status`/`workspace_docs` remain for project context.
 READ_TOOLS = {
-    "workspace_status", "workspace_list",
-    "workspace_read", "workspace_docs", "workspace_diff",
+    "read_file", "list_directory", "search_text", "search_files",
+    "search_symbols", "workspace_status", "workspace_docs",
 }
 
 
@@ -48,7 +52,11 @@ def test_a_code_change_turn_binds_write_and_execute() -> None:
     bound = _bound(reg, "edit_verify")
     assert "code_edit" in bound
     assert "command_run" in bound
-    assert "workspace_revert" in bound
+    # Undo is the checkpoint path now (the legacy `workspace_revert` is outside
+    # the coding preset), and the local commit path is allowed (the git engine is
+    # not part of this test's registry, so assert the allowlist, not schemas).
+    assert {"checkpoint_undo_turn", "checkpoint_restore"} <= bound
+    assert {"git_stage", "git_commit"} <= _allowed(reg, "edit_verify")
     # Every bound tool must be registered (no schema for a nonexistent tool).
     assert bound <= set(reg.names())
 

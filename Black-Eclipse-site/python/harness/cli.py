@@ -892,6 +892,14 @@ def build_parser() -> argparse.ArgumentParser:
     plugin.add_argument("--webhook", default="", help="webhook id")
     plugin.add_argument("--secret", default=None, help="webhook signing secret")
 
+    kernel = sub.add_parser("kernel", parents=[common], help="plugin kernel composition")
+    kernel.add_argument("action", choices=["dump", "diff", "doctor"])
+    kernel.add_argument("--profile", default="", help="profile name under ~/.black-eclipse/profiles")
+    kernel.add_argument("--profile-dir", default="", help="explicit profile directory")
+    kernel.add_argument("--home", default="", help="Harness home (defaults to ~/.black-eclipse)")
+    kernel.add_argument("--bundle-path", action="append", default=[], help="extra bundle search root")
+    kernel.add_argument("--patch", action="append", default=[], help="ordered patch overlay")
+
     ui = sub.add_parser("ui", parents=[common], help="UI Engineering (catalog + blueprints)")
     ui.add_argument("action", choices=[
         "components", "capabilities", "blueprints", "show", "history",
@@ -925,6 +933,24 @@ def main(argv: Optional[list[str]] = None) -> int:
     # The `plugin` group builds its own PluginManager over the runtime's store.
     if getattr(args, "group", "") == "plugin":
         return _cmd_plugin(args, None)
+    # The `kernel` group reads profiles only; it never imports a plugin or
+    # starts the runtime.
+    if getattr(args, "group", "") == "kernel":
+        from .kernel.cli import run_cli as kernel_cli
+        argv = [args.action]
+        if args.profile:
+            argv += ["--profile", args.profile]
+        if args.profile_dir:
+            argv += ["--profile-dir", args.profile_dir]
+        if args.home:
+            argv += ["--home", args.home]
+        for path in args.bundle_path:
+            argv += ["--bundle-path", path]
+        for path in args.patch:
+            argv += ["--patch", path]
+        if args.json:
+            argv.append("--json")
+        return kernel_cli(argv)
     # The `ui` group builds its own UI service over the runtime's store.
     if getattr(args, "group", "") == "ui":
         return _cmd_ui(args, None)

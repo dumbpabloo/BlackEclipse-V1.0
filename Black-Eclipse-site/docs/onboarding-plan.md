@@ -1,7 +1,7 @@
 ---
 title: First-Run Onboarding — Implementation Plan
 status: Implemented (v1)
-last-verified: 2026-11-20
+last-verified: 2026-11-21
 ---
 
 # First-Run Onboarding — Implementation Plan
@@ -87,17 +87,21 @@ Boot loader (existing, z-40)
   └─ App (loader finishes behind the overlay)
 ```
 
-Shared frame: **a two-column setup card** (max 1060px, `max-h-[calc(100dvh-3rem)]`)
-over the masked 44px brand grid and a soft top glow. The left rail (300px, hidden
+Shared frame: **a two-column setup card** (max 1060px, `max-h` of the viewport
+with a `100vh` fallback and a `100dvh` refinement). The left rail (300px, hidden
 below `md`) holds the wordmark and a numbered/iconed vertical stepper (active
-step filled with `--primary`, completed steps checked, future steps muted and
-not clickable); the right panel holds the step title (22px serif), one-line
-description, the scrolling step body, and a pinned footer with `Skip for now` /
-`Back` on the left and `Continue` / `Finish setup` on the right. Below `md` the
-rail collapses into a brand bar plus a 3px progress line. The app shell (sidebar
-included) is fully covered; `z-[200]` clears the shell's `z-50`. Escape does not
-close it. Focus-trapped, keyboard accessible, reduced-motion aware. Only step 1
-has `Skip for now`.
+step filled with `--primary`, completed steps checked, future steps muted). Once
+the risk notice is acknowledged **every step is clickable across the whole row**
+(disc + title), so the rail is a second way to navigate; the current step is
+disabled and marked `aria-current="step"`. The right panel holds the step title
+(22px serif), one-line description (hidden on very short windows), the scrolling
+step body, and a pinned `shrink-0` footer with `Skip for now` / `Back` on the left
+and `Continue` / `Finish setup` on the right. The rail and the step body are
+independent scroll areas (`min-h-0`), so a short window scrolls instead of
+clipping the footer. Below `md` the rail collapses into a brand bar plus a 3px
+progress line. The app shell (sidebar included) is fully covered; `z-[200]`
+clears the shell's `z-50`. Escape does not close it. Focus-trapped, keyboard
+accessible, reduced-motion aware. Only step 1 has `Skip for now`.
 
 ### Step 1 — Welcome & how you'll use Eclipse
 
@@ -145,7 +149,10 @@ shell, so the first screenshot of Eclipse is theirs, not the shipped default.
 **Purpose:** make the first chat message work, or say honestly that it won't.
 
 - Detect existing config first: if an LLM key/base URL is already present, show
-  **"Already configured — {provider} / {model}"** with `Keep` / `Change`.
+  **"Connected — {provider} / {model}"** with the real endpoint, a model picker
+  (the saved provider's discovered models), **Test connection** (a real
+  `/api/agent/test` chat probe with latency/failure shown honestly) and
+  **Change**.
 - Three cards:
   1. **Local (recommended if installed)** — Ollama / LM Studio. Detects local
      servers and models; if none, shows install steps and a base-URL field.
@@ -153,6 +160,10 @@ shell, so the first screenshot of Eclipse is theirs, not the shipped default.
      `Test key`, and model picker. Saves via the existing vault.
   3. **Custom OpenAI-compatible endpoint** — base URL, optional key, model,
      optional context window.
+- After Connect succeeds, the success view **stays open** until **Use this
+  connection** is pressed. That view is where the operator picks the model, so
+  it is never collapsed before they have seen it. **Set up later** is only
+  offered when nothing is already connected, so it cannot wipe a working key.
 - Live status line: **"Chat will use: Ollama · llama3.1"** or **"Chat will be
   unavailable (mock mode)."**
 - `Set this up later` is allowed; the app then runs `mock` and the final review

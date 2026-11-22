@@ -184,6 +184,20 @@ class BrokerConnectionStore:
 
     def _ensure_schema(self) -> None:
         self._db.executescript(_SCHEMA)
+        # Supervisor equity snapshots: the day/week OPEN equity a loss stop is
+        # measured from. One row per (scope, period); the first write of a period
+        # wins, so a restart cannot move the baseline to hide a loss.
+        self._db.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS BrokerRiskSnapshot (
+              scope     TEXT NOT NULL,
+              period    TEXT NOT NULL,
+              equity    REAL NOT NULL,
+              startedAt TEXT NOT NULL,
+              PRIMARY KEY (scope, period)
+            );
+            """
+        )
         # Additive columns for databases created before live arming (P2).
         existing = {row["name"] for row in self._db.execute(
             "PRAGMA table_info(BrokerConnection)"
@@ -533,6 +547,26 @@ class BrokerConnectionStore:
             added += max(0, cursor.rowcount)
         self._db.commit()
         return added
+
+    # -- supervisor snapshots -------------------------------------------------
+    def get_risk_snapshot(self, scope: str, period: str) -> Optional[dict[str, Any]]:
+        row = self._db.execute(
+            "SELECT scope, period, equity, startedAt FROM BrokerRiskSnapshot "
+            "WHERE scope=? AND period=?",
+            (str(scope), str(period)),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def set_risk_snapshot(
+        self, scope: str, period: str, equity: float, started_at: str,
+    ) -> None:
+        """Create the period baseline once; a later call never moves it."""
+        self._db.execute(
+            "INSERT OR IGNORE INTO BrokerRiskSnapshot "
+            "(scope, period, equity, startedAt) VALUES (?, ?, ?, ?)",
+            (str(scope), str(period), float(equity), str(started_at)),
+        )
+        self._db.commit()
 
     def list_fills(
         self,

@@ -77,10 +77,17 @@ def validate_graph(subtasks: list[TeamSubtask]) -> list[str]:
 
 
 def topological_layers(subtasks: list[TeamSubtask]) -> list[list[str]]:
-    """Kahn layers of the graph; raises ``ValueError`` on a cycle."""
-    layers = _topological_layers([s.id for s in subtasks], edges(subtasks))
+    """Kahn layers of the graph; raises ``ValueError`` naming the cycle.
+
+    The reference's ``validate_dag`` reports the cycle path, and a bare "there is a
+    cycle" leaves an operator to find it by hand — so the message carries the path.
+    """
+    edges_ = edges(subtasks)
+    layers = _topological_layers([s.id for s in subtasks], edges_)
     if layers is None:
-        raise ValueError("the task graph contains a dependency cycle")
+        cycle = _detect_cycle(edges_)
+        detail = " -> ".join(cycle) if cycle else "unresolved"
+        raise ValueError(f"the task graph contains a dependency cycle: {detail}")
     return layers
 
 

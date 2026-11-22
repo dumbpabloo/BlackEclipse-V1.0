@@ -12,6 +12,7 @@ permissions:
   - network
   - secrets
   - events.subscribe
+  - skills.contribute
 contributes:
   tools:
     - name: get_repo

@@ -2,13 +2,6 @@ MIT License
 
 Copyright (c) 2026 BlackEclipse
 
-Scope: unless a file or directory states otherwise, the original source in this
-repository is licensed under the MIT License below. The Pine Script engine in
-`Black-Eclipse-site/pine-engine/` is a separate program distributed under
-AGPL-3.0-only because it depends on `pinets` (see
-`Black-Eclipse-site/pine-engine/NOTICE.md`); that directory and its dependency
-keep their own licence.
-
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
@@ -26,3 +19,12 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+Scope: unless a file or directory states otherwise, the original source in this
+repository is licensed under the MIT License above. The Pine Script engine in
+`Black-Eclipse-site/pine-engine/` is a separate program distributed under
+AGPL-3.0-only because it depends on `pinets` (see
+`Black-Eclipse-site/pine-engine/NOTICE.md`); that directory and its dependency
+keep their own licence.

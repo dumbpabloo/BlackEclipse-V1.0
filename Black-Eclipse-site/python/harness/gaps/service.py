@@ -210,16 +210,24 @@ class GapService:
 
     @staticmethod
     def offer_text(offers: list[dict[str, Any]]) -> str:
+        """A one-line offer per gap — never a reproduction of the user's request.
+
+        The offer used to print ``I can {label} for "{need}"``, where ``need`` is the
+        user's own wording. That echoed whatever the request said — including
+        "Give me a trade that is certain to make 5% next week" — back into the answer in
+        the harness's own voice. A compliance reviewer reading the transcript cannot tell
+        an echo from an assertion, and neither should a reader have to. The label names
+        the action; the reason says why; the request itself is not repeated.
+        """
         if not offers:
             return ""
         lines: list[str] = []
         for offer in offers[:3]:
             reason = str(offer.get("reason") or "").strip()
-            label = str(offer.get("actionLabel") or "fix it")
-            need = str(offer.get("need") or "")
+            label = str(offer.get("actionLabel") or "fix it").strip()
             head = "One more thing I can do" if len(offers) == 1 else "More I can do"
             lines.append(
-                f"{head}: I can {label.lower()} for \"{need}\""
+                f"{head}: I can {label[0].lower() + label[1:] if label else 'help'}"
                 + (f" ({reason})" if reason else "")
                 + ". Want me to?"
             )

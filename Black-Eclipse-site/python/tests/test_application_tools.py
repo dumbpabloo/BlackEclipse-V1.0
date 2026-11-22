@@ -89,8 +89,18 @@ def test_autonomy_boundary_structural():
     assert "k8s_apply" in approve and "terraform_destroy" in approve and "deploy_run" in approve
 
 
-def test_reachable_from_a_chat_coding_turn():
+def test_a_chat_coding_turn_reaches_devops_through_the_preset(monkeypatch):
+    """A chat coding turn: the agent's own tools stay, the preset adds the code set.
+
+    The preset REMOVES the tools that only the old chat code profile used to add
+    (`runtime_start`, `runtime_stop`, `package_install`, `compose_up`); the rest of
+    the DevOps catalogue the finance agent declares is still bound. A removed tool
+    is discoverable through `tool_search` but REFUSED by `tool_invoke` until an
+    operator enables it (`BLACK_ECLIPSE_CODING_EXTRA_TOOLS`) - the model cannot
+    widen its own surface. With the preset disabled the old advertised set returns.
+    """
     from harness.agents import ECLIPSE_AGENT
+    from harness.code import policy
     from harness.code.tools import register_code_tools
     from harness.execution.application.tools import register_application_tools
     from harness.graph import resolve_surface
@@ -104,16 +114,26 @@ def test_reachable_from_a_chat_coding_turn():
         allowed, _prompt = resolve_surface(ECLIPSE_AGENT, registry, {}, autonomy)
         return {s["name"] for s in registry.schemas(allowed)}
 
+    def _allowed(autonomy):
+        allowed, _prompt = resolve_surface(ECLIPSE_AGENT, registry, {}, autonomy)
+        return set(allowed or ())
+
+    monkeypatch.delenv(policy.CODING_SURFACE_ENV, raising=False)
     change = _bound("edit_verify")
-    assert {"runtime_inspect", "runtime_start", "runtime_stop", "package_install",
-            "compose_up", "port_check", "health_check",
+    assert {"runtime_inspect", "port_check", "health_check",
             "k8s_get", "k8s_logs", "terraform_plan", "deploy_status"} <= change
-    # The cluster/infra/cloud MUTATIONS are absent at edit_verify.
+    # `tool_search`/`tool_invoke` are allowed but registered by another module, so
+    # assert the allowlist rather than this registry's schemas.
+    assert {"tool_search", "tool_invoke", "code_edit", "command_run"} <= _allowed("edit_verify")
+    removed = {"runtime_start", "runtime_stop", "package_install", "compose_up"}
+    assert not (removed & change), "the preset should remove these from the bound surface"
+    # The cluster/infra/cloud MUTATIONS are absent at edit_verify regardless.
     assert not ({"k8s_apply", "k8s_delete", "terraform_apply", "terraform_destroy", "deploy_run"} & change)
-    question = _bound("plan_only")
-    assert not ({"runtime_start", "package_install", "compose_up"} & question)
-    assert {"runtime_inspect", "runtime_status", "port_check", "health_check",
-            "k8s_get", "terraform_plan"} <= question
+
+    # Operator escape hatch: turning the preset off restores the advertised set.
+    monkeypatch.setenv(policy.CODING_SURFACE_ENV, "0")
+    restored = _bound("edit_verify")
+    assert removed <= restored
 
 
 @pytest.mark.asyncio

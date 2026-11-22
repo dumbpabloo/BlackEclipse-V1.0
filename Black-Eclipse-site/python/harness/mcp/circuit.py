@@ -54,6 +54,29 @@ TRANSPORT_FAILURE_CODES = frozenset({
 })
 
 
+def backoff_cooldown_s(failures: int, *, base_s: float, lifetime_s: float) -> float:
+    """Exponential per-failure cooldown, capped at ``lifetime_s``.
+
+    Parity with Vibe-Trading's `data_gateway/routing.py::NetworkRouter.record`:
+
+        retry_at = now + min(lifetime, cooldown * 2 ** (failures - 1))
+
+    A flat cooldown retries a dead source at the same cadence forever; doubling per
+    consecutive failure — and capping at ``lifetime`` so it never waits longer than a
+    healthy observation stays fresh — is the difference between "try again in a
+    minute" and "this source has been down for an hour".
+
+    ``failures <= 0`` returns the base cooldown: a breaker that has not failed should
+    not wait longer than one interval.
+    """
+    base = max(0.0, float(base_s))
+    lifetime = max(base, float(lifetime_s))
+    if failures <= 0:
+        return base
+    exponent = min(int(failures) - 1, 62)      # 2**63 overflows a float
+    return min(lifetime, base * (2.0 ** exponent))
+
+
 def breaker_state(
     *, failures: int, opened_at: Optional[float], now: float, threshold: int = FAILURE_THRESHOLD,
     cooldown_s: float = COOLDOWN_S,
@@ -86,6 +109,10 @@ class CircuitBreaker:
 
     threshold: int = FAILURE_THRESHOLD
     cooldown_s: float = COOLDOWN_S
+    #: When set, ``cooldown_s`` is the BASE of an exponential backoff capped at this
+    #: many seconds (see ``backoff_cooldown_s``). ``None`` keeps the flat cooldown,
+    #: which is what every existing caller gets.
+    lifetime_s: Optional[float] = None
     failures: int = 0
     opened_at: Optional[float] = None
     last_error_code: Optional[str] = None
@@ -97,10 +124,18 @@ class CircuitBreaker:
     def _now(self) -> float:
         return float(self._clock())  # type: ignore[operator]
 
+    def effective_cooldown_s(self) -> float:
+        """The cooldown that applies at the current failure count."""
+        if self.lifetime_s is None:
+            return self.cooldown_s
+        return backoff_cooldown_s(
+            self.failures, base_s=self.cooldown_s, lifetime_s=self.lifetime_s
+        )
+
     def state(self) -> str:
         return breaker_state(
             failures=self.failures, opened_at=self.opened_at, now=self._now(),
-            threshold=self.threshold, cooldown_s=self.cooldown_s,
+            threshold=self.threshold, cooldown_s=self.effective_cooldown_s(),
         )
 
     def allow(self) -> bool:

@@ -79,7 +79,8 @@ at every call site** (`PluginContext`/`GrantedPermissions.require`). Declaration
 alone never authorises. The vocabulary is closed and includes `network`,
 `filesystem.read/write`, `process.spawn`, `terminal`, `browser`, `database`,
 `secrets`, `events.subscribe/publish`, `task.create`, `workflow.execute`,
-`agent.invoke`, `memory.read/write`, `research.execute`, `ui`, `notifications`,
+`agent.invoke`, `agents.contribute`, `skills.contribute`, `prompts.contribute`,
+`models.contribute`, `memory.read/write`, `research.execute`, `ui`, `notifications`,
 `webhooks`, `workers`.
 
 - `ELEVATED_PERMISSIONS` (`process.spawn`, `terminal`, `browser`, `database`,
@@ -127,6 +128,59 @@ eclipse plugin dev ./my-plugin        # validate + install + enable
 eclipse plugin validate ./my-plugin
 eclipse plugin package ./my-plugin
 ```
+
+## Executable contributions (Phase 4, kernel on)
+
+When `ECLIPSE_KERNEL=on`, these contribution kinds are mounted through the
+kernel services instead of remaining descriptors:
+
+- **agents** (`@agent_contribution`) - the handler returns an `AgentConfig` or a
+  mapping; it registers in the kernel `AgentCatalog` and resolves by id.
+- **skills** (`@skill`) - the handler returns the procedure text; it registers
+  in the kernel `SkillService` and, when a `SkillRegistry` is attached, the live
+  skill catalog.
+- **prompt sections** (`@prompt_section`) - the handler returns text; it
+  registers in the kernel `PromptService` under its declared `scope`.
+- **research/data providers** (`@research_provider`/`@data_provider`) - the
+  handler returns a provider object/descriptor; it registers in the kernel
+  contribution catalog (`research.execute`).
+- **workflows** (`@workflow_contribution`) - the handler returns a workflow
+  object; it registers in the kernel contribution catalog (`workflow.execute`).
+- **models** (`@model_provider`) - the handler returns a model/provider
+  descriptor; it registers in the kernel contribution catalog
+  (`models.contribute`).
+- **UI panels** (`@ui_panel`) - the handler and descriptor register in the
+  kernel contribution catalog (`ui`); the existing plugin panel renderer remains
+  the UI surface.
+
+Each contribution is permissioned, cross-checked against the manifest, and
+returns an exact undo that runs on disable/uninstall. Executable contributions
+require a **trusted in-process** plugin; a sandboxed (`community`/`untrusted`)
+plugin may still contribute tools, commands, hooks, events, workers and UI.
+
+At boot, the kernel contribution catalog is bound to the real consumers:
+research providers to the search registry, data providers to the retrieval
+provider registry, workflows to the workflow store (validated before save),
+models to the model provider registry, and UI handlers to the UI service's
+dynamic-panel surface. Disabling the plugin removes the same entries from those
+consumers.
+
+A manifest may also declare:
+
+```yaml
+provides:
+  - key: demo.agent
+    version: 1
+requires:
+  - key: tools
+  - key: optional.service
+    optional: true
+```
+
+`provides` must equal what the plugin's `provided_services()` returns;
+`requires` is checked against the live kernel services before load. The
+read-only `harness_inspect` tool exposes the live services, agents, tool/prompt
+scopes, skills and provided keys to the agent.
 
 ## Integration points
 
@@ -232,7 +286,21 @@ a fixed, safe renderer.
 `bundled/hello-world` exercises every contribution surface. `bundled/{github,
 slack,jira,postgres,binance,sec}` are real SDK plugins used as architectural
 validation (network calls go through the controlled HTTP client; they install,
-validate and enable in tests without network).
+validate and enable in tests without network). `bundled/kernel-demo` exercises
+the Phase-4 executable surfaces (agent + skill + prompt section + research/data
+provider + workflow + model + UI panel, provides/requires) and is the regression
+fixture for mount/unwind.
+
+## Composition (planned kernel)
+
+The plugin platform decides *what a plugin may contribute*. It does not yet
+decide *how the harness itself is composed*: profiles, ordered bundles, patch
+layers, per-session presets, service replacement and reversible hot reload are
+specified in `docs/harness/plugin-kernel-plan.md` and have tested first slices
+in `python/harness/kernel/`. The tools/prompt/agents services are wired behind
+`ECLIPSE_KERNEL` (default off); composition rows and plugin contributions are
+not live yet. Read that plan before adding another extension point; the target
+is one composition model, not a second plugin mechanism.
 
 ## Testing
 
@@ -240,3 +308,5 @@ validate and enable in tests without network).
 cover manifest validation, the lifecycle (including restart persistence, update
 and automatic rollback), all contribution surfaces, permission denial, integrity,
 path traversal, encryption, reference-plugin enablement, the CLI and the routes.
+`test_plugins_kernel_{manifest,contributions}.py` cover the Phase-4 executable
+mount/unwind, permission gate, provides/requires and `harness_inspect`.

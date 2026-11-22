@@ -26,11 +26,21 @@ def install_broker_layer(service: Any) -> Optional[BrokerService]:
             approvals=getattr(service, "approvals", None),
             guardrails=getattr(service, "finance_guardrails", None),
         )
+        # The supervisor pauses underperforming bots through the ONE automation
+        # service. A resolver keeps boot order free (the automations may be built
+        # later) and a run without them still reports.
+        if hasattr(service, "automation_service"):
+            from .supervisor_api import bind_automations  # noqa: PLC0415
+
+            bind_automations(brokers, service.automation_service)
         service.brokers = brokers
         _SERVICE = brokers
-        from .tools import register_broker_tools  # noqa: PLC0415
+        from .tools import register_broker_tools, register_supervisor_tools  # noqa: PLC0415
 
         register_broker_tools(service.registry)
+        # The stand-down is a state change, so it is outside the read-only broker
+        # contract and gets its own write/high registration.
+        register_supervisor_tools(service.registry)
         return brokers
     except Exception:  # noqa: BLE001 - never block boot
         service.brokers = None

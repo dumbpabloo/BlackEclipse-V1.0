@@ -182,14 +182,26 @@ MAX_COMMENT = 31  # MetaTrader's comment field
 class TradeRefused(Exception):
     """A structural refusal the caller must see (live off, bad approval, …)."""
 
-    def __init__(self, code: str, message: str, *, status_code: int = 400) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        status_code: int = 400,
+        detail: Optional[dict[str, Any]] = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.status_code = status_code
+        # Optional structured evidence for the caller (e.g. the proof report).
+        self.detail = detail or {}
 
     def to_dict(self) -> dict[str, Any]:
-        return {"code": self.code, "message": self.message}
+        payload = {"code": self.code, "message": self.message}
+        if self.detail:
+            payload["detail"] = self.detail
+        return payload
 
 
 def _finite(value: Any) -> Optional[float]:
