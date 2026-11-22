@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useT } from '@/lib/i18n/use-t';
 import { useSubroute } from '@/hooks/use-subroute';
+import { subscribeCodeRun } from '@/lib/harness/code-run-stream';
 import { cn } from '@/lib/utils';
 import {
   acceptCodePlan,
@@ -50,6 +51,8 @@ export function CodeScreen() {
   const [detail, setDetail] = useState<CodeTask | null>(null);
   const [session, setSession] = useState<CodeSession | null>(null);
   const [diff, setDiff] = useState<CodeTaskDiff | null>(null);
+  const [diffMode, setDiffMode] = useState<'working' | 'committed' | 'revision' | 'turn'>('working');
+  const [diffBase, setDiffBase] = useState('');
   const [view, setView] = useState<CodeView>('tasks');
   const [error, setError] = useState<string | null>(null);
   const [projectRootId, setProjectRootId] = useState<string | null>(null);
@@ -94,7 +97,13 @@ export function CodeScreen() {
     void (async () => {
       try {
         const [task, change, nextSession] = await Promise.all([
-          getCodeTask(selectedId), getCodeTaskDiff(selectedId), getCodeSession(selectedId),
+          getCodeTask(selectedId),
+          getCodeTaskDiff(
+            selectedId,
+            diffMode,
+            diffMode === 'revision' ? diffBase.trim() || undefined : undefined,
+          ),
+          getCodeSession(selectedId),
         ]);
         if (alive) { setDetail(task); setDiff(change); setSession(nextSession); }
       } catch {
@@ -102,9 +111,30 @@ export function CodeScreen() {
       }
     })();
     return () => { alive = false; };
-  }, [selectedId, tasks]);
+  }, [selectedId, tasks, diffMode, diffBase]);
 
   const after = useCallback(async () => { await refresh(); await refreshScorecard(); }, [refresh, refreshScorecard]);
+  // Gap #7b: live progress. The task id is the harness run id, so the existing
+  // SSE stream pushes step/tool/task/checkpoint/plan events; each burst is
+  // coalesced into ONE refetch instead of a 4 s poll.
+  useEffect(() => {
+    if (!selectedId) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const bump = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => { void after(); }, 250);
+    };
+    const unsubscribe = subscribeCodeRun(selectedId, (type) => {
+      bump();
+      window.dispatchEvent(new CustomEvent('eclipse:code-run-event', {
+        detail: { runId: selectedId, type },
+      }));
+    });
+    return () => {
+      unsubscribe();
+      if (timer) clearTimeout(timer);
+    };
+  }, [selectedId, after]);
   const refreshSession = useCallback(() => {
     if (!selectedId) return;
     void getCodeSession(selectedId).then(setSession).catch(() => {});
@@ -185,6 +215,15 @@ export function CodeScreen() {
             diffFiles={diff ? [...diff.added, ...diff.modified, ...diff.deleted] : []}
             diffUnified={diff?.unified}
             diffDigest={diff?.digest ?? null}
+            diffAdded={diff?.added}
+            diffModified={diff?.modified}
+            diffDeleted={diff?.deleted}
+            diffMode={diffMode}
+            onDiffMode={setDiffMode}
+            diffBase={diffBase}
+            onDiffBase={setDiffBase}
+            diffNote={diff && diff.available === false ? diff.reason : undefined}
+            diffRoot={diff?.workspaceRoot}
             onAcceptPlan={() => {
               if (!detail.plan) return;
               void acceptCodePlan(detail.id, detail.plan.steps, detail.plan.checkClasses).then(after);
