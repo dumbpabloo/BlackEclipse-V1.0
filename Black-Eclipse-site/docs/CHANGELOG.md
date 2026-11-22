@@ -6,6 +6,12 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-22
 
+- **fix(updates): point the published manifest at the real repository.** `config/updates.json` said
+  `dumbpabloo/black-eclipse` while the remote is `dumbpabloo/BlackEclipse-V1.0`; every manifest URL would resolve to the
+  wrong repo. Corrected; `src/lib/updates` tests pass (36). Release publishing itself still needs an authenticated GitHub
+  release + a built installer (manual gate).
+  no doc change — configuration value correction.
+
 - **feat(code): Trust Mode autoland with automatic undo.** `python/harness/code/autoland.py` applies a run's prepared change,
   runs the landing checks, keeps it on success, and **rolls it back** on a failed or crashing check (path safety, digest and
   backup rules unchanged). `POST /code/tasks/{runId}/autoland` is the one-call, operator-gated entry; `?full=true` includes
