@@ -115,9 +115,10 @@ export async function listAgentTools(): Promise<AgentPresetEffect[]> {
   return data.tools ?? [];
 }
 
-/** The three built-ins the runtime always has, shown alongside custom presets. */
+/** The built-ins the runtime always has, shown alongside custom presets. */
 export const BUILT_IN_AGENTS = [
   { id: 'eclipse-agent', name: 'Eclipse Agent', description: 'General finance and research agent.' },
   { id: 'code-navigator', name: 'Repository Navigator', description: 'Closed read/write repository toolset.' },
   { id: 'code-agent', name: 'Eclipse Code Agent', description: 'Coding agent with execution and verification tools.' },
+  { id: 'desktop-agent', name: 'Desktop Agent', description: 'Drives native apps on the real desktop: see, act, verify.' },
 ] as const;

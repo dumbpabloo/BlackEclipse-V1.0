@@ -13,6 +13,7 @@ from typing import Optional
 from .prompts import (
     CODE_AGENT_SYSTEM_PROMPT,
     CODE_NAVIGATOR_SYSTEM_PROMPT,
+    DESKTOP_AGENT_SYSTEM_PROMPT,
     ECLIPSE_AGENT_SYSTEM_PROMPT,
 )
 from .schemas import AgentConfig
@@ -139,10 +140,11 @@ COMPUTER_TOOLS = [
     "computer_use",
     "computer_capabilities", "computer_status", "computer_doctor",
     "computer_windows", "computer_apps", "computer_displays", "computer_read_screen",
+    "computer_run",
     "computer_session_start", "computer_session_list", "computer_session_close",
     "computer_takeover", "computer_request_human", "computer_pause", "computer_resume", "computer_release",
     "computer_record_export",
-    "computer_remember", "computer_recall",
+    "computer_remember", "computer_recall", "computer_forget_interface",
     "computer_finance_read", "computer_finance_prepare",
 ]
 
@@ -1146,11 +1148,37 @@ CHAT_CODE_TOOLS: tuple[str, ...] = (
 )
 # Deliberately ABSENT: code_commit, code_push, code_open_pr, code_deploy.
 
+# The dedicated Computer Use agent. A compact, purpose-built toolset (instead of
+# the 366-tool finance agent) so tool selection is about the DESKTOP task, and a
+# protocol prompt that makes the model verify → look → act one step at a time.
+# It can delegate bulk data work to the code agent and verify the result visually.
+DESKTOP_AGENT = AgentConfig(
+    id="desktop-agent",
+    name="Desktop Agent",
+    systemPrompt=DESKTOP_AGENT_SYSTEM_PROMPT,
+    tools=[
+        "computer_use", "computer_read_screen", "computer_capabilities",
+        "computer_status", "computer_doctor", "computer_windows", "computer_apps",
+        "computer_displays", "computer_session_start", "computer_session_list",
+        "computer_session_close", "computer_takeover", "computer_request_human",
+        "computer_pause", "computer_resume", "computer_release",
+        "computer_remember", "computer_recall",
+        "computer_finance_read", "computer_finance_prepare",
+        "visual_ground", "vision_analyze", "screenshot_analyze",
+        "delegate", "delegate_status", "delegate_result",
+    ],
+    maxSteps=32,
+    toolTimeoutMs=60_000,
+    runTimeoutMs=600_000,
+    maxToolCalls=120,
+)
+
 AGENT_PRESETS: dict[str, AgentConfig] = {
     ECLIPSE_AGENT.id: ECLIPSE_AGENT,
     CODE_NAVIGATOR.id: CODE_NAVIGATOR,
     CODE_AGENT.id: CODE_AGENT,
     BOOKKEEPER.id: BOOKKEEPER,
+    DESKTOP_AGENT.id: DESKTOP_AGENT,
 }
 
 DEFAULT_AGENT_ID = ECLIPSE_AGENT.id
@@ -1176,6 +1204,7 @@ __all__ = [
     "CODE_NAVIGATOR_TOOLS",
     "COMPUTER_TOOLS",
     "DEFAULT_AGENT_ID",
+    "DESKTOP_AGENT",
     "ECLIPSE_AGENT",
     "SEARCH_TOOLS",
     "get_agent",

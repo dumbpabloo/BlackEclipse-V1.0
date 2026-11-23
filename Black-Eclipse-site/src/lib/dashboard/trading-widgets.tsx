@@ -225,7 +225,7 @@ export function BrokerOpenPositionsWidget() {
 // ── Working orders ───────────────────────────────────────────────────────────
 export function BrokerWorkingOrdersWidget() {
   const { connection, orders, error, loading, refresh } = useTradingData();
-  const cancel = async (ticket: number) => {
+  const cancel = async (ticket: number | string) => {
     if (!connection) return;
     if (!(await confirmDialog({ title: `Cancel working order #${ticket}?`, tone: 'danger' }))) return;
     try {

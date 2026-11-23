@@ -1,4 +1,4 @@
-"""MT4 bridge adapter: the documented read-only JSON contract.
+"""MT4 bridge adapter: the documented JSON contract.
 
 A real local HTTP server proves the contract end-to-end without MT4, a bridge,
 or the network. The adapter must map the JSON into the normal broker shapes and

@@ -124,7 +124,7 @@ def test_account_sums_balances(monkeypatch):
     account = adapter.account()
     assert account["server"] == "kraken"
     assert account["equity"] == pytest.approx(100.5)
-    assert account["tradeAllowed"] is False
+    assert account["tradeAllowed"] is True
 
 
 def test_positions_are_spot_balances_not_marked(monkeypatch):
@@ -161,8 +161,8 @@ def test_quote_reads_the_ticker(monkeypatch):
     assert quote["bid"] == pytest.approx(59990.0)
 
 
-def test_registry_declares_the_kind_read_only():
+def test_registry_declares_the_kind_executable():
     kind = get_kind("kraken")
-    assert kind.execution is False
+    assert kind.execution is True
     assert "quote" in kind.capabilities
     assert any(row["id"] == "kraken" for row in list_kinds())

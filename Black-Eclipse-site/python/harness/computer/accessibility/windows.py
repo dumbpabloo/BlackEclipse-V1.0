@@ -223,6 +223,114 @@ class UiaAXProvider(AXProvider):
             pass
         return node
 
+    # ── pattern activation ───────────────────────────────────────────────────
+
+    def activate(self, *, window_id: Optional[str] = None, name: str = "",
+                 role: str = "", bounds: Any = None, value: str = "") -> bool:
+        """Invoke/Toggle/Select/SetValue a UIA control without a mouse.
+
+        Matching is by accessible name (exact first, then containment) and, when
+        supplied, by the control's centre point so two same-named buttons in
+        different rows are not confused.
+        """
+        if not self.available or not window_id:
+            return False
+        try:
+            handle = int(window_id)
+            root = self._auto.ControlFromHandle(handle)
+        except Exception:  # noqa: BLE001
+            return False
+        if root is None:
+            return False
+        needle = (name or "").strip().lower()
+        if not needle:
+            return False
+        centre = None
+        if bounds is not None:
+            try:
+                centre = bounds.center
+            except Exception:  # noqa: BLE001
+                centre = None
+        match = self._find_control(root, needle, centre, depth=0)
+        if match is None:
+            return False
+        try:
+            if value:
+                pattern = match.GetValuePattern()
+                if pattern is not None:
+                    pattern.SetValue(str(value))
+                    return True
+        except Exception:  # noqa: BLE001 - no value pattern
+            pass
+        for getter, call in (
+            ("GetInvokePattern", "Invoke"),
+            ("GetTogglePattern", "Toggle"),
+            ("GetSelectionItemPattern", "Select"),
+            ("GetExpandCollapsePattern", "Expand"),
+        ):
+            try:
+                pattern = getattr(match, getter)()
+                if pattern is not None:
+                    getattr(pattern, call)()
+                    return True
+            except Exception:  # noqa: BLE001 - try the next pattern
+                continue
+        return False
+
+    def focus(self, *, window_id: Optional[str] = None, name: str = "",
+              role: str = "", bounds: Any = None) -> bool:
+        """Set keyboard focus on a UIA control (no mouse, works when obscured)."""
+        if not self.available or not window_id or not name:
+            return False
+        try:
+            root = self._auto.ControlFromHandle(int(window_id))
+        except Exception:  # noqa: BLE001
+            return False
+        if root is None:
+            return False
+        centre = None
+        if bounds is not None:
+            try:
+                centre = bounds.center
+            except Exception:  # noqa: BLE001
+                centre = None
+        match = self._find_control(root, name.strip().lower(), centre, depth=0)
+        if match is None:
+            return False
+        try:
+            match.SetFocus()
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _find_control(self, control: Any, needle: str, centre: Any, *, depth: int) -> Any:
+        if depth > 12 or control is None:
+            return None
+        try:
+            label = (control.Name or "").strip().lower()
+        except Exception:  # noqa: BLE001
+            label = ""
+        if label and (label == needle or needle in label):
+            if centre is None:
+                return control
+            try:
+                rect = control.BoundingRectangle
+                cx = (rect.left + rect.right) // 2
+                cy = (rect.top + rect.bottom) // 2
+                if abs(cx - centre[0]) <= 8 and abs(cy - centre[1]) <= 8:
+                    return control
+            except Exception:  # noqa: BLE001
+                return control
+        try:
+            children = control.GetChildren()
+        except Exception:  # noqa: BLE001
+            return None
+        for child in children:
+            found = self._find_control(child, needle, centre, depth=depth + 1)
+            if found is not None:
+                return found
+        return None
+
 
 def build_ax_provider() -> AXProvider:
     """The best accessibility provider available on this machine."""

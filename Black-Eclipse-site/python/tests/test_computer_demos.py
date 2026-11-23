@@ -121,7 +121,8 @@ def _permissive(manager_policy=None):
     from harness.computer.policy import ALLOW, default_policy
 
     policy = default_policy()
-    for p in ("observe", "click", "type", "key", "set_value", "foreground", "window_control"):
+    for p in ("observe", "click", "type", "key", "set_value", "foreground", "window_control", "drag",
+              "clipboard_read", "clipboard_write"):
         policy.permissions[p] = ALLOW
     return policy
 

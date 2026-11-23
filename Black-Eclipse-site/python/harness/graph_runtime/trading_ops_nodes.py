@@ -17,6 +17,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from ..trade.model import ticket_ref
 from .model import ExecutionMode, PortDef, PortType, SideEffect
 from .registry import ConfigField, NodeDef, NodeExecContext
 
@@ -53,11 +54,13 @@ def _number(context: NodeExecContext, handle: str, config_key: str | None = None
         raise ValueError(f"{handle} must be a number") from exc
 
 
-def _ticket(context: NodeExecContext) -> int:
-    ticket = _number(context, "ticket")
-    if ticket is None or ticket <= 0:
+def _ticket(context: NodeExecContext):
+    raw = context.inputs.get("ticket")
+    if raw in (None, ""):
+        raw = context.config.get("ticket")
+    if raw in (None, ""):
         raise ValueError("a position ticket is required")
-    return int(ticket)
+    return ticket_ref(raw)
 
 
 def _reason(result: dict[str, Any] | None) -> str:
@@ -85,18 +88,18 @@ def _quote(context: NodeExecContext) -> dict[str, Any]:
     return data if isinstance(data, dict) else raw
 
 
-def _position(service: Any, connection_id: str, ticket: int) -> dict[str, Any] | None:
+def _position(service: Any, connection_id: str, ticket: Any) -> dict[str, Any] | None:
     result = service.positions(connection_id)
     if not result.get("available"):
         raise ValueError(f"the broker could not be read: {_reason(result) or 'unavailable'}")
     rows = result.get("data") if isinstance(result.get("data"), list) else []
     for row in rows:
-        if isinstance(row, dict) and int(row.get("ticket") or 0) == ticket:
+        if isinstance(row, dict) and ticket_ref(row.get("ticket") or 0) == ticket:
             return row
     return None
 
 
-def _missing(ticket: int) -> dict[str, Any]:
+def _missing(ticket: Any) -> dict[str, Any]:
     return {
         "moved": False,
         "closed": False,
@@ -314,7 +317,7 @@ def exec_partial_close(context: NodeExecContext) -> dict[str, Any]:
 
 def build_ops_nodes() -> list[NodeDef]:
     connection = ConfigField("connectionId", "string", "", max_length=80)
-    ticket_port = PortDef(id="ticket", name="Ticket", type=PortType.NUMBER)
+    ticket_port = PortDef(id="ticket", name="Ticket", type=PortType.TICKET)
     ok_ports = (
         PortDef(id="ok", name="OK", type=PortType.BOOLEAN),
         PortDef(id="reason", name="Reason", type=PortType.STRING),

@@ -294,7 +294,7 @@ async def test_high_risk_action_refuses_coordinate_target():
     snap = session.latest_snapshot
     # A "Submit Order" click by raw coordinates must be refused.
     with pytest.raises(PolicyBlocked) as exc:
-        core._resolve_target(  # noqa: SLF001 - direct gate test
+        await core._resolve_target(  # noqa: SLF001 - direct gate test
             {"coordinates": [100, 100], "target": "Submit Order"},
             high_risk=True,
         )
@@ -315,7 +315,7 @@ async def test_high_risk_action_allows_semantic_target():
     core = ComputerCore(session, config=session._config)
     snap = session.latest_snapshot
     el = next((e for e in snap.elements if e.name == "Submit Order"), None)
-    target = core._resolve_target(  # noqa: SLF001
+    target = await core._resolve_target(  # noqa: SLF001
         {"element": el.ref, "snapshot_id": snap.snapshot_id},
         high_risk=True,
     )

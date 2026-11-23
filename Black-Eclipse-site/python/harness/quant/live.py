@@ -794,7 +794,7 @@ class LiveStrategyService:
                 continue
             try:
                 closed.append(self.broker.close_position(
-                    trial["connectionId"], int(ticket)))
+                    trial["connectionId"], ticket))
             except Exception as exc:  # noqa: BLE001
                 closed.append({"ticket": ticket, "status": "ERROR", "error": str(exc)})
         return closed

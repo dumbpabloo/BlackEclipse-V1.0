@@ -1,4 +1,4 @@
-"""Read-only Kraken adapter (spot).
+"""Kraken adapter (spot): reads AND real order execution.
 
 Kraken's private API signs a **path + nonce + body** digest with HMAC-SHA512:
 
@@ -8,17 +8,25 @@ Kraken's private API signs a **path + nonce + body** digest with HMAC-SHA512:
 
 `sign_request` is pure so the exact input can be checked against an independent
 computation — this scheme is easy to get subtly wrong (the path is signed, the
-body is hashed first, and the secret arrives base64-encoded).
+body is hashed first, and the secret arrives base64-encoded). `_call` already
+signs `path + nonce + body`, so every private POST (AddOrder, CancelOrder,
+OpenOrders, QueryOrders) reuses it unchanged.
 
 Declared limits:
 
   * **Spot only.** `positions()` reports non-zero balances; nothing is priced.
-  * **No order placement**, no websocket stream.
+    A spot close is an opposite MARKET order, so a position ticket is the asset
+    and a close takes the PAIR (e.g. `XBTUSD`).
+  * **No attached stops.** Kraken can carry a `close[...]` stop, but Eclipse
+    refuses an intent that carries `stop_loss`/`take_profit` (`STOP_UNSUPPORTED`)
+    so no venue silently drops or half-applies a stop; place it as its own order.
+  * **Ownership tag is `userref`** (an integer), set from the intent's magic.
+    `cancel_all` matches `userref`, never a blind all-orders cancel.
   * Kraken answers HTTP 200 with an `error` array on application failures, so that
     array is a refusal, not empty data.
 
 Config: `baseUrl` (default https://api.kraken.com), `credentialRef` naming an env
-var/secret holding `KEY:SECRET`, optional `assetPairs` for quote lookups.
+var/secret holding `KEY:SECRET`, optional `magic` tagging close orders.
 """
 
 from __future__ import annotations
@@ -33,11 +41,32 @@ import urllib.parse
 import urllib.request
 from typing import Any, Optional
 
-from ..adapter import AdapterUnavailable, BrokerAdapter
+from ..adapter import AdapterUnavailable, TradingAdapter
 from ..model import KIND_KRAKEN
 from .credentials import parse_key_pair, resolve_secret_value, validate_http_url
+from .orders import (
+    account_mode,
+    build_preview,
+    build_result,
+    quote_preference,
+    resolve_close_pair,
+    step_volume,
+)
 
 _TIMEOUT = 15
+
+_STOP_REASON = (
+    "a spot entry cannot carry an attached stop loss or take profit; "
+    "submit the entry, then place a separate stop order on the filled position"
+)
+_NO_POSITION_MODIFY = (
+    "Kraken spot has no position-level stop/target object; a close is an opposite "
+    "market order and a stop is a separate resting order"
+)
+_NO_ORDER_MODIFY = (
+    "Kraken's EditOrder needs the pair and volume of the working order; cancel the "
+    "order and submit the replacement instead"
+)
 
 
 def _num(value: Any, fallback: float = 0.0) -> float:
@@ -46,6 +75,11 @@ def _num(value: Any, fallback: float = 0.0) -> float:
     except (TypeError, ValueError):
         return fallback
     return number if number == number else fallback
+
+
+def _fmt(value: float) -> str:
+    text = f"{float(value):.10f}".rstrip("0").rstrip(".")
+    return text or "0"
 
 
 def sign_request(secret_b64: str, path: str, nonce: str, postdata: str) -> str:
@@ -57,7 +91,7 @@ def sign_request(secret_b64: str, path: str, nonce: str, postdata: str) -> str:
     ).decode("ascii")
 
 
-class KrakenAdapter(BrokerAdapter):
+class KrakenAdapter(TradingAdapter):
     kind = KIND_KRAKEN
 
     @classmethod
@@ -136,15 +170,12 @@ class KrakenAdapter(BrokerAdapter):
         try:
             account = self.account()
         except AdapterUnavailable as exc:
-            return {
-                "available": True, "connected": False, "code": exc.code,
-                "reason": exc.reason, "terminal": {"api": self._base()},
-                "account": None, "warnings": [],
-            }
-        return {
-            "available": True, "connected": True, "code": None, "reason": None,
-            "terminal": {"api": self._base()}, "account": account, "warnings": [],
-        }
+            return {"available": True, "connected": False, "code": exc.code,
+                    "reason": exc.reason, "terminal": {"api": self._base()},
+                    "account": None, "warnings": []}
+        return {"available": True, "connected": True, "code": None, "reason": None,
+                "terminal": {"api": self._base()}, "account": account,
+                "warnings": []}
 
     def _balances(self) -> dict[str, float]:
         result = self._call("/0/private/Balance") or {}
@@ -157,7 +188,7 @@ class KrakenAdapter(BrokerAdapter):
         total = sum(max(0.0, value) for value in balances.values())
         return {
             "login": 0,
-            "mode": "live",
+            "mode": account_mode(self._base()),
             "server": "kraken",
             "company": "Kraken",
             "currency": "USD",
@@ -169,8 +200,11 @@ class KrakenAdapter(BrokerAdapter):
             "profit": 0.0,
             "leverage": 1.0,
             "marginMode": "spot",
-            "tradeAllowed": False,  # read-only adapter by construction
-            "expertAllowed": False,
+            # Kraken's Balance payload carries no "trading disabled" flag, and a
+            # rejected AddOrder is the venue's own refusal — so this is a live
+            # venue unless the venue itself says otherwise.
+            "tradeAllowed": True,
+            "expertAllowed": True,
         }
 
     def positions(self) -> list[dict[str, Any]]:
@@ -179,7 +213,8 @@ class KrakenAdapter(BrokerAdapter):
             if quantity == 0:
                 continue
             out.append({
-                "ticket": 0,
+                # Closed by an opposite market order, so the asset is the ticket.
+                "ticket": asset.upper(),
                 "symbol": asset.upper(),
                 "side": "buy",
                 "volume": quantity,
@@ -216,6 +251,7 @@ class KrakenAdapter(BrokerAdapter):
                 "magic": 0,
                 "comment": f"kraken {str(descr.get('type') or '').lower()}".strip(),
                 "placedAt": int(_num(row.get("opentm")) * 1000),
+                "userref": row.get("userref"),
             })
         return out
 
@@ -243,6 +279,301 @@ class KrakenAdapter(BrokerAdapter):
             "serverTimeMs": int(time.time() * 1000),
             "provider": "kraken",
         }
+
+    # -- instrument metadata -------------------------------------------------
+    def _all_pairs(self) -> dict[str, str]:
+        cached = getattr(self, "_pair_cache", None)
+        if cached is not None:
+            return cached
+        result = self._call("/0/public/AssetPairs", private=False) or {}
+        pairs: dict[str, str] = {}
+        for key, row in (result.items() if isinstance(result, dict) else []):
+            if not isinstance(row, dict):
+                continue
+            alt = str(row.get("altname") or key)
+            pairs[str(key).upper()] = alt
+            pairs[alt.upper()] = alt
+        self._pair_cache = pairs
+        return pairs
+
+    def _asset_pair(self, pair: str) -> tuple[str, dict[str, Any]]:
+        key = str(pair or "").strip().upper()
+        if not key:
+            raise AdapterUnavailable("KRAKEN_SYMBOL", "a pair is required")
+        result = self._call("/0/public/AssetPairs", {"pair": key}, private=False) or {}
+        if not isinstance(result, dict) or not result:
+            raise AdapterUnavailable("KRAKEN_NO_SYMBOL", f"Kraken lists no pair {key!r}")
+        name = next(iter(result))
+        row = result[name]
+        if not isinstance(row, dict):
+            raise AdapterUnavailable("KRAKEN_NO_SYMBOL", f"Kraken lists no pair {key!r}")
+        return name, row
+
+    def symbol_info(self, symbol: str) -> dict[str, Any]:
+        key, row = self._asset_pair(str(symbol or ""))
+        lot_decimals = int(_num(row.get("lot_decimals"), 8))
+        pair_decimals = int(_num(row.get("pair_decimals"), 8))
+        status = str(row.get("status") or "").lower()
+        base = str(row.get("base") or "")
+        quote_asset = str(row.get("quote") or "")
+        return {
+            "symbol": str(row.get("altname") or key).upper(),
+            "requestedSymbol": symbol,
+            "description": str(row.get("wsname") or f"{base}/{quote_asset}"),
+            "path": "spot",
+            "tradeMode": "full" if status in ("online", "post_only") else "disabled",
+            "digits": pair_decimals,
+            "point": 10 ** -pair_decimals,
+            "tickSize": 10 ** -pair_decimals,
+            "tickValue": 10 ** -pair_decimals,
+            "currencyBase": base,
+            "currencyProfit": quote_asset,
+            "currencyMargin": quote_asset,
+            "contractSize": 1.0,
+            "volumeMin": _num(row.get("ordermin")),
+            "volumeMax": 0.0,
+            "volumeStep": 10 ** -lot_decimals,
+            "notionalMin": _num(row.get("costmin")),
+            "stopsLevelPoints": 0,
+            "freezeLevelPoints": 0,
+            "spreadPoints": None,
+            "sessionsAvailable": True,
+            "sessionNote": "Kraken spot trades continuously",
+            "retrievedAt": time.time(),
+            "provider": "kraken",
+        }
+
+    # -- execution -----------------------------------------------------------
+    def order_preview(self, intent: Any) -> dict[str, Any]:
+        account = self.account()
+        quote = self.quote(intent.symbol)
+        info = self.symbol_info(intent.symbol)
+        step = _num(info.get("volumeStep"))
+        volume, reasons = step_volume(
+            intent.volume, step, _num(info.get("volumeMin")), _num(info.get("volumeMax")),
+        )
+        bid = _num(quote.get("bid"))
+        ask = _num(quote.get("ask"))
+        price = (
+            float(intent.price)
+            if intent.order_type in ("limit", "stop") and intent.price
+            else (ask if intent.side == "buy" else bid)
+        )
+        extra: dict[str, Any] = {"venue": "kraken", "stopSupported": False}
+        if intent.stop_loss is not None or intent.take_profit is not None:
+            reasons.append(_STOP_REASON)
+            extra["retcodeName"] = "STOP_UNSUPPORTED"
+        if info.get("tradeMode") != "full":
+            reasons.append(f"Kraken reports {intent.symbol} as not tradable")
+        return build_preview(
+            intent,
+            account=account,
+            quote=quote,
+            volume=volume,
+            price=price,
+            contract_size=1.0,
+            margin=max(0.0, volume * price),
+            open_positions=len(self.positions()),
+            reasons=reasons,
+            digits=int(info.get("digits") or 8),
+            volume_step=step,
+            volume_min=_num(info.get("volumeMin")),
+            volume_max=_num(info.get("volumeMax")),
+            extra=extra,
+        )
+
+    def _order_params(self, intent: Any, volume: float) -> dict[str, Any]:
+        order_type = str(intent.order_type)
+        params: dict[str, Any] = {
+            "pair": str(intent.symbol).strip().upper(),
+            "type": str(intent.side).lower(),
+            "ordertype": {"market": "market", "limit": "limit", "stop": "stop-loss"}[order_type],
+            "volume": _fmt(volume),
+            # Kraken's ownership tag is an integer; the magic is exactly that.
+            "userref": int(intent.magic or 0),
+        }
+        if order_type == "limit":
+            params["price"] = _fmt(float(intent.price))
+            params["timeinforce"] = "gtc" if intent.time_in_force == "gtc" else "day"
+        elif order_type == "stop":
+            params["price"] = _fmt(float(intent.price))
+        return params
+
+    def submit_order(self, intent: Any) -> dict[str, Any]:
+        preview = self.order_preview(intent)
+        if preview.get("reasons"):
+            return build_result(
+                ok=False, status="REFUSED", symbol=intent.symbol, side=intent.side,
+                order_type=intent.order_type, volume=preview.get("volume") or intent.volume,
+                price=preview.get("price") or 0.0,
+                retcode_name=str(preview.get("retcodeName") or "PREVIEW_REJECTED"),
+                reasons=preview.get("reasons") or [],
+                account=preview.get("account") or {},
+            )
+        volume = float(preview["volume"])
+        result = self._call("/0/private/AddOrder", self._order_params(intent, volume)) or {}
+        txids = result.get("txid") if isinstance(result, dict) else None
+        if not isinstance(txids, list) or not txids:
+            raise AdapterUnavailable("KRAKEN_BAD_RESPONSE", "Kraken returned no order txid")
+        return build_result(
+            ok=True,
+            status="placed",
+            symbol=intent.symbol,
+            side=intent.side,
+            order_type=intent.order_type,
+            volume=volume,
+            # AddOrder acknowledges an id and reports no fill; a fill is never
+            # inferred from an acknowledgement.
+            fill_volume=None,
+            price=preview["price"],
+            ticket=str(txids[0]),
+            retcode="placed",
+            retcode_name="ACCEPTED",
+            comment=str((result.get("descr") or {}).get("order") or ""),
+            account=preview.get("account") or {},
+            userref=int(intent.magic or 0),
+        )
+
+    def cancel_order(self, ticket: Any) -> dict[str, Any]:
+        txid = str(ticket)
+        try:
+            result = self._call("/0/private/CancelOrder", {"txid": txid}) or {}
+        except AdapterUnavailable as exc:
+            if "Unknown order" in exc.reason or "unknown order" in exc.reason.lower():
+                return {"ok": False, "ticket": txid, "retcode": None,
+                        "retcodeName": "ORDER_NOT_FOUND", "reasons": [exc.reason]}
+            raise
+        count = int(_num(result.get("count"), 0)) if isinstance(result, dict) else 0
+        if count <= 0:
+            return {
+                "ok": False, "ticket": txid, "retcode": None,
+                "retcodeName": "ORDER_NOT_FOUND",
+                "reasons": [f"Kraken did not cancel {txid} (no matching working order)"],
+            }
+        return {"ok": True, "ticket": txid, "retcode": 200,
+                "retcodeName": "CANCELLED", "reasons": [], "pending": bool(result.get("pending"))}
+
+    def _open_rows(self) -> dict[str, Any]:
+        result = self._call("/0/private/OpenOrders") or {}
+        rows = result.get("open") if isinstance(result, dict) else None
+        return rows if isinstance(rows, dict) else {}
+
+    def cancel_all(self, magic: int) -> dict[str, Any]:
+        results: list[dict[str, Any]] = []
+        for txid, row in self._open_rows().items():
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("userref")) != str(int(magic or 0)):
+                continue
+            try:
+                results.append(self.cancel_order(txid))
+            except AdapterUnavailable as exc:
+                results.append({"ok": False, "ticket": str(txid),
+                                "retcodeName": exc.code, "reasons": [exc.reason]})
+        cancelled = sum(1 for item in results if item.get("ok"))
+        return {
+            "ok": not any(not item.get("ok") for item in results),
+            "cancelled": cancelled,
+            "failed": len(results) - cancelled,
+            "results": results,
+            "retcodeName": "CANCELLED" if cancelled else "NO_ORDERS",
+            "reasons": [],
+        }
+
+    @staticmethod
+    def _asset_key(asset: str) -> str:
+        return str(asset or "").strip().upper()
+
+    def close_position(
+        self, ticket: Any, deviation: int = 20, volume: float | None = None,
+    ) -> dict[str, Any]:
+        pair = str(ticket or "").strip().upper()
+        if not pair:
+            return {"ok": False, "ticket": ticket, "retcodeName": "INVALID_SYMBOL",
+                    "reasons": ["pass the traded PAIR (e.g. XBTUSD) to close a spot balance"]}
+        try:
+            available = self._all_pairs()
+        except AdapterUnavailable:
+            available = {}
+        resolved = resolve_close_pair(
+            self.config, pair, available,
+            quote_preference(self.config, ("USD", "USDT", "USDC", "EUR", "GBP", "JPY", "BTC")),
+            "{base}{quote}",
+        )
+        if not resolved:
+            resolved = pair
+        pair = resolved
+        try:
+            _key, info = self._asset_pair(pair)
+        except AdapterUnavailable as exc:
+            return {"ok": False, "ticket": pair, "retcodeName": "INVALID_SYMBOL",
+                    "reasons": [f"{pair} is not a Kraken pair: {exc.reason}"]}
+        base = self._asset_key(info.get("base"))
+        balances = self._balances()
+        free = max(0.0, balances.get(base, balances.get(f"X{base}", 0.0)))
+        quantity = float(volume) if volume else free
+        step = 10 ** -int(_num(info.get("lot_decimals"), 8))
+        quantity, reasons = step_volume(quantity, step, 0.0, 0.0)
+        if quantity <= 0:
+            return {"ok": False, "ticket": pair, "retcodeName": "POSITION_NOT_FOUND",
+                    "reasons": [f"Kraken reports no free {base} balance to close"]}
+        params = {
+            "pair": str(info.get("altname") or pair),
+            "type": "sell",
+            "ordertype": "market",
+            "volume": _fmt(quantity),
+            "userref": int(self.config.get("magic") or 0),
+        }
+        result = self._call("/0/private/AddOrder", params) or {}
+        txids = result.get("txid") if isinstance(result, dict) else None
+        if not isinstance(txids, list) or not txids:
+            raise AdapterUnavailable("KRAKEN_BAD_RESPONSE", "Kraken returned no close txid")
+        return {
+            "ok": True,
+            "ticket": pair,
+            "symbol": pair,
+            "side": "sell",
+            "volume": quantity,
+            "requestedVolume": quantity,
+            "price": 0.0,
+            "orderTicket": str(txids[0]),
+            "retcode": "placed",
+            "retcodeName": "CLOSING",
+            "partial": bool(volume),
+            # Kraken only acknowledged the order; it reports no executed volume
+            # here, so this is not claimed as a confirmed close.
+            "verified": False,
+            "reasons": reasons,
+        }
+
+    def order_status(self, ticket: Any) -> dict[str, Any]:
+        txid = str(ticket)
+        result = self._call("/0/private/QueryOrders", {"txid": txid}) or {}
+        row = result.get(txid) if isinstance(result, dict) else None
+        if not isinstance(row, dict):
+            return {"found": False, "ticket": txid}
+        return {
+            "found": True,
+            "ticket": txid,
+            "state": row.get("status"),
+            "stateName": str(row.get("status") or "").upper(),
+            "filledVolume": _num(row.get("vol_exec")),
+            "avgPrice": _num(row.get("price")),
+        }
+
+    def modify_position(
+        self, ticket: Any, stop_loss: float | None = None,
+        take_profit: float | None = None,
+    ) -> dict[str, Any]:
+        return {"ok": False, "ticket": ticket, "retcode": None,
+                "retcodeName": "MODIFY_NOT_SUPPORTED", "reasons": [_NO_POSITION_MODIFY]}
+
+    def modify_order(
+        self, ticket: Any, price: float | None = None,
+        stop_loss: float | None = None, take_profit: float | None = None,
+    ) -> dict[str, Any]:
+        return {"ok": False, "ticket": ticket, "retcode": None,
+                "retcodeName": "ORDER_MODIFY_NOT_SUPPORTED", "reasons": [_NO_ORDER_MODIFY]}
 
 
 __all__ = ["KrakenAdapter", "sign_request"]

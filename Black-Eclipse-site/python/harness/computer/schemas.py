@@ -14,8 +14,10 @@ from typing import Any
 _ACTIONS = (
     "capture", "click", "double_click", "right_click", "middle_click",
     "mouse_move", "mouse_position", "scroll", "drag", "type", "key", "hotkey",
-    "set_value", "wait", "list_apps", "list_windows", "list_displays",
-    "focus_app",
+    "set_value", "invoke", "focus", "press_and_hold", "wait", "wait_for", "scroll_into_view",
+    "open", "close", "clipboard_get", "clipboard_set",
+    "list_apps", "list_windows", "list_displays", "focus_app",
+    "note", "done", "fail",
 )
 
 
@@ -45,8 +47,36 @@ INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
         "role": {"type": "string", "description": "Accessible role to match (button, textbox, combobox, …)."},
         "coordinates": {"type": "array", "items": {"type": "number"},
                         "description": "Fallback [x, y] or [left, top, right, bottom]. Coordinates are a last resort."},
+        "from_coordinates": {"type": "array", "items": {"type": "number"},
+                             "description": "Drag start [x, y] or [left, top, right, bottom]."},
+        "to_coordinates": {"type": "array", "items": {"type": "number"},
+                           "description": "Drag end [x, y] or [left, top, right, bottom]."},
+        "from_element": {"type": "integer", "description": "Drag source element number from `capture`."},
+        "to_element": {"type": "integer", "description": "Drag target element number from `capture`."},
+        "allow_coordinates": {"type": "boolean",
+                             "description": "Permit a coordinate-only target. A critical action also needs confirm_coordinates."},
+        "confirm_coordinates": {"type": "boolean",
+                                "description": "Second explicit confirmation for a coordinate target on a critical action."},
+        "relative": {"type": "string",
+                     "description": "A fractional or offset point inside the window, e.g. '0.5,0.5' or 'left+10,top+20'."},
+        "region": {"type": "array", "items": {"type": "integer"},
+                   "description": "Capture only [x, y, width, height] in screen coordinates."},
+        "display_id": {"type": "string", "description": "Capture a whole display instead of a window."},
+        "modifiers": {"type": "array", "items": {"type": "string", "enum": ["ctrl", "shift", "alt", "meta"]},
+                      "description": "Keys held while clicking (multi-select, open-in-new-tab)."},
+        "expect": {
+            "type": "object",
+            "description": "What should change: {stateChanged, windowChanged, dialogAppeared, axContains:'text'}.",
+            "properties": {
+                "stateChanged": {"type": "boolean"},
+                "windowChanged": {"type": "boolean"},
+                "dialogAppeared": {"type": "boolean"},
+                "axContains": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
         "value": {"type": "string", "description": "Value for `set_value`."},
-        "text": {"type": "string", "description": "Text to type. Never echoed back."},
+        "text": {"type": "string", "description": "Text to type, clipboard text to set, or the note to store. Never echoed back."},
         "key": {"type": "string", "description": "A key or shortcut, e.g. 'enter' or 'ctrl+s' or a semantic name like 'SAVE'."},
         "combo": {"type": "string", "description": "Alias for `key` for the hotkey action."},
         "x": {"type": "integer", "description": "X coordinate for pointer/scroll."},
@@ -56,13 +86,16 @@ INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
         "button": {"type": "string", "enum": ["left", "right", "middle"]},
         "count": {"type": "integer", "description": "Click count (2 = double click)."},
         "window_id": {"type": "string", "description": "Target a specific window (from list_windows)."},
-        "app": {"type": "string", "description": "Application name for focus_app/list filtering."},
+        "app": {"type": "string", "description": "Application name/path for open/close/focus_app/list filtering."},
+        "args": {"type": "array", "items": {"type": "string"}, "description": "Arguments for `open`."},
         "mode": {"type": "string", "enum": ["som", "vision", "ax", "ocr"],
-                 "description": "Observation mode for `capture`. `som` (default) is a screen-of-marks with numbered elements."},
-        "capture_after": {"type": "boolean", "description": "Observe again after the action and return the new state (for state-changing actions)."},
+                 "description": "Observation mode for `capture`. `som` (default) is a screen-of-marks with numbered elements drawn on the attached screenshot."},
+        "capture_after": {"type": "boolean",
+                          "description": "Observe again after the action (default true for state-changing actions) and attach the new screenshot."},
         "foreground": {"type": "boolean", "description": "Force foreground delivery (moves the real cursor / raises focus). Use only when background fails."},
         "dry_run": {"type": "boolean", "description": "Describe the action without executing it."},
-        "ms": {"type": "integer", "description": "Milliseconds for `wait`."},
+        "ms": {"type": "integer",
+               "description": "Milliseconds for `wait`; the hold duration for `press_and_hold`; the timeout for `wait_for`."},
         "session_id": _SESSION,
     }, ["action"]),
 
@@ -78,6 +111,12 @@ INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
         "mode": {"type": "string", "enum": ["som", "vision", "ax", "ocr"]},
         "session_id": _SESSION,
     }),
+    # ── Best-of-N over fresh desktop sessions ────────────────────────────────
+    "computer_run": _schema({
+        "task": {"type": "string", "description": "The desktop task to accomplish (plain English)."},
+        "attempts": {"type": "integer", "description": "How many independent rollouts to run (1-4, default 3). Each rollout may be asked to approve its own actions."},
+        "session_id": _SESSION,
+    }, ["task"]),
 
     # ── Sessions ─────────────────────────────────────────────────────────────
     "computer_session_start": _schema({
@@ -117,6 +156,9 @@ INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
         "query": {"type": "string", "description": "What to remember about the desktop."},
         "application": {"type": "string"},
     }, ["query"]),
+    "computer_forget_interface": _schema({
+        "application": {"type": "string", "description": "The application whose learned interface should be forgotten."},
+    }, ["application"]),
 
     "computer_finance_prepare": _schema({
         "application": {"type": "string", "description": "The trading application."},
@@ -144,16 +186,23 @@ INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
 TOOL_META: dict[str, dict[str, Any]] = {
     "computer_use": {"risk": "medium", "timeout": 60_000, "desc":
         "Operate the real desktop: observe it and act on native applications (Excel, VS Code, terminals, "
-        "PDF apps, trading terminals). Start with action='capture' to get numbered elements (#1, #2, …), then act "
-        "with element=<number> and the returned snapshot_id. Background delivery is the default and does NOT steal "
-        "your focus; a foreground escalation is explicit. A financial mutation is routed through the finance firewall."},
+        "PDF apps, trading terminals). Start with action='capture' to get a screenshot with numbered marks "
+        "plus the #N element list; then act with element=<number> and the returned snapshot_id. Background "
+        "delivery is the default and does NOT steal your focus; a foreground escalation is explicit. "
+        "State-changing actions attach a fresh screenshot of the result by default. A financial mutation is "
+        "routed through the finance firewall."},
     "computer_capabilities": {"risk": "low", "timeout": 15_000, "desc": "Report what this machine's Computer Use runtime can do (driver, accessibility, capture, OCR, vision)."},
     "computer_status": {"risk": "low", "timeout": 15_000, "desc": "Report a desktop session's state, active app and current snapshot."},
     "computer_doctor": {"risk": "low", "timeout": 15_000, "desc": "Diagnose the Computer Use runtime: platform, driver, permissions and capability readiness."},
     "computer_windows": {"risk": "low", "timeout": 15_000, "desc": "List open windows (id, title, application, bounds, focused)."},
     "computer_apps": {"risk": "low", "timeout": 15_000, "desc": "List running applications with their windows."},
     "computer_displays": {"risk": "low", "timeout": 15_000, "desc": "List displays: resolution, scale, DPI, primary, bounds."},
-    "computer_read_screen": {"risk": "low", "timeout": 30_000, "desc": "Observe the screen (or a window) as numbered elements without acting."},
+    "computer_read_screen": {"risk": "low", "timeout": 30_000, "desc": "Observe the screen (or a window) as a screenshot with numbered marks and an element list, without acting."},
+    "computer_run": {"risk": "medium", "timeout": 120_000, "desc":
+        "Run a desktop task as best-of-N: N independent desktop-agent rollouts, each captioned by what "
+        "it did, then one winner chosen from the captions (verified success first). Isolated desktops "
+        "run concurrently; a shared desktop runs them serially. A task naming a financial mutation "
+        "cannot use N>1. Use for a brittle multi-step desktop task where one wrong click compounds."},
     "computer_session_start": {"risk": "medium", "timeout": 30_000, "desc": "Start a desktop-control session and return its id. Other computer tools reuse the most recent one."},
     "computer_session_list": {"risk": "low", "timeout": 15_000, "desc": "List desktop sessions."},
     "computer_session_close": {"risk": "low", "timeout": 20_000, "desc": "Close a desktop session."},
@@ -168,7 +217,9 @@ TOOL_META: dict[str, dict[str, Any]] = {
     "computer_remember": {"risk": "low", "timeout": 20_000, "desc":
         "Store a learned desktop fact (application layout, a successful workflow, a recovery path) in Eclipse-Memory. "
         "Explicit and inspectable — never screenshots, never automatic."},
-    "computer_recall": {"risk": "low", "timeout": 15_000, "desc": "Recall previously learned desktop knowledge."},
+    "computer_recall": {"risk": "low", "timeout": 15_000, "desc": "Recall previously learned desktop knowledge, including learned per-app interfaces (controls, shortcuts, known tasks)."},
+    "computer_forget_interface": {"risk": "low", "timeout": 15_000, "desc":
+        "Forget a learned per-app interface (a stale or wrong adapter). The shipped adapters are unaffected."},
     "computer_finance_read": {"risk": "low", "timeout": 30_000, "desc":
         "Read financial state from the screen (ticker, bid, ask, position, P&L, …). The result is SCREEN-DERIVED, "
         "carries an explicit source, and is never treated as authoritative market data."},

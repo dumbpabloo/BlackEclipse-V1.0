@@ -109,11 +109,14 @@ def _register_builtins() -> None:
             modes=("demo", "live"),
             asset_classes=("stocks", "etf", "crypto"),
             capabilities=("account", "positions", "orders", "quote"),
-            execution=False,
+            execution=True,
+            execution_modes=("demo", "live"),
             notes=(
-                "Read-only. US equities/ETFs/crypto via Alpaca's REST API. "
-                "Configure a credentialRef (a secret NAME) containing KEY:SECRET. "
-                "Journal P&L is FIFO-computed from filled orders."
+                "US equities/ETFs/crypto via Alpaca's REST API. Configure a "
+                "credentialRef (a secret NAME) containing KEY:SECRET. Market, "
+                "limit and stop entries; bracket/OTO; cancel, replace and "
+                "close-by-symbol. A paper host is the demo account. Journal P&L "
+                "is FIFO-computed from filled orders."
             ),
         ),
         AlpacaAdapter,
@@ -127,11 +130,15 @@ def _register_builtins() -> None:
             modes=("demo", "live"),
             asset_classes=("stocks", "etf", "options", "futures", "fx"),
             capabilities=("account", "positions", "orders", "quote"),
-            execution=False,
+            execution=True,
+            execution_modes=("demo", "live"),
             notes=(
-                "Read-only via the local Client Portal Gateway (CPAPI). "
-                "credentialRef names the gateway session cookie. Journal P&L is "
-                "FIFO-computed from executions."
+                "Execution via the local Client Portal Gateway (CPAPI). "
+                "credentialRef names the gateway session cookie. Market/limit/stop "
+                "orders, cancel, price replace and close-by-conid. The gateway's "
+                "confirmation question is answered once; a second question is "
+                "refused. Bracket legs and cancel-all have no CPAPI order tag and "
+                "are named refusals. Journal P&L is FIFO-computed from executions."
             ),
         ),
         IBKRAdapter,
@@ -145,11 +152,15 @@ def _register_builtins() -> None:
             modes=("demo", "live"),
             asset_classes=("fx", "cfd", "futures", "stocks", "metals"),
             capabilities=("account", "positions", "orders", "quote"),
-            execution=False,
+            execution=True,
+            execution_modes=("demo", "live"),
             notes=(
-                "Read-only. Attaches to a local HTTP bridge that already runs "
-                "next to MT4; Eclipse never stores a password or places an order "
-                "through this adapter."
+                "Attaches to a local HTTP bridge that already runs next to MT4; "
+                "Eclipse never stores a password. Reads use GET /account, "
+                "/positions, /orders, /quote, /deals; writes use POST /orders, "
+                "/orders/{t}/cancel, /orders/{t}/modify, /positions/{t}/close, "
+                "/positions/{t}/modify and GET /orders/{t}/status. A bridge that "
+                "does not implement a write returns BRIDGE_EXECUTION_UNSUPPORTED."
             ),
         ),
         MT4BridgeAdapter,
@@ -182,15 +193,17 @@ def _register_builtins() -> None:
             modes=("demo", "live"),
             asset_classes=("stocks", "etf"),
             # No `quote`: the public API has no quote endpoint, so the capability
-            # is declared absent rather than faked. No execution either.
+            # is declared absent rather than faked.
             capabilities=("account", "positions", "orders"),
-            execution=False,
+            execution=True,
+            execution_modes=("demo", "live"),
             notes=(
-                "Read-only. Equities/ETFs via Trading212's public REST API "
-                "(cash, portfolio, open orders). No quote endpoint and no fill "
-                "history: quote() raises TRADING212_QUOTE_UNSUPPORTED and the "
-                "journal never invents a fill. credentialRef names the env var or "
-                "secret holding the API key."
+                "Equities/ETFs via Trading212's public REST API. Market and limit "
+                "orders (signed quantity), cancel and close-by-ticker. No quote "
+                "endpoint: a market order needs an explicit price reference in the "
+                "intent, and no attached stop/target or scoped cancel-all exists "
+                "(named refusals). credentialRef names the env var or secret "
+                "holding the API key."
             ),
         ),
         Trading212Adapter,
@@ -204,13 +217,15 @@ def _register_builtins() -> None:
             modes=("live",),
             asset_classes=("stocks", "etf", "futures", "options"),
             capabilities=("account", "positions", "orders", "quote"),
-            execution=False,
+            execution=True,
+            execution_modes=("live",),
             notes=(
-                "Read-only. NSE/BSE equities and F&O via Kite Connect's REST API "
-                "(profile, margins, net positions, orders, quotes). Quotes take "
-                "EXCHANGE:SYMBOL; the ticker stream is not implemented. "
-                "credentialRef names the env var or secret holding "
-                "`API_KEY:ACCESS_TOKEN`."
+                "NSE/BSE equities and F&O via Kite Connect's REST API. "
+                "MARKET/LIMIT/SL-M orders, modify, cancel and close-from-net, "
+                "tagged eclipse-<magic> (trimmed to Kite's 20-char limit). "
+                "Quotes take EXCHANGE:SYMBOL; a bare ticker is ambiguous and "
+                "refused. Brackets and ticker stream are not implemented. "
+                "credentialRef names `API_KEY:ACCESS_TOKEN`."
             ),
         ),
         ZerodhaAdapter,
@@ -224,13 +239,15 @@ def _register_builtins() -> None:
             modes=("live", "demo"),
             asset_classes=("stocks", "etf", "options"),
             capabilities=("account", "positions", "orders", "quote"),
-            execution=False,
+            execution=True,
+            execution_modes=("demo", "live"),
             notes=(
-                "Read-only. US equities/ETFs/options via Tradier's brokerage REST "
-                "API (balances, positions, orders, snapshot quotes). Sandbox is a "
-                "baseUrl, not a mode flag. Positions are the broker's rows; the "
-                "adapter does not mark to market. credentialRef names the env var "
-                "or secret holding the access token."
+                "US equities/ETFs/options via Tradier's brokerage REST API. "
+                "Market/limit/stop orders, cancel, price replace and "
+                "close-by-symbol; options use the 100x multiplier. Ownership is "
+                "the order tag. Brackets and a scoped cancel-all are named "
+                "refusals. Sandbox is a baseUrl, not a mode flag. credentialRef "
+                "names the access token."
             ),
         ),
         TradierAdapter,
@@ -244,13 +261,14 @@ def _register_builtins() -> None:
             modes=("live",),
             asset_classes=("crypto",),
             capabilities=("account", "positions", "orders", "quote"),
-            execution=False,
+            execution=True,
+            execution_modes=("live",),
             notes=(
-                "Read-only. OKX spot/perpetuals via the v5 REST API (balance, "
-                "positions, pending orders, ticker snapshot). HMAC-signed; "
-                "credentialRef names an env var or secret holding "
-                "`API_KEY:SECRET:PASSPHRASE`. No order placement and no ticker "
-                "stream."
+                "OKX spot/perpetuals via the v5 REST API. Market/limit entries, "
+                "cancel, amend, attached SL/TP on derivatives (not spot), "
+                "reduce-only close, and positions by posId. clOrdId is the "
+                "Eclipse ownership tag. HMAC-signed; credentialRef names "
+                "`API_KEY:SECRET:PASSPHRASE`. No ticker stream."
             ),
         ),
         OkxAdapter,
@@ -264,13 +282,15 @@ def _register_builtins() -> None:
             modes=("live",),
             asset_classes=("crypto",),
             capabilities=("account", "positions", "orders", "quote"),
-            execution=False,
+            execution=True,
+            execution_modes=("live",),
             notes=(
-                "Read-only. Binance spot via v3 REST (account balances, open "
-                "orders, ticker price). `positions` are non-zero spot balances, "
-                "NOT margin positions, and are not marked to market; "
-                "credentialRef names an env var or secret holding `KEY:SECRET`. "
-                "No order placement and no stream."
+                "Binance spot via v3 REST. Market/limit/stop-limit entries, "
+                "cancel, and close-by-pair (an asset ticket resolves to the "
+                "venue's pair via symbolMap/quoteAsset). `positions` are non-zero "
+                "spot balances, not margin positions. newClientOrderId is the "
+                "Eclipse ownership tag; attached SL/TP is refused on spot. "
+                "credentialRef names `KEY:SECRET`. No stream."
             ),
         ),
         BinanceAdapter,
@@ -284,13 +304,15 @@ def _register_builtins() -> None:
             modes=("live",),
             asset_classes=("crypto",),
             capabilities=("account", "positions", "orders", "quote"),
-            execution=False,
+            execution=True,
+            execution_modes=("live",),
             notes=(
-                "Read-only. Kraken spot via the private/public REST API (balances, "
-                "open orders, ticker). HMAC-SHA512 signed; credentialRef names an "
-                "env var or secret holding `KEY:SECRET` (base64 secret). "
-                "`positions` are non-zero spot balances, not margin positions and "
-                "not marked to market. No order placement and no stream."
+                "Kraken spot via the private/public REST API. Market/limit/"
+                "stop-loss entries, cancel, and close-by-pair (asset tickets "
+                "resolve through symbolMap/quoteAsset). userref carries the "
+                "Eclipse magic; attached SL/TP is refused on spot. "
+                "`positions` are non-zero spot balances. Credential is "
+                "`KEY:SECRET` (base64 secret). No stream."
             ),
         ),
         KrakenAdapter,
@@ -304,13 +326,15 @@ def _register_builtins() -> None:
             modes=("live",),
             asset_classes=("crypto",),
             capabilities=("account", "positions", "orders", "quote"),
-            execution=False,
+            execution=True,
+            execution_modes=("live",),
             notes=(
-                "Read-only. Coinbase Exchange via REST (balances, open orders, "
-                "product ticker). HMAC-SHA256 signature: credentialRef names an env "
-                "var or secret holding `KEY:SECRET:PASSPHRASE`. `positions` are "
-                "non-zero spot balances, not margin positions and not marked to "
-                "market. No order placement and no stream."
+                "Coinbase Exchange via REST. Limit/market/stop entries with "
+                "client_oid as the ownership tag, cancel, status and "
+                "close-by-product (asset tickets resolve through "
+                "symbolMap/quoteAsset). `positions` are non-zero spot balances. "
+                "Attached SL/TP is refused on spot. Credential is "
+                "`KEY:SECRET:PASSPHRASE`. No stream."
             ),
         ),
         CoinbaseAdapter,
@@ -324,13 +348,14 @@ def _register_builtins() -> None:
             modes=("live",),
             asset_classes=("crypto", "derivatives"),
             capabilities=("account", "positions", "orders", "quote"),
-            execution=False,
+            execution=True,
+            execution_modes=("live",),
             notes=(
-                "Read-only. Bybit v5 REST: unified wallet balance, linear positions "
-                "(size, avg entry, mark, uPnL), real-time orders, spot tickers. "
-                "Signature is HMAC-SHA256 over ts+key+recvWindow+query; credentialRef "
-                "names an env var or secret holding `KEY:SECRET`. No order placement "
-                "and no stream."
+                "Bybit v5 REST: unified wallet, linear positions, real-time "
+                "orders, spot tickers. Create/cancel/amend orders, attached "
+                "TP/SL on derivatives, reduce-only close and trading-stop "
+                "updates. orderLinkId is the Eclipse ownership tag. Credential "
+                "is `KEY:SECRET`. No stream."
             ),
         ),
         BybitAdapter,
@@ -344,14 +369,14 @@ def _register_builtins() -> None:
             modes=("live",),
             asset_classes=("crypto", "derivatives", "options"),
             capabilities=("account", "positions", "orders", "quote"),
-            execution=False,
+            execution=True,
+            execution_modes=("live",),
             notes=(
-                "Read-only. Deribit v2 JSON-RPC over GET: account summary per "
-                "currency, positions, open orders and instrument tickers. "
-                "Signature is HMAC-SHA256 over ts/nonce/data/query; credentialRef "
-                "names an env var or secret holding `CLIENT_ID:CLIENT_SECRET`. "
-                "Account equity is per currency and is reported as such. No order "
-                "placement and no stream."
+                "Deribit v2 JSON-RPC over GET: account summary per currency, "
+                "positions, open orders and instrument tickers. Buy/sell market "
+                "or limit with stop_loss/take_profit, edit, cancel, reduce-only "
+                "close and order state. The order label is the Eclipse ownership "
+                "tag. Credential is `CLIENT_ID:CLIENT_SECRET`. No stream."
             ),
         ),
         DeribitAdapter,
@@ -362,16 +387,18 @@ def _register_builtins() -> None:
             id=KIND_OANDA,
             label="OANDA v20 (FX/CFD)",
             auth="credentials",
-            modes=("live",),
+            modes=("demo", "live"),
             asset_classes=("fx", "cfd", "metals"),
             capabilities=("account", "positions", "orders", "quote"),
-            execution=False,
+            execution=True,
+            execution_modes=("demo", "live"),
             notes=(
-                "Read-only. OANDA v20 REST: account summary (NAV, margin), "
-                "openPositions (long and short halves reported separately), "
-                "pendingOrders and pricing. Bearer-token auth, no request signing. "
-                "accountId is configured or discovered from /v3/accounts; a missing "
-                "id is a refusal, never a default. No order placement and no stream."
+                "OANDA v20 REST: account summary (NAV, margin), openPositions "
+                "(long and short halves reported separately), pendingOrders and "
+                "pricing. Market/limit/stop with attached takeProfitOnFill/"
+                "stopLossOnFill, replace, cancel and full/partial close. Tickets "
+                "name the instrument and side (EUR_USD:LONG). The practice host "
+                "is the demo account. Credential is a bearer token. No stream."
             ),
         ),
         OandaAdapter,
@@ -385,13 +412,14 @@ def _register_builtins() -> None:
             modes=("live",),
             asset_classes=("crypto", "derivatives"),
             capabilities=("account", "positions", "orders", "quote"),
-            execution=False,
+            execution=True,
+            execution_modes=("live",),
             notes=(
-                "Read-only. Bitget v2 REST: spot balances, USDT-margined positions, "
-                "unfilled spot orders, spot tickers. Signature is base64"
-                "(HMAC-SHA256(ts+method+path+body)) plus ACCESS-PASSPHRASE; "
-                "credentialRef names an env var or secret holding "
-                "`KEY:SECRET:PASSPHRASE`. No order placement and no stream."
+                "Bitget v2 REST: spot balances, USDT-margined positions, "
+                "unfilled spot orders and tickers. Place/cancel/modify orders, "
+                "attached TP/SL on derivatives, reduce-only close and TPSL "
+                "legs. clientOid is the Eclipse ownership tag. Credential is "
+                "`KEY:SECRET:PASSPHRASE`. No stream."
             ),
         ),
         BitgetAdapter,
@@ -405,13 +433,14 @@ def _register_builtins() -> None:
             modes=("live",),
             asset_classes=("crypto", "derivatives"),
             capabilities=("account", "positions", "orders", "quote"),
-            execution=False,
+            execution=True,
+            execution_modes=("live",),
             notes=(
-                "Read-only. Gate.io v4 REST: spot balances, USDT-settled perpetual "
-                "positions, spot open orders and tickers. Signature is hex "
-                "HMAC-SHA512 over method/path/query/sha512(body)/timestamp; "
-                "credentialRef names an env var or secret holding `KEY:SECRET`. "
-                "No order placement and no stream."
+                "Gate.io v4 REST: spot balances, USDT-settled perpetuals, open "
+                "orders and tickers. Spot and futures orders, cancel, amend, "
+                "futures close and price-trigger rules; attached SL/TP is refused "
+                "on spot. The `t-eclipse-...` text is the ownership tag. "
+                "Credential is `KEY:SECRET`. No stream."
             ),
         ),
         GateioAdapter,
@@ -425,14 +454,15 @@ def _register_builtins() -> None:
             modes=("live",),
             asset_classes=("crypto",),
             capabilities=("account", "positions", "orders", "quote"),
-            execution=False,
+            execution=True,
+            execution_modes=("live",),
             notes=(
-                "Read-only. Bitstamp v2 REST: balances, all open orders, tickers. "
-                "Auth travels in the FORM BODY (key/nonce/signature), not headers; "
-                "signature is hex HMAC-SHA256 over nonce+customer_id+api_key, so "
-                "credentialRef names an env var or secret holding "
-                "`KEY:SECRET:CUSTOMER_ID`. `positions` are non-zero spot balances, "
-                "not marked to market. No order placement and no stream."
+                "Bitstamp v2 REST: balances, open orders, tickers. Buy/sell "
+                "market/limit/stop orders, cancel, status and close-by-market "
+                "(asset tickets resolve through symbolMap/quoteAsset). A market "
+                "buy is sized in quote currency. No client-order id, so a scoped "
+                "cancel-all is OWNERSHIP_UNAVAILABLE. Credential is "
+                "`KEY:SECRET:CUSTOMER_ID`. No stream."
             ),
         ),
         BitstampAdapter,
@@ -446,14 +476,15 @@ def _register_builtins() -> None:
             modes=("live",),
             asset_classes=("crypto",),
             capabilities=("account", "positions", "orders", "quote"),
-            execution=False,
+            execution=True,
+            execution_modes=("live",),
             notes=(
-                "Read-only. Coincheck REST: balances, open orders, tickers. "
-                "Signature is hex HMAC-SHA256 over nonce + the FULL request URL "
-                "(scheme and query included), sent as ACCESS-KEY/ACCESS-NONCE/"
-                "ACCESS-SIGN; credentialRef names an env var or secret holding "
-                "`KEY:SECRET`. `positions` are non-zero spot balances, not marked "
-                "to market. No order placement and no stream."
+                "Coincheck REST: balances, open orders, tickers. Limit/market "
+                "orders with an optional stop_loss_rate, cancel, status and "
+                "close-by-asset (BTC resolves to the venue's btc_jpy pair; the "
+                "JPY quote balance is not a position). Coincheck exposes no "
+                "client-order tag, so cancel-all is OWNERSHIP_UNAVAILABLE. "
+                "Credential is `KEY:SECRET`. No stream."
             ),
         ),
         CoincheckAdapter,
@@ -467,14 +498,14 @@ def _register_builtins() -> None:
             modes=("live",),
             asset_classes=("crypto", "derivatives"),
             capabilities=("account", "positions", "orders", "quote"),
-            execution=False,
+            execution=True,
+            execution_modes=("live",),
             notes=(
-                "Read-only. Bitfinex v2 REST: wallets, positions, orders, tickers. "
-                "Signature is hex HMAC-SHA384 over the SIGNED path + nonce + body, "
-                "sent as bfx-apikey/bfx-nonce/bfx-signature; credentialRef names an "
-                "env var or secret holding `KEY:SECRET`. v2 answers with positional "
-                "arrays, so fields are read by documented index. No order placement "
-                "and no stream."
+                "Bitfinex v2 REST: wallets, positions, orders and tickers. "
+                "Submit/cancel/update orders, attached stop via price_aux_limit, "
+                "close a position with an opposite market order and read status. "
+                "cid carries the Eclipse ownership tag. Positional v2 arrays are "
+                "read by documented index. Credential is `KEY:SECRET`. No stream."
             ),
         ),
         BitfinexAdapter,

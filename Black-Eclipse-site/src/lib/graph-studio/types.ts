@@ -31,6 +31,8 @@ export type PortType =
   | 'object'
   | 'array'
   | 'datetime'
+  // A broker order/position id: an MT5 integer or a REST venue's opaque id.
+  | 'ticket'
   // Finance-native types
   | 'instrument'
   | 'ohlcv'

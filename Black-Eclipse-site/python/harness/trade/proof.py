@@ -20,6 +20,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Optional
 
+from .model import ticket_ref
+
 
 @dataclass(frozen=True)
 class ProofRequirements:
@@ -168,11 +170,11 @@ def fills_evidence(service: Any, automation_id: str, *, mode: str = "demo") -> d
         except Exception:  # noqa: BLE001
             continue
         tickets = {
-            int(o.get("ticket") or 0) for o in orders
+            ticket_ref(o.get("ticket") or 0) for o in orders
             if str(o.get("connectionId") or "") == connection_id
         }
         fills.extend(
-            row for row in rows if int(row.get("orderTicket") or 0) in tickets
+            row for row in rows if ticket_ref(row.get("orderTicket") or 0) in tickets
         )
     if not fills:
         return {"available": True, "closedTrades": 0, "days": 0.0,

@@ -1,22 +1,21 @@
 "use client";
 
 // ── Trading & brokers settings ───────────────────────────────────────────────
-// Connect a MetaTrader 5 terminal, probe it, read the account and manage the
-// live arm / kill switch. Trading actions themselves stay on the existing
-// operator routes and Graph Studio; this panel never places an order.
+// Connect any registered broker (MetaTrader 5, the MT4 bridge, or a REST venue),
+// probe it, read the account and manage the live arm / kill switch. The form is
+// shared with the sidebar dialog so both surfaces list the same registry kinds.
+// Trading actions themselves stay on the operator routes and Graph Studio; this
+// panel never places an order.
 
 import { useCallback, useEffect, useState } from "react";
 import { confirmDialog } from "@/lib/ui/confirm-dialog";
 import { Handshake, Loader2, RefreshCw, Trash2, Wallet } from "@/lib/icons";
 import { cn } from "@/lib/utils";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Field, Panel, SectionHeader } from "./settings-ui";
+import {
+  ConnectionForm,
+  type BrokerKindId,
+} from "@/components/layout/broker-connection-form";
 import { BROKER_RESPONSIBILITY_NOTICE } from "@/lib/legal/disclosure";
 import {
   armBrokerConnection,
@@ -51,9 +50,17 @@ export function TradingSettingsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const [label, setLabel] = useState("MT5 demo");
+  const [kind, setKind] = useState<BrokerKindId>("mt5");
+  const [label, setLabel] = useState("");
   const [mode, setMode] = useState<"demo" | "live">("demo");
   const [terminalPath, setTerminalPath] = useState(DEFAULT_TERMINAL);
+  const [bridgeUrl, setBridgeUrl] = useState("http://127.0.0.1:8090");
+  const [bridgeSecretRef, setBridgeSecretRef] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [dataUrl, setDataUrl] = useState("");
+  const [credentialRef, setCredentialRef] = useState("");
+  const [brokerAccountId, setBrokerAccountId] = useState("");
+  const [quoteAsset, setQuoteAsset] = useState("");
   const [autoLaunch, setAutoLaunch] = useState(false);
   const [magic, setMagic] = useState("0");
   const [maxMargin, setMaxMargin] = useState("0");
@@ -77,6 +84,17 @@ export function TradingSettingsPanel() {
       setKinds(nextKinds);
       setConnections(nextConnections);
       setMandates(nextMandates);
+      // Never leave the form on a kind this host cannot load: the default is
+      // the first available adapter, and an explicit user pick is preserved.
+      setKind((prev) => {
+        const current = nextKinds.find((entry) => entry.id === prev);
+        if (current?.available) return prev;
+        return (
+          nextKinds.find((entry) => entry.available)?.id ??
+          nextKinds[0]?.id ??
+          prev
+        );
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "broker settings unavailable");
     } finally {
@@ -103,21 +121,40 @@ export function TradingSettingsPanel() {
     }
   };
 
+  /**
+   * Config always follows the selected kind's auth style. A kind never inherits
+   * another adapter's endpoint or credential fields.
+   */
+  const buildConfig = (): Record<string, unknown> => {
+    const config: Record<string, unknown> = {};
+    if (kind === "mt4_bridge") {
+      if (bridgeUrl.trim()) config.bridgeUrl = bridgeUrl.trim();
+      if (bridgeSecretRef.trim()) config.bridgeSecretRef = bridgeSecretRef.trim();
+    } else if (kind === "mt5") {
+      if (terminalPath.trim()) config.terminalPath = terminalPath.trim();
+      config.autoLaunchTerminal = autoLaunch;
+    } else {
+      if (baseUrl.trim()) config.baseUrl = baseUrl.trim();
+      if (kind === "alpaca" && dataUrl.trim()) config.dataUrl = dataUrl.trim();
+      if (brokerAccountId.trim()) config.accountId = brokerAccountId.trim();
+      if (credentialRef.trim()) config.credentialRef = credentialRef.trim();
+      if (quoteAsset.trim()) config.quoteAsset = quoteAsset.trim().toUpperCase();
+    }
+    const magicNumber = Number(magic);
+    const marginNumber = Number(maxMargin);
+    if (Number.isFinite(magicNumber) && magicNumber > 0) config.magic = magicNumber;
+    if (Number.isFinite(marginNumber) && marginNumber > 0) config.maxMargin = marginNumber;
+    return config;
+  };
+
   const add = async () => {
     await run("create", async () => {
-      const config: Record<string, unknown> = {
-        terminalPath: terminalPath.trim(),
-        autoLaunchTerminal: autoLaunch,
-      };
-      const magicNumber = Number(magic);
-      const marginNumber = Number(maxMargin);
-      if (Number.isFinite(magicNumber) && magicNumber > 0) config.magic = magicNumber;
-      if (Number.isFinite(marginNumber) && marginNumber > 0) config.maxMargin = marginNumber;
+      const fallbackLabel = kinds.find((entry) => entry.id === kind)?.label ?? kind;
       const connection = await createBrokerConnection({
-        kind: "mt5",
-        label: label.trim() || "MT5",
+        kind,
+        label: label.trim() || fallbackLabel,
         mode,
-        config,
+        config: buildConfig(),
       });
       await testBrokerConnection(connection.id);
     }, "Connection added.");
@@ -186,13 +223,14 @@ export function TradingSettingsPanel() {
     void run(`mandate:revoke:${mandate.id}`, () => revokeTradingMandate(mandate.id), "Mandate revoked.");
   };
 
-  const mt5 = kinds.find((kind) => kind.id === "mt5");
+  const availableKinds = kinds.filter((entry) => entry.available);
+  const unavailableKinds = kinds.filter((entry) => !entry.available);
   return (
     <div className="max-w-3xl space-y-6">
       <SectionHeader
         icon={Handshake}
         title="Broker connection"
-        description="Attach Eclipse to a running MetaTrader 5 terminal. Reads are always safe; live execution requires a typed arm and a per-order confirmation."
+        description="Connect any broker the runtime registers — MetaTrader 5, the MT4 bridge, or a REST venue. Reads are always safe; live execution requires a typed arm and a per-order confirmation."
       />
 
       <Panel className="p-4">
@@ -204,27 +242,37 @@ export function TradingSettingsPanel() {
       {error && <p className="text-xs text-rose-300">{error}</p>}
       {notice && <p className="text-xs text-emerald-300">{notice}</p>}
 
-      <Panel className="p-5 space-y-3">
+      <Panel className="p-5 space-y-2">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-xs font-semibold text-foreground">MetaTrader 5 bridge</p>
+            <p className="text-xs font-semibold text-foreground">Broker adapters</p>
             <p className="text-[11px] text-muted-foreground">
-              {mt5?.available
-                ? "Package available. The terminal must be running and logged in."
-                : mt5?.unavailableReason ?? "Checking the runtime…"}
+              {loading
+                ? "Checking the runtime…"
+                : `${availableKinds.length} of ${kinds.length} registered brokers are ready on this runtime.`}
             </p>
           </div>
           <span
             className={cn(
               "rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide",
-              mt5?.available
+              availableKinds.length > 0
                 ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
                 : "border-amber-500/30 bg-amber-500/10 text-amber-300",
             )}
           >
-            {mt5?.available ? "ready" : "unavailable"}
+            {availableKinds.length > 0 ? "ready" : "none ready"}
           </span>
         </div>
+        {unavailableKinds.length > 0 && (
+          <div className="space-y-1">
+            {unavailableKinds.map((entry) => (
+              <p key={entry.id} className="text-[10px] text-amber-200/80">
+                <span className="font-medium text-foreground">{entry.label}</span> —{" "}
+                {entry.unavailableReason ?? "unavailable on this host"}
+              </p>
+            ))}
+          </div>
+        )}
       </Panel>
 
       {loading ? (
@@ -312,7 +360,7 @@ export function TradingSettingsPanel() {
               )}
 
               <RiskLimits connection={connection} onSaved={load} />
-              <ConnectionEditor connection={connection} onSaved={load} />
+              <ConnectionEditor connection={connection} kinds={kinds} onSaved={load} />
 
               <div className="flex flex-wrap items-center gap-2">
                 <Action busy={busy === `test:${connection.id}`} onClick={() => void test(connection)}>
@@ -445,60 +493,54 @@ export function TradingSettingsPanel() {
       <Panel className="p-5 space-y-4">
         <div className="flex items-center gap-2">
           <Wallet size={14} className="text-muted-foreground" />
-          <p className="text-xs font-semibold text-foreground">Add a MetaTrader 5 connection</p>
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Label">
-            <input value={label} onChange={(event) => setLabel(event.target.value)} className={inputClass} />
-          </Field>
-          <Field label="Mode">
-            <Select
-              value={mode}
-              onValueChange={(value) => setMode(value === "live" ? "live" : "demo")}
-            >
-              <SelectTrigger className={cn(inputClass, "h-auto w-full justify-between py-1.5")}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="demo">Demo</SelectItem>
-                <SelectItem value="live">Live (requires arming)</SelectItem>
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label="Terminal path" hint="terminal64.exe of the installed MT5 terminal.">
-            <input
-              value={terminalPath}
-              onChange={(event) => setTerminalPath(event.target.value)}
-              className={inputClass}
-            />
-          </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Magic" hint="Non-zero for live; scopes the kill switch.">
-              <input value={magic} onChange={(event) => setMagic(event.target.value)} className={inputClass} />
-            </Field>
-            <Field label="Max margin" hint="Required for live; a per-order cap.">
-              <input
-                value={maxMargin}
-                onChange={(event) => setMaxMargin(event.target.value)}
-                className={inputClass}
-              />
-            </Field>
+          <div>
+            <p className="text-xs font-semibold text-foreground">Add a broker connection</p>
+            <p className="text-[10px] text-muted-foreground">
+              Pick any registered kind. The fields follow that broker's auth style; a credential is
+              a NAME (env var or secret:// ref), never a value.
+            </p>
           </div>
         </div>
-        <AutoLaunchToggle checked={autoLaunch} onChange={setAutoLaunch} />
-        <button
-          type="button"
-          disabled={busy === "create"}
-          onClick={() => void add()}
-          className="inline-flex items-center gap-2 rounded-xl border border-primary/40 bg-primary/10 px-3 py-1.5 text-[11px] font-medium text-primary hover:bg-primary/15 disabled:opacity-60"
-        >
-          {busy === "create" ? <Loader2 size={12} className="animate-spin" /> : <Handshake size={12} />}
-          Add & test connection
-        </button>
-        <p className="text-[10px] text-muted-foreground">
-          No password is stored: Eclipse attaches to the account already logged into the terminal.
-          Enable <span className="font-medium">Algo Trading</span> in MT5 before placing any order.
-        </p>
+        {kinds.length === 0 && !loading ? (
+          <p className="text-[11px] text-amber-200/80">
+            The broker registry is unavailable. Start the Python runtime and retry.
+          </p>
+        ) : (
+          <ConnectionForm
+            kind={kind}
+            setKind={setKind}
+            kinds={kinds}
+            allowKindChange
+            label={label}
+            setLabel={setLabel}
+            mode={mode}
+            setMode={setMode}
+            terminalPath={terminalPath}
+            setTerminalPath={setTerminalPath}
+            bridgeUrl={bridgeUrl}
+            setBridgeUrl={setBridgeUrl}
+            bridgeSecretRef={bridgeSecretRef}
+            setBridgeSecretRef={setBridgeSecretRef}
+            baseUrl={baseUrl}
+            setBaseUrl={setBaseUrl}
+            dataUrl={dataUrl}
+            setDataUrl={setDataUrl}
+            credentialRef={credentialRef}
+            setCredentialRef={setCredentialRef}
+            brokerAccountId={brokerAccountId}
+            setBrokerAccountId={setBrokerAccountId}
+            quoteAsset={quoteAsset}
+            setQuoteAsset={setQuoteAsset}
+            magic={magic}
+            setMagic={setMagic}
+            maxMargin={maxMargin}
+            setMaxMargin={setMaxMargin}
+            busy={busy === "create"}
+            onSubmit={() => void add()}
+            submitLabel="Add & test connection"
+          />
+        )}
+        {kind === "mt5" && <AutoLaunchToggle checked={autoLaunch} onChange={setAutoLaunch} />}
       </Panel>
     </div>
   );
@@ -616,15 +658,27 @@ function RiskLimits({
 
 function ConnectionEditor({
   connection,
+  kinds,
   onSaved,
 }: {
   connection: BrokerConnection;
+  kinds: BrokerKind[];
   onSaved: () => Promise<void>;
 }) {
   const config = connection.config ?? {};
   const [open, setOpen] = useState(false);
   const [label, setLabel] = useState(connection.label);
   const [mode, setMode] = useState<"demo" | "live">(connection.mode === "live" ? "live" : "demo");
+  const [terminalPath, setTerminalPath] = useState(
+    String(config.terminalPath ?? DEFAULT_TERMINAL),
+  );
+  const [bridgeUrl, setBridgeUrl] = useState(String(config.bridgeUrl ?? "http://127.0.0.1:8090"));
+  const [bridgeSecretRef, setBridgeSecretRef] = useState(String(config.bridgeSecretRef ?? ""));
+  const [baseUrl, setBaseUrl] = useState(String(config.baseUrl ?? ""));
+  const [dataUrl, setDataUrl] = useState(String(config.dataUrl ?? ""));
+  const [credentialRef, setCredentialRef] = useState(String(config.credentialRef ?? ""));
+  const [brokerAccountId, setBrokerAccountId] = useState(String(config.accountId ?? ""));
+  const [quoteAsset, setQuoteAsset] = useState(String(config.quoteAsset ?? ""));
   const [magic, setMagic] = useState(String(config.magic ?? ""));
   const [maxMargin, setMaxMargin] = useState(String(config.maxMargin ?? ""));
   const [autoLaunch, setAutoLaunch] = useState(configFlag(config.autoLaunchTerminal));
@@ -635,7 +689,26 @@ function ConnectionEditor({
     setBusy(true);
     setError(null);
     try {
-      const next: Record<string, unknown> = { ...config, autoLaunchTerminal: autoLaunch };
+      // Keep the connection's other caps (risk, allowlists, symbols) and only
+      // rewrite the fields that belong to this adapter's auth style.
+      const next: Record<string, unknown> = { ...config };
+      if (connection.kind === "mt4_bridge") {
+        if (bridgeUrl.trim()) next.bridgeUrl = bridgeUrl.trim();
+        if (bridgeSecretRef.trim()) next.bridgeSecretRef = bridgeSecretRef.trim();
+      } else if (connection.kind === "mt5") {
+        if (terminalPath.trim()) next.terminalPath = terminalPath.trim();
+        next.autoLaunchTerminal = autoLaunch;
+      } else {
+        if (baseUrl.trim()) next.baseUrl = baseUrl.trim();
+        else delete next.baseUrl;
+        if (connection.kind === "alpaca" && dataUrl.trim()) next.dataUrl = dataUrl.trim();
+        if (brokerAccountId.trim()) next.accountId = brokerAccountId.trim();
+        else delete next.accountId;
+        if (credentialRef.trim()) next.credentialRef = credentialRef.trim();
+        else delete next.credentialRef;
+        if (quoteAsset.trim()) next.quoteAsset = quoteAsset.trim().toUpperCase();
+        else delete next.quoteAsset;
+      }
       const magicNumber = Number(magic);
       const marginNumber = Number(maxMargin);
       if (Number.isFinite(magicNumber) && magicNumber > 0) next.magic = magicNumber;
@@ -672,36 +745,6 @@ function ConnectionEditor({
       </div>
       {open && (
         <>
-          <div className="grid gap-2 sm:grid-cols-2">
-            <Field label="Label">
-              <input value={label} onChange={(event) => setLabel(event.target.value)} className={inputClass} />
-            </Field>
-            <Field label="Mode" hint="Live clears the arm; re-arm after saving.">
-              <Select
-                value={mode}
-                onValueChange={(value) => setMode(value === "live" ? "live" : "demo")}
-              >
-                <SelectTrigger className={cn(inputClass, "h-auto w-full justify-between py-1.5")}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="demo">Demo</SelectItem>
-                  <SelectItem value="live">Live</SelectItem>
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field label="Magic" hint="Non-zero for live; scopes the kill switch.">
-              <input value={magic} onChange={(event) => setMagic(event.target.value)} className={inputClass} />
-            </Field>
-            <Field label="Max margin" hint="Required for live; a per-order cap.">
-              <input
-                value={maxMargin}
-                onChange={(event) => setMaxMargin(event.target.value)}
-                className={inputClass}
-              />
-            </Field>
-          </div>
-          <AutoLaunchToggle checked={autoLaunch} onChange={setAutoLaunch} />
           {mode === "live" && (
             <p className="text-[10px] text-rose-200/80">
               A live connection places real orders. A non-zero magic and a positive max margin are
@@ -709,9 +752,43 @@ function ConnectionEditor({
             </p>
           )}
           {error && <p className="text-[10px] text-rose-300">{error}</p>}
-          <Action busy={busy} onClick={() => void save()}>
-            Save connection
-          </Action>
+          <ConnectionForm
+            kind={connection.kind}
+            setKind={() => {}}
+            kinds={kinds}
+            allowKindChange={false}
+            label={label}
+            setLabel={setLabel}
+            mode={mode}
+            setMode={setMode}
+            terminalPath={terminalPath}
+            setTerminalPath={setTerminalPath}
+            bridgeUrl={bridgeUrl}
+            setBridgeUrl={setBridgeUrl}
+            bridgeSecretRef={bridgeSecretRef}
+            setBridgeSecretRef={setBridgeSecretRef}
+            baseUrl={baseUrl}
+            setBaseUrl={setBaseUrl}
+            dataUrl={dataUrl}
+            setDataUrl={setDataUrl}
+            credentialRef={credentialRef}
+            setCredentialRef={setCredentialRef}
+            brokerAccountId={brokerAccountId}
+            setBrokerAccountId={setBrokerAccountId}
+            quoteAsset={quoteAsset}
+            setQuoteAsset={setQuoteAsset}
+            magic={magic}
+            setMagic={setMagic}
+            maxMargin={maxMargin}
+            setMaxMargin={setMaxMargin}
+            busy={busy}
+            onSubmit={() => void save()}
+            submitLabel="Save connection"
+            compact
+          />
+          {connection.kind === "mt5" && (
+            <AutoLaunchToggle checked={autoLaunch} onChange={setAutoLaunch} />
+          )}
         </>
       )}
     </div>

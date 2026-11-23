@@ -1,4 +1,4 @@
-"""Tradier read-only adapter: envelope flattening, credential probe, refusals."""
+"""Tradier broker adapter: envelope flattening, credential probe, refusals."""
 
 from __future__ import annotations
 
@@ -56,13 +56,13 @@ def test_account_normalizes_balances(monkeypatch):
     assert account["equity"] == pytest.approx(55_000.0)
     assert account["balance"] == pytest.approx(12_500.0)
     assert account["profit"] == pytest.approx(320.5)
-    assert account["tradeAllowed"] is False
+    assert account["tradeAllowed"] is True
 
 
 def test_sandbox_is_derived_from_the_base_url(monkeypatch):
     adapter = _adapter(baseUrl="https://sandbox.tradier.com")
     monkeypatch.setattr(adapter, "_get", lambda path, params=None: {"balances": {}})
-    assert adapter.account()["mode"] == "sandbox"
+    assert adapter.account()["mode"] == "demo"
 
 
 def test_positions_accept_a_single_object(monkeypatch):
@@ -98,7 +98,7 @@ def test_orders_normalize(monkeypatch):
                               "status": "open", "side": "buy"}]},
     })
     order = adapter.orders()[0]
-    assert order["ticket"] == pytest.approx(99)
+    assert order["ticket"] == "99"
     assert order["volumeCurrent"] == pytest.approx(2)
     assert "buy" in order["comment"]
 
@@ -144,8 +144,8 @@ def test_http_401_maps_to_unauthorized(monkeypatch):
     assert exc.value.code == "TRADIER_UNAUTHORIZED"
 
 
-def test_registry_declares_the_kind_with_quotes_and_no_execution():
+def test_registry_declares_the_kind_with_quotes_and_execution():
     kind = get_kind("tradier")
-    assert kind.execution is False
+    assert kind.execution is True
     assert "quote" in kind.capabilities
     assert any(row["id"] == "tradier" for row in list_kinds())

@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Optional
 
+from .model import ticket_ref
+
 log = logging.getLogger("harness.trade.supervisor")
 
 
@@ -308,12 +310,12 @@ class TradeSupervisor:
                 by_bot.setdefault(bot_id, []).append(order)
         reports: list[dict[str, Any]] = []
         for bot_id, bot_orders in sorted(by_bot.items()):
-            tickets = {int(o.get("ticket") or 0) for o in bot_orders}
+            tickets = {ticket_ref(o.get("ticket") or 0) for o in bot_orders}
             fills: list[dict[str, Any]] = []
             connections = {str(o.get("connectionId") or "") for o in bot_orders}
             for connection_id in connections:
                 for fill in self.service.connections.list_fills(connection_id, limit=500):
-                    if int(fill.get("orderTicket") or 0) in tickets:
+                    if ticket_ref(fill.get("orderTicket") or 0) in tickets:
                         fills.append(fill)
             reports.append(
                 assess_bot(

@@ -1,4 +1,4 @@
-"""Trading212 read-only adapter: normalization, honest refusals, registration."""
+"""Trading212 broker adapter: normalization, honest refusals, registration."""
 
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ def test_account_normalizes_the_cash_payload(monkeypatch):
     assert account["balance"] == pytest.approx(1_250.5)
     assert account["equity"] == pytest.approx(9_800.0)
     assert account["profit"] == pytest.approx(49.5)
-    assert account["tradeAllowed"] is False
+    assert account["tradeAllowed"] is True
 
 
 def test_demo_mode_is_derived_from_the_base_url(monkeypatch):
@@ -88,7 +88,7 @@ def test_orders_normalize_the_open_book(monkeypatch):
          "limitPrice": 80.5, "status": "NEW"},
     ] if path == "/equity/orders" else None)
     orders = adapter.orders()
-    assert orders[0]["ticket"] == 77
+    assert orders[0]["ticket"] == "77"
     assert orders[0]["symbol"] == "VUSA_LSE_EQ"
     assert orders[0]["volumeCurrent"] == pytest.approx(2)
     assert orders[0]["openPrice"] == pytest.approx(80.5)
@@ -125,14 +125,14 @@ def test_http_401_maps_to_unauthorized(monkeypatch):
     assert exc.value.code == "TRADING212_UNAUTHORIZED"
 
 
-def test_registry_declares_the_kind_without_quote_or_execution():
+def test_registry_declares_the_kind_without_quote_with_execution():
     kind = get_kind("trading212")
-    assert kind.execution is False
+    assert kind.execution is True
     assert "quote" not in kind.capabilities
     assert {"account", "positions", "orders"} <= set(kind.capabilities)
     assert any(row["id"] == "trading212" for row in list_kinds())
 
 
-def test_make_adapter_returns_a_read_only_adapter():
+def test_make_adapter_returns_the_execution_adapter():
     assert isinstance(make_adapter("trading212", {"credentialRef": "T212_KEY"}),
                       Trading212Adapter)

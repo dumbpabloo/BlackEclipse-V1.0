@@ -1,4 +1,4 @@
-"""OKX read-only adapter: signature correctness, normalization, refusals."""
+"""OKX broker adapter: signature correctness, normalization, refusals."""
 
 from __future__ import annotations
 
@@ -91,7 +91,7 @@ def test_account_normalizes_the_balance_row(monkeypatch):
     assert account["server"] == "okx"
     assert account["equity"] == pytest.approx(10000.5)
     assert account["balance"] == pytest.approx(2500.0)
-    assert account["tradeAllowed"] is False
+    assert account["tradeAllowed"] is True
 
 
 def test_positions_skip_flat_rows_and_keep_the_side(monkeypatch):
@@ -161,8 +161,8 @@ def test_probe_reports_disconnected_with_the_reason(monkeypatch):
     assert probe["connected"] is False and probe["code"] == "OKX_UNAUTHORIZED"
 
 
-def test_registry_declares_the_kind_read_only():
+def test_registry_declares_the_kind_executable():
     kind = get_kind("okx")
-    assert kind.execution is False
+    assert kind.execution is True
     assert "quote" in kind.capabilities
     assert any(row["id"] == "okx" for row in list_kinds())

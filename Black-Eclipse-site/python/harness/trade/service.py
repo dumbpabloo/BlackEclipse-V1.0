@@ -30,6 +30,7 @@ from .model import (
     OrderIntent,
     TradeRefused,
     normalise_mode,
+    ticket_ref,
     validate_config,
 )
 from .policy import TradePolicy
@@ -543,14 +544,20 @@ class BrokerService:
                 "connect the terminal to a live account before arming",
                 status_code=503,
             )
-        if not bool(terminal.get("tradeAllowed")):
+        if not bool(terminal.get("tradeAllowed") or account.get("tradeAllowed")):
+            mt5 = connection.kind == "mt5"
             raise TradeRefused(
-                "ALGO_TRADING_DISABLED",
-                "enable Algo Trading in the terminal before arming live",
+                "ALGO_TRADING_DISABLED" if mt5 else "LIVE_TRADING_DISABLED",
+                (
+                    "enable Algo Trading in the terminal before arming live"
+                    if mt5 else
+                    "the broker reports trading disabled for this account; enable it "
+                    "at the broker before arming live"
+                ),
                 status_code=403,
             )
         self._assert_account_mode({"account": account}, "live")
-        expected = f"ARM LIVE {account.get('login')}"
+        expected = f"ARM LIVE {account.get('armRef') or account.get('login')}"
         if str(confirmation or "").strip() != expected:
             raise TradeRefused(
                 "LIVE_CONFIRMATION_MISMATCH",
@@ -934,7 +941,7 @@ class BrokerService:
             return {
                 "available": True,
                 "sent": True,
-                "filled": status in ("filled", "placed"),
+                "filled": status == "filled",
                 "status": status,
                 "connectionId": connection.id,
                 "orderId": ledger["id"],
@@ -948,13 +955,14 @@ class BrokerService:
             except Exception:  # noqa: BLE001
                 pass
 
-    def cancel_order(self, connection_id: str, ticket: int) -> dict[str, Any]:
+    def cancel_order(self, connection_id: str, ticket: Any) -> dict[str, Any]:
         """Cancel a working order. Risk-reducing, so no trade approval is required."""
         connection = self._connection(connection_id)
+        ref = ticket_ref(ticket)
         adapter = self._trading_adapter(connection)
         try:
             try:
-                result = adapter.cancel_order(int(ticket))
+                result = adapter.cancel_order(ref)
             except AdapterUnavailable as exc:
                 raise TradeRefused(exc.code, exc.reason, status_code=503) from exc
         finally:
@@ -966,7 +974,7 @@ class BrokerService:
             connection.id,
             "cancel",
             "ok" if result.get("ok") else "rejected",
-            {"ticket": int(ticket), "retcode": result.get("retcode")},
+            {"ticket": ref, "retcode": result.get("retcode")},
         )
         return {
             "available": True,
@@ -976,7 +984,7 @@ class BrokerService:
         }
 
     def close_position(
-        self, connection_id: str, ticket: int, *, deviation: int = 20,
+        self, connection_id: str, ticket: Any, *, deviation: int = 20,
         volume: Optional[float] = None,
     ) -> dict[str, Any]:
         """Close one demo position (full or partial). Risk-reducing: no approval."""
@@ -987,7 +995,7 @@ class BrokerService:
         )
 
     def close_positions(
-        self, connection_id: str, *, tickets: Optional[list[int]] = None,
+        self, connection_id: str, *, tickets: Optional[list[Any]] = None,
         deviation: int = 20,
     ) -> dict[str, Any]:
         """Close every open demo position, or only the named tickets."""
@@ -998,7 +1006,7 @@ class BrokerService:
         )
 
     def modify_position(
-        self, connection_id: str, ticket: int, *,
+        self, connection_id: str, ticket: Any, *,
         stop_loss: Optional[float] = None, take_profit: Optional[float] = None,
     ) -> dict[str, Any]:
         """Move a demo position's stop/target. Risk-reducing: no approval."""
@@ -1010,7 +1018,7 @@ class BrokerService:
         )
 
     def modify_order(
-        self, connection_id: str, ticket: int, *,
+        self, connection_id: str, ticket: Any, *,
         price: Optional[float] = None,
         stop_loss: Optional[float] = None, take_profit: Optional[float] = None,
     ) -> dict[str, Any]:
@@ -1214,11 +1222,18 @@ def _to_float(value: Any, default: float = 0.0) -> float:
 
 def _order_status(result: dict[str, Any]) -> str:
     code = result.get("retcode")
-    if code == 10008:
+    state = str(result.get("status") or "").strip().lower()
+    # MetaTrader's DONE/PARTIAL codes are fills; a REST venue reports its own
+    # state, and "accepted" is NOT a fill. The ledger must not call an order
+    # filled before the venue has executed it.
+    if code == 10008 or state in (
+        "placed", "accepted", "new", "working", "open", "pending_new",
+        "partially_filled", "partially-filled",
+    ):
         return "placed"
-    if result.get("ok"):
+    if result.get("ok") or state == "filled":
         return "filled"
-    if code in _UNKNOWN_RETCODES:
+    if code in _UNKNOWN_RETCODES or state == "unknown":
         return "unknown"
     return "rejected"
 

@@ -39,6 +39,16 @@ describe("trading route allowlist", () => {
     expect(isAllowedTradingRoute("POST", ["connections", "brk_abc123", "orders", "12345", "modify"])).toBe(true);
     expect(isAllowedTradingRoute("POST", ["connections", "brk_abc123", "positions", "12345", "close"])).toBe(true);
     expect(isAllowedTradingRoute("POST", ["connections", "brk_abc123", "positions", "12345", "modify"])).toBe(true);
+    // REST venues return opaque ids: UUIDs, exchange ids, and INSTRUMENT:SIDE
+    // tickets. They must survive the proxy's path allowlist.
+    expect(isAllowedTradingRoute("POST", ["connections", "brk_abc123", "orders",
+      "b9a1e5c4-7f00-4a3e-9d1c-0e6a2b7f1234", "cancel"])).toBe(true);
+    expect(isAllowedTradingRoute("POST", ["connections", "brk_abc123", "positions",
+      "EUR_USD:LONG", "close"])).toBe(true);
+    expect(isAllowedTradingRoute("POST", ["connections", "brk_abc123", "positions",
+      "BTCUSDT:0", "modify"])).toBe(true);
+    expect(isAllowedTradingRoute("POST", ["connections", "brk_abc123", "positions",
+      "BTC-USD", "close"])).toBe(true);
     expect(isAllowedTradingRoute("POST", ["connections", "brk_abc123", "positions", "close"])).toBe(true);
     expect(isAllowedTradingRoute("GET", ["connections", "brk_abc123", "orders", "ledger"])).toBe(true);
     expect(isAllowedTradingRoute("GET", ["orders", "ord_abc123"])).toBe(true);

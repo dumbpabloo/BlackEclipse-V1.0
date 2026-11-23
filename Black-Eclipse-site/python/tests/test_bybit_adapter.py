@@ -121,7 +121,7 @@ def test_account_sums_the_unified_wallet(monkeypatch):
     assert account["server"] == "bybit"
     assert account["equity"] == pytest.approx(1010.5)
     assert account["marginFree"] == pytest.approx(900.5)
-    assert account["tradeAllowed"] is False
+    assert account["tradeAllowed"] is True
 
 
 def test_positions_are_real_and_skip_closed_ones(monkeypatch):
@@ -178,8 +178,8 @@ def test_a_empty_ticker_is_a_named_refusal(monkeypatch):
     assert exc.value.code == "BYBIT_NO_QUOTE"
 
 
-def test_registry_declares_the_kind_read_only_with_derivatives():
+def test_registry_declares_the_kind_executable_with_derivatives():
     kind = get_kind("bybit")
-    assert kind.execution is False
+    assert kind.execution is True
     assert "derivatives" in kind.asset_classes
     assert any(row["id"] == "bybit" for row in list_kinds())

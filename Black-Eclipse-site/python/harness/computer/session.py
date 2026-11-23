@@ -132,6 +132,11 @@ class ComputerSession:
 
         self._latest_snapshot: Optional[Snapshot] = None
         self.action_history: list[dict[str, Any]] = []
+        # A bounded, agent-authored working memory for THIS task. Re-injected into
+        # every observation so a long desktop task does not lose the thread.
+        self.notes: list[str] = []
+        # Sliding window of action signatures for the deterministic loop guard.
+        self._recent_signatures: list[str] = []
         self.current_task: Optional[str] = None
         self.recorder = SessionRecorder(
             enabled=config.recording_enabled, screenshots=config.recording_screenshots,
@@ -194,8 +199,141 @@ class ComputerSession:
             "isolated": self._isolated,
             "currentSnapshot": self._latest_snapshot.snapshot_id if self._latest_snapshot else None,
             "currentTask": self.current_task, "actions": len(self.action_history),
+            "notes": list(self.notes[-20:]),
             "createdAt": _iso(self.created_at),
         }
+
+    # ── working memory + progress ────────────────────────────────────────────
+
+    def add_note(self, text: str) -> dict[str, Any]:
+        """Append one bounded working note (the agent's own trajectory memory)."""
+        cleaned = " ".join(str(text or "").split())[:400]
+        if not cleaned:
+            return {"added": False, "reason": "an empty note was not stored"}
+        self.notes.append(cleaned)
+        if len(self.notes) > 30:
+            self.notes = self.notes[-30:]
+        self.touch()
+        return {"added": True, "notes": list(self.notes[-20:])}
+
+    def trajectory_summary(self) -> dict[str, Any]:
+        """The model-facing progress report injected after an observation."""
+        recent = [
+            {
+                "action": str(a.get("action") or ""),
+                "result": str(a.get("result") or ""),
+                "verdict": str(a.get("verdict") or ""),
+            }
+            for a in self.action_history[-8:]
+        ]
+        # Two identical signatures mean the previous attempt was the same action
+        # against the same UI state; a third is refused by the core. Deriving the
+        # warning from the last TWO (not three) keeps it alive before the block.
+        loop = len(self._recent_signatures) >= 2 and self._recent_signatures[-1] == self._recent_signatures[-2]
+        return {"notes": list(self.notes[-20:]), "recent": recent, "loopSuspected": loop}
+
+    # ── vision grounding ─────────────────────────────────────────────────────
+
+    def grounding_backend(self) -> Any:
+        backend = getattr(self, "_grounding_backend", None)
+        if backend is not None:
+            return backend
+        try:
+            from .grounding.backends import build_grounding_backend  # noqa: PLC0415
+
+            backend = build_grounding_backend(self._config)
+        except Exception:  # noqa: BLE001 - an absent backend is honest
+            backend = None
+        self._grounding_backend = backend
+        return backend
+
+    async def vision_ground(self, needle: str) -> list[dict[str, Any]]:
+        """Locate `needle` in the latest frame and map it to screen coordinates."""
+        snapshot = self._latest_snapshot
+        if snapshot is None or not needle:
+            return []
+        # Never send a sensitive frame to an external grounding endpoint; the
+        # annotated/persisted frame is masked, but grounding wants an unmarked
+        # frame, so a sensitive snapshot is simply not grounded.
+        if getattr(snapshot, "sensitive", False):
+            return []
+        backend = self.grounding_backend()
+        if backend is None or not getattr(backend, "available", False):
+            return []
+        image = None
+        # Prefer a FRESH raw frame of the window: the persisted image has the SOM
+        # badges drawn on it, which are not part of the UI a model should ground.
+        if snapshot.window_id:
+            try:
+                frame = await self.driver.capture(window_id=snapshot.window_id)
+                image = getattr(frame, "data", None)
+            except Exception:  # noqa: BLE001
+                image = None
+        if image is None and snapshot.image_path:
+            try:
+                from PIL import Image  # noqa: PLC0415
+
+                image = Image.open(snapshot.image_path).convert("RGB")
+            except Exception:  # noqa: BLE001
+                image = None
+        if image is None:
+            return []
+        try:
+            found = await backend.locate(str(needle), image)
+        except Exception:  # noqa: BLE001 - grounding is best-effort
+            return []
+        origin = snapshot.bounds
+        sx_scale = (origin.width / image.width) if origin and image.width else 1.0
+        sy_scale = (origin.height / image.height) if origin and image.height else 1.0
+        results: list[dict[str, Any]] = []
+        for item in found or []:
+            box = item.get("bbox") or item.get("bounds")
+            if not box or len(box) != 4:
+                continue
+            try:
+                x, y, w, h = (float(v) for v in box)
+            except (TypeError, ValueError):
+                continue
+            results.append({
+                "name": str(item.get("label") or item.get("text") or needle),
+                "text": str(item.get("label") or item.get("text") or needle),
+                "role": str(item.get("role") or "element"),
+                "bounds": [
+                    int((origin.x if origin else 0) + x * sx_scale),
+                    int((origin.y if origin else 0) + y * sy_scale),
+                    max(1, int(w * sx_scale)), max(1, int(h * sy_scale)),
+                ],
+                "confidence": float(item.get("confidence") or 0.5),
+            })
+        return results
+
+    # ── accessibility activation ─────────────────────────────────────────────
+
+    def focus_element(self, target: Target) -> bool:
+        """Give a control keyboard focus through UIA, without a click."""
+        focus = getattr(self.ax, "focus", None)
+        if not callable(focus):
+            return False
+        try:
+            return bool(focus(
+                window_id=target.window_id or (self._latest_snapshot.window_id if self._latest_snapshot else ""),
+                name=target.name, role=target.role, bounds=target.bounds,
+            ))
+        except Exception:  # noqa: BLE001 - focus is a best-effort enhancement
+            return False
+
+    def invoke_element(self, target: Target, *, value: str = "") -> bool:
+        """Activate a UIA element through its pattern (Invoke/Value/Select)."""
+        activate = getattr(self.ax, "activate", None)
+        if not callable(activate):
+            return False
+        try:
+            return bool(activate(
+                window_id=target.window_id or (self._latest_snapshot.window_id if self._latest_snapshot else ""),
+                name=target.name, role=target.role, bounds=target.bounds, value=value,
+            ))
+        except Exception:  # noqa: BLE001 - a failed pattern is a click fallback
+            return False
 
     # ── observation ──────────────────────────────────────────────────────────
 
@@ -205,23 +343,50 @@ class ComputerSession:
         window_id: Optional[str] = None,
         mode: Optional[str] = None,
         persist_image: bool = True,
+        region: Any = None,
+        display_id: Optional[str] = None,
     ) -> Snapshot:
         resolved_mode = (mode or self._config.observation_default_mode).lower()
-        # The accessibility tree is per-window, so an AX/SOM observation with no
-        # explicit window defaults to the FOCUSED window — otherwise a full-screen
-        # capture would yield no numbered elements.
-        if window_id is None and resolved_mode in ("ax", "som"):
+        # The accessibility tree and the app/title used for security profiles are
+        # per-window. ANY observation without a window or region defaults to the
+        # FOCUSED window (not just ax/som), so a vision/OCR capture still knows
+        # which application it is looking at.
+        if window_id is None and region is None and display_id is None:
             window_id = self._focused_window_id() or None
         self._transition(SessionState.OBSERVING)
         try:
             snapshot = await self.observation.observe(
-                window_id=window_id, mode=resolved_mode, persist_image=persist_image, session_id=self.id,
+                window_id=window_id, mode=resolved_mode, persist_image=persist_image,
+                session_id=self.id, region=region, display_id=display_id,
             )
         finally:
             self._transition(SessionState.READY)
         # Application identity from the driver + adapter for this window.
         snapshot.application = self._application_for_window(window_id)
         self._latest_snapshot = snapshot
+        # Live-validate any learned interface for this app: a known control
+        # confirms it; repeated absence marks it stale (see learned.py).
+        book = getattr(self, "learned_adapters", None)
+        learn_app = ""
+        if window_id:
+            try:
+                window = self.driver.get_window(window_id)
+                learn_app = str(getattr(window, "app", "") or "") if window is not None else ""
+            except Exception:  # noqa: BLE001
+                learn_app = ""
+        if not learn_app:
+            learn_app = snapshot.application
+        # `_application_for_window` may return the learned adapter's DISPLAY name;
+        # the book keys on the application itself.
+        learn_app = learn_app.split(" (learned v")[0].strip()
+        if book is not None and snapshot.elements and learn_app:
+            try:
+                book.observe(
+                    learn_app,
+                    [e.name for e in snapshot.elements if e.name],
+                )
+            except Exception:  # noqa: BLE001 - learning must never fail an observation
+                pass
         self.recorder.record("observe", {"snapshot": snapshot.summary()})
         self.touch()
         return snapshot
@@ -236,7 +401,9 @@ class ComputerSession:
         if window is None:
             return ""
         adapter = self.adapters.select(app_name=window.app, title=window.title)
-        return window.app or adapter.name
+        # A learned adapter's display name carries a version suffix; the
+        # application identity must not.
+        return window.app or str(adapter.name).split(" (learned v")[0].strip()
 
     @property
     def latest_snapshot(self) -> Optional[Snapshot]:
@@ -320,7 +487,6 @@ class ComputerSession:
 
     def _semantic_state(self, *, window_id: Optional[str] = None) -> dict[str, Any]:
         """A FRESH, lightweight semantic reading of the target (AX digest + title).
-
         Verification must not reuse the pre-action snapshot: doing so made every
         action look semantically unchanged and fall back to pixel noise. This
         re-reads the live accessibility tree WITHOUT minting a snapshot id or
@@ -340,6 +506,27 @@ class ComputerSession:
             except Exception:  # noqa: BLE001
                 title = ""
         return {"ax_digest": ax_digest, "window_title": title}
+
+    def _ax_text(self, window_id: Optional[str]) -> str:
+        """The current AX tree rendered as text, for an `axContains` expectation."""
+        try:
+            tree = self.driver.accessibility_tree(window_id)
+        except Exception:  # noqa: BLE001
+            return ""
+        if tree is None:
+            return ""
+        parts: list[str] = []
+        try:
+            for node in tree.walk():
+                if node is None:
+                    continue
+                if node.name:
+                    parts.append(node.name)
+                if node.value:
+                    parts.append(node.value)
+        except Exception:  # noqa: BLE001
+            return ""
+        return " ".join(parts)[:20_000]
 
     async def capture_state(self, *, window_id: Optional[str] = None) -> ObservationState:
         frame = None
@@ -388,13 +575,21 @@ class ComputerSession:
         except Exception:  # noqa: BLE001
             after_frame = None
         after = self._read_after(before, window_id=window_id, after_frame=after_frame)
-        result = self.verifier.verify(before, after, action=action, expect=expect, after_frame=after_frame)
+        after_text = self._ax_text(window_id)
+        result = self.verifier.verify(
+            before, after, action=action, expect=expect, after_frame=after_frame,
+            after_text=after_text,
+        )
 
         deadline = time.monotonic() + max(0, settle_ms) / 1000
         while result.status == "uncertain" and time.monotonic() < deadline:
             await asyncio.sleep(0.05)
             after = self._read_after(before, window_id=window_id, after_frame=after_frame)
-            result = self.verifier.verify(before, after, action=action, expect=expect, after_frame=after_frame)
+            after_text = self._ax_text(window_id)
+            result = self.verifier.verify(
+                before, after, action=action, expect=expect, after_frame=after_frame,
+                after_text=after_text,
+            )
             if result.status != "uncertain":
                 break
 

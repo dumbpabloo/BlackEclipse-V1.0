@@ -1,4 +1,4 @@
-"""Zerodha Kite read-only adapter: auth shape, normalization, honest refusals."""
+"""Zerodha Kite broker adapter: auth shape, normalization, honest refusals."""
 
 from __future__ import annotations
 
@@ -73,7 +73,7 @@ def test_account_normalizes_profile_and_margins(monkeypatch):
     assert account["currency"] == "INR"
     assert account["equity"] == pytest.approx(250000.5)
     assert account["balance"] == pytest.approx(120000.0)
-    assert account["tradeAllowed"] is False
+    assert account["tradeAllowed"] is True
 
 
 def test_positions_use_the_net_book_only(monkeypatch):
@@ -100,7 +100,7 @@ def test_orders_normalize(monkeypatch):
          "transaction_type": "BUY"},
     ])
     order = adapter.orders()[0]
-    assert order["ticket"] == 220101
+    assert order["ticket"] == "220101"
     assert order["volumeCurrent"] == pytest.approx(3)
     assert "BUY" in order["comment"]
 
@@ -167,9 +167,9 @@ def test_an_api_error_payload_is_a_refusal(monkeypatch):
     assert exc.value.code == "ZERODHA_API_ERROR"
 
 
-def test_registry_declares_a_read_only_kind_with_quotes():
+def test_registry_declares_an_executable_kind_with_quotes():
     kind = get_kind("zerodha")
-    assert kind.execution is False
+    assert kind.execution is True
     assert "quote" in kind.capabilities
     assert any(row["id"] == "zerodha" for row in list_kinds())
     assert isinstance(make_adapter("zerodha", {"credentialRef": "KITE_TOKEN"}),

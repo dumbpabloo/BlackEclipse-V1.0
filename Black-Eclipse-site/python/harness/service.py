@@ -447,6 +447,15 @@ class AgenticService:
             )
             set_computer_manager(self.computer)
             register_computer_tools(self.registry)
+            # Best-of-N: the branch runner drives a real desktop-agent run on the
+            # session bound to that branch's run id. Installed here so the
+            # `computer_run` tool is honest about availability.
+            try:
+                from .computer.runner import install_branch_runner  # noqa: PLC0415
+
+                install_branch_runner(self)
+            except Exception:  # noqa: BLE001 - best-of-N is optional
+                log.warning("computer best-of-N branch runner unavailable", exc_info=True)
         except Exception:  # noqa: BLE001 - Computer Use is optional; never block boot
             self.computer = None
             log.warning("computer use subsystem unavailable", exc_info=True)

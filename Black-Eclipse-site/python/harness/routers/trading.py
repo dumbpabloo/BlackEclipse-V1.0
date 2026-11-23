@@ -351,7 +351,7 @@ async def trading_order_submit(
 
 @router.post("/trading/connections/{connection_id}/orders/{ticket}/cancel")
 async def trading_order_cancel(
-    connection_id: str, ticket: int, _: bool = Depends(require_operator),
+    connection_id: str, ticket: str, _: bool = Depends(require_operator),
 ) -> dict[str, Any]:
     try:
         return _brokers().cancel_order(connection_id, ticket)
@@ -364,7 +364,7 @@ async def trading_order_cancel(
 @router.post("/trading/connections/{connection_id}/positions/{ticket}/close")
 async def trading_position_close(
     connection_id: str,
-    ticket: int,
+    ticket: str,
     body: dict[str, Any] = Body(default={}),
     _: bool = Depends(require_operator),
 ) -> dict[str, Any]:
@@ -389,7 +389,7 @@ async def trading_position_close(
 @router.post("/trading/connections/{connection_id}/positions/{ticket}/modify")
 async def trading_position_modify(
     connection_id: str,
-    ticket: int,
+    ticket: str,
     body: dict[str, Any] = Body(default={}),
     _: bool = Depends(require_operator),
 ) -> dict[str, Any]:
@@ -430,7 +430,7 @@ async def trading_symbol_info(
 @router.post("/trading/connections/{connection_id}/orders/{ticket}/modify")
 async def trading_order_modify(
     connection_id: str,
-    ticket: int,
+    ticket: str,
     body: dict[str, Any] = Body(default={}),
     _: bool = Depends(require_operator),
 ) -> dict[str, Any]:
@@ -473,12 +473,12 @@ async def trading_positions_close(
     try:
         return _brokers().close_positions(
             connection_id,
-            tickets=[int(ticket) for ticket in tickets] if tickets else None,
+            tickets=list(tickets) if tickets else None,
             deviation=int(body.get("deviation") or 20),
         )
     except (TypeError, ValueError):
         raise _refusal(
-            TradeRefused("INVALID_TICKETS", "tickets must be a list of integers")
+            TradeRefused("INVALID_TICKETS", "tickets must be a list of order/position ids")
         ) from None
     except KeyError:
         raise _not_found(connection_id) from None

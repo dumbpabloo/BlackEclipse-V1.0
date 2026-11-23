@@ -125,7 +125,7 @@ def test_account_reads_the_wallet_array_by_index(monkeypatch):
     assert account["server"] == "bitfinex"
     assert account["balance"] == pytest.approx(1000.5)
     assert account["marginFree"] == pytest.approx(900.4)
-    assert account["tradeAllowed"] is False
+    assert account["tradeAllowed"] is True
 
 
 def test_positions_use_the_sign_of_amount_for_the_side(monkeypatch):
@@ -174,8 +174,8 @@ def test_quote_reads_the_public_ticker_array(monkeypatch):
     assert quote["bid"] == pytest.approx(59999.0)
 
 
-def test_registry_declares_the_kind_read_only():
+def test_registry_declares_the_kind_executable():
     kind = get_kind("bitfinex")
-    assert kind.execution is False
+    assert kind.execution is True
     assert "derivatives" in kind.asset_classes
     assert any(row["id"] == "bitfinex" for row in list_kinds())

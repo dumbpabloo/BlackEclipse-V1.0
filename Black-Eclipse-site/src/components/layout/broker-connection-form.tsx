@@ -2,6 +2,10 @@
 
 // The broker connection form. Extracted from the dialog so the shell stays
 // readable and under the source size budget.
+//
+// The broker-type list is the registry's own (`/trading/brokers`), not a
+// hardcoded four: any declared kind can be connected here, and the credential /
+// endpoint fields follow that kind's auth style.
 
 import { Handshake, Loader2 } from "@/lib/icons";
 import { cn } from "@/lib/utils";
@@ -14,8 +18,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { BROKER_RESPONSIBILITY_NOTICE } from "@/lib/legal/disclosure";
+import type { BrokerKind } from "@/lib/harness/clients/trading-client";
 
-export type BrokerKindId = "mt5" | "mt4_bridge" | "alpaca" | "ibkr";
+export type BrokerKindId = string;
 
 export const inputClass =
   "w-full rounded-xl border border-border/40 bg-transparent px-2.5 py-1.5 text-xs text-foreground focus:border-primary/40 focus:outline-none";
@@ -23,6 +28,7 @@ export const inputClass =
 export function ConnectionForm({
   kind,
   setKind,
+  kinds,
   allowKindChange,
   label,
   setLabel,
@@ -42,6 +48,8 @@ export function ConnectionForm({
   setCredentialRef,
   brokerAccountId,
   setBrokerAccountId,
+  quoteAsset,
+  setQuoteAsset,
   magic,
   setMagic,
   maxMargin,
@@ -53,6 +61,7 @@ export function ConnectionForm({
 }: {
   kind: BrokerKindId;
   setKind: (value: BrokerKindId) => void;
+  kinds: BrokerKind[];
   allowKindChange: boolean;
   label: string;
   setLabel: (value: string) => void;
@@ -72,6 +81,8 @@ export function ConnectionForm({
   setCredentialRef: (value: string) => void;
   brokerAccountId: string;
   setBrokerAccountId: (value: string) => void;
+  quoteAsset: string;
+  setQuoteAsset: (value: string) => void;
   magic: string;
   setMagic: (value: string) => void;
   maxMargin: string;
@@ -83,8 +94,15 @@ export function ConnectionForm({
 }) {
   const isBridge = kind === "mt4_bridge";
   const isMt5 = kind === "mt5";
+  const isRest = !isBridge && !isMt5;
   const isAlpaca = kind === "alpaca";
   const isIbkr = kind === "ibkr";
+  const selected = kinds.find((entry) => entry.id === kind);
+  const endpointPlaceholder = isAlpaca
+    ? "https://paper-api.alpaca.markets"
+    : isIbkr
+      ? "https://localhost:5000/v1/api"
+      : "blank = the broker's default endpoint";
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-2">
@@ -93,39 +111,54 @@ export function ConnectionForm({
           {allowKindChange ? (
             <Select
               value={kind}
-              onValueChange={(value) =>
-                setKind(
-                  value === "mt4_bridge" || value === "alpaca" || value === "ibkr"
-                    ? value
-                    : "mt5",
-                )
-              }
+              onValueChange={(value) => {
+                if (!value) return;
+                setKind(value);
+                const next = kinds.find((entry) => entry.id === value);
+                if (next && !next.modes.includes("demo") && mode === "demo") {
+                  setMode("live");
+                }
+                // A blank label follows the selected kind instead of silently
+                // saving the previous broker's name.
+                if (next && !label.trim()) setLabel(next.label);
+              }}
             >
               <SelectTrigger className={cn(inputClass, "h-auto w-full justify-between py-1.5")}>
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent className="min-w-[var(--anchor-width)]">
-                <SelectItem value="mt5">MetaTrader 5 (local terminal)</SelectItem>
-                <SelectItem value="mt4_bridge">MetaTrader 4 (HTTP bridge, read-only)</SelectItem>
-                <SelectItem value="alpaca">Alpaca (REST, read-only)</SelectItem>
-                <SelectItem value="ibkr">Interactive Brokers (gateway, read-only)</SelectItem>
+              <SelectContent className="min-w-[var(--anchor-width)] max-h-72">
+                {kinds.length === 0 && (
+                  <SelectItem value="__unavailable" disabled>
+                    No broker registry (runtime offline)
+                  </SelectItem>
+                )}
+                {kinds.map((entry) => (
+                  <SelectItem key={entry.id} value={entry.id} disabled={!entry.available}>
+                    {entry.label}
+                    {entry.available ? "" : " (unavailable)"}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           ) : (
             <p className="rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 font-mono text-[11px] text-muted-foreground">
-              {isBridge
-                ? "MetaTrader 4 (HTTP bridge, read-only)"
-                : isAlpaca
-                  ? "Alpaca (REST, read-only)"
-                  : isIbkr
-                    ? "Interactive Brokers (gateway, read-only)"
-                    : "MetaTrader 5 (local terminal)"}
+              {selected?.label ?? kind}
             </p>
+          )}
+          {allowKindChange && selected && !selected.available && (
+            <span className="block text-[9px] text-amber-200/80">
+              {selected.unavailableReason ?? "This broker is unavailable on this host."}
+            </span>
           )}
         </label>
         <label className="col-span-2 space-y-1">
           <span className="text-[9px] uppercase tracking-widest text-muted-foreground">Label</span>
-          <input value={label} onChange={(event) => setLabel(event.target.value)} className={inputClass} />
+          <input
+            value={label}
+            onChange={(event) => setLabel(event.target.value)}
+            placeholder={selected?.label ?? "Connection label"}
+            className={inputClass}
+          />
         </label>
         <label className="space-y-1">
           <span className="text-[9px] uppercase tracking-widest text-muted-foreground">Mode</span>
@@ -137,10 +170,23 @@ export function ConnectionForm({
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="min-w-[var(--anchor-width)]">
-              <SelectItem value="demo">Demo</SelectItem>
+              <SelectItem value="demo" disabled={Boolean(selected && !selected.modes.includes("demo"))}>
+                Demo
+              </SelectItem>
               <SelectItem value="live">Live (arm in Settings)</SelectItem>
             </SelectContent>
           </Select>
+        </label>
+        <label className="space-y-1">
+          <span className="text-[9px] uppercase tracking-widest text-muted-foreground">
+            Max margin / order (live)
+          </span>
+          <input
+            value={maxMargin}
+            onChange={(event) => setMaxMargin(event.target.value)}
+            placeholder="required to arm live"
+            className={inputClass}
+          />
         </label>
         {(isMt5 || isBridge) && (
           <label className="space-y-1">
@@ -175,39 +221,25 @@ export function ConnectionForm({
           </>
         )}
         {isMt5 && (
-          <>
-            <label className="col-span-2 space-y-1">
-              <span className="text-[9px] uppercase tracking-widest text-muted-foreground">Terminal path</span>
-              <input
-                value={terminalPath}
-                onChange={(event) => setTerminalPath(event.target.value)}
-                className={inputClass}
-              />
-            </label>
-            <label className="col-span-2 space-y-1">
-              <span className="text-[9px] uppercase tracking-widest text-muted-foreground">
-                Max margin (live only)
-              </span>
-              <input
-                value={maxMargin}
-                onChange={(event) => setMaxMargin(event.target.value)}
-                className={inputClass}
-              />
-            </label>
-          </>
+          <label className="col-span-2 space-y-1">
+            <span className="text-[9px] uppercase tracking-widest text-muted-foreground">Terminal path</span>
+            <input
+              value={terminalPath}
+              onChange={(event) => setTerminalPath(event.target.value)}
+              className={inputClass}
+            />
+          </label>
         )}
-        {(isAlpaca || isIbkr) && (
+        {isRest && (
           <>
             <label className="col-span-2 space-y-1">
               <span className="text-[9px] uppercase tracking-widest text-muted-foreground">
-                {isAlpaca ? "Trading base URL" : "Client Portal gateway URL"}
+                {isIbkr ? "Client Portal gateway URL" : "API base URL (optional)"}
               </span>
               <input
                 value={baseUrl}
                 onChange={(event) => setBaseUrl(event.target.value)}
-                placeholder={
-                  isAlpaca ? "https://paper-api.alpaca.markets" : "https://localhost:5000/v1/api"
-                }
+                placeholder={endpointPlaceholder}
                 className={inputClass}
               />
             </label>
@@ -224,19 +256,6 @@ export function ConnectionForm({
                 />
               </label>
             )}
-            {isIbkr && (
-              <label className="col-span-2 space-y-1">
-                <span className="text-[9px] uppercase tracking-widest text-muted-foreground">
-                  IBKR account id
-                </span>
-                <input
-                  value={brokerAccountId}
-                  onChange={(event) => setBrokerAccountId(event.target.value)}
-                  placeholder="DU1234567"
-                  className={inputClass}
-                />
-              </label>
-            )}
             <label className="col-span-2 space-y-1">
               <span className="text-[9px] uppercase tracking-widest text-muted-foreground">
                 Credential name (env var or secret:// ref)
@@ -244,7 +263,35 @@ export function ConnectionForm({
               <input
                 value={credentialRef}
                 onChange={(event) => setCredentialRef(event.target.value)}
-                placeholder={isAlpaca ? "ALPACA_KEYS" : "IBKR_GATEWAY_COOKIE"}
+                placeholder={
+                  isAlpaca
+                    ? "ALPACA_KEYS"
+                    : isIbkr
+                      ? "IBKR_GATEWAY_COOKIE"
+                      : "BROKER_KEYS"
+                }
+                className={inputClass}
+              />
+            </label>
+            <label className="col-span-2 space-y-1">
+              <span className="text-[9px] uppercase tracking-widest text-muted-foreground">
+                Broker account id (optional)
+              </span>
+              <input
+                value={brokerAccountId}
+                onChange={(event) => setBrokerAccountId(event.target.value)}
+                placeholder={isIbkr ? "DU1234567" : "discovered when blank"}
+                className={inputClass}
+              />
+            </label>
+            <label className="col-span-2 space-y-1">
+              <span className="text-[9px] uppercase tracking-widest text-muted-foreground">
+                Quote asset for spot closes (optional)
+              </span>
+              <input
+                value={quoteAsset}
+                onChange={(event) => setQuoteAsset(event.target.value)}
+                placeholder="USDT / USD — blank uses the venue's listed pairs"
                 className={inputClass}
               />
             </label>
@@ -255,20 +302,21 @@ export function ConnectionForm({
         <p className="text-[9.5px] text-muted-foreground">
           {isBridge ? (
             <>
-              The bridge runs next to MT4 and owns the login. Eclipse only reads the documented
-              JSON contract and never places an order through it. Point it at loopback.
+              The bridge runs next to MT4 and owns the login. Eclipse reads the documented JSON
+              contract and, when the bridge implements the write endpoints, can place, cancel, close
+              and modify. Point it at loopback.
             </>
-          ) : isAlpaca || isIbkr ? (
-            <>
-              Read-only. The credential is a NAME (env var or secret:// ref), never a value. Journal
-              P&amp;L for these brokers is FIFO-computed from executions; the smoke test proves the
-              live contract before you rely on it.
-            </>
-          ) : (
+          ) : isMt5 ? (
             <>
               No password is stored: Eclipse attaches to the account already logged into the terminal.
               Enable <span className="font-medium text-foreground">Algo Trading</span> in MT5 before
               placing any order.
+            </>
+          ) : (
+            <>
+              Every REST kind places orders through the same preview → approval → single-send path.
+              The credential is a NAME (env var or secret:// ref), never a value; a paper/sandbox host
+              is the demo account. Journal P&amp;L for these brokers is FIFO-computed from executions.
             </>
           )}
         </p>

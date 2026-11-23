@@ -314,6 +314,8 @@ class Snapshot:
     full_path: Optional[str] = None
     truncated: bool = False
     chars: int = 0
+    # How the frame was obtained: print_window | screen_grab (empty with no frame).
+    capture_method: str = ""
     # True when the security layer flagged sensitive content (password/API
     # key/2FA/…). A sensitive snapshot must never be sent to a cloud vision model
     # and its persisted image is masked.
@@ -336,6 +338,7 @@ class Snapshot:
             "interactiveCount": sum(1 for e in self.elements if e.role),
             "imagePath": self.image_path, "truncated": self.truncated,
             "chars": self.chars, "createdAt": self.created_at,
+            "captureMethod": self.capture_method,
         }
 
 
@@ -403,6 +406,12 @@ class ActionResult:
     # An UNRELATED dialog/modal that appeared after the action (a save-as prompt,
     # an update nag, a permission denial). The agent must decide, not type blind.
     unexpected_dialog: Optional[dict[str, Any]] = None
+    # What the bounded recovery ladder actually did (reobserve → retry), when a
+    # failed verification triggered it.
+    recovery: Optional[dict[str, Any]] = None
+    # A workflow candidate captured after a verified success (automatic
+    # procedural memory). Stored only when auto-capture is enabled.
+    workflow: Optional[dict[str, Any]] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -413,6 +422,7 @@ class ActionResult:
             "summary": self.summary, "warnings": self.warnings,
             "durationMs": self.duration_ms, "error": self.error, "snapshot": self.snapshot,
             "recoveryPlan": self.recovery_plan, "unexpectedDialog": self.unexpected_dialog,
+            "recovery": self.recovery, "workflow": self.workflow,
         }
 
 

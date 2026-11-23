@@ -99,6 +99,10 @@ class TradingAdapter(BrokerAdapter):
     symbol/stops/filling mode and run the broker's own `order_check`. It must not
     call `order_send`. `submit_order` re-validates and sends exactly once; it never
     retries an ambiguous result.
+
+    Identifiers are `Ticket` values (`str` or `int`): MetaTrader uses integer
+    tickets, REST venues use opaque ids. An adapter must accept the id it
+    returned in `orders()`/`positions()` and act on exactly that object.
     """
 
     @abstractmethod
@@ -110,14 +114,14 @@ class TradingAdapter(BrokerAdapter):
         ...
 
     @abstractmethod
-    def cancel_order(self, ticket: int) -> dict[str, Any]:
+    def cancel_order(self, ticket: Any) -> dict[str, Any]:
         ...
 
     @abstractmethod
     def cancel_all(self, magic: int) -> dict[str, Any]:
         """Cancel every working order that carries `magic` (never a blind all)."""
 
-    def close_position(self, ticket: int, deviation: int = 20) -> dict[str, Any]:
+    def close_position(self, ticket: Any, deviation: int = 20, volume: float | None = None) -> dict[str, Any]:
         """Close one open position. Default: this broker has no close path.
 
         Closing is risk-reducing, so it needs no trade approval — but it is still
@@ -129,7 +133,7 @@ class TradingAdapter(BrokerAdapter):
         )
 
     def modify_position(
-        self, ticket: int, stop_loss: float | None = None,
+        self, ticket: Any, stop_loss: float | None = None,
         take_profit: float | None = None,
     ) -> dict[str, Any]:
         """Move a position's stop/target. Default: this broker cannot modify."""
@@ -139,7 +143,7 @@ class TradingAdapter(BrokerAdapter):
         )
 
     def modify_order(
-        self, ticket: int, price: float | None = None,
+        self, ticket: Any, price: float | None = None,
         stop_loss: float | None = None, take_profit: float | None = None,
     ) -> dict[str, Any]:
         """Change a working (pending) order. Default: this broker cannot modify orders."""
@@ -148,7 +152,7 @@ class TradingAdapter(BrokerAdapter):
             f"{self.kind or 'this broker'} cannot modify working orders",
         )
 
-    def order_status(self, ticket: int) -> dict[str, Any]:
+    def order_status(self, ticket: Any) -> dict[str, Any]:
         """The broker's current/historical state for one order ticket."""
         return {"found": False}
 

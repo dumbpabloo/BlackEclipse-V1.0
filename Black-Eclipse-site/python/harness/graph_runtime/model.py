@@ -38,6 +38,10 @@ class PortType(str, Enum):
     OBJECT = "object"
     ARRAY = "array"
     DATETIME = "datetime"
+    # A broker order/position id. MetaTrader uses an integer; a REST venue
+    # uses an opaque id, so this port accepts a number OR a string and the
+    # trade layer normalises it (`ticket_ref`).
+    TICKET = "ticket"
     INSTRUMENT = "instrument"
     OHLCV = "ohlcv"
     INDICATOR = "indicator"

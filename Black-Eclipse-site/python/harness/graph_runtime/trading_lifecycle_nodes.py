@@ -17,6 +17,7 @@ import time
 from typing import Any
 
 from ..persistence import now_iso
+from ..trade.model import ticket_ref
 from .model import ExecutionMode, PortDef, PortType, SideEffect
 from .registry import ConfigField, NodeDef, NodeExecContext
 
@@ -168,15 +169,15 @@ def exec_drift_check(context: NodeExecContext) -> dict[str, Any]:
     state = reconciliation.get("state") or {}
 
     working_tickets = {
-        int(row.get("ticket") or 0)
+        ticket_ref(row.get("ticket") or 0)
         for row in (orders.get("data") or [])
         if isinstance(row, dict)
     }
     position_tickets = {
-        int(row.get("ticket") or 0) for row in positions if isinstance(row, dict)
+        ticket_ref(row.get("ticket") or 0) for row in positions if isinstance(row, dict)
     }
     fill_tickets = {
-        int(row.get(key) or 0)
+        ticket_ref(row.get(key) or 0)
         for row in fills if isinstance(row, dict)
         for key in ("orderTicket", "positionTicket")
     }
@@ -191,9 +192,9 @@ def exec_drift_check(context: NodeExecContext) -> dict[str, Any]:
         }
         for row in ledger
         if str(row.get("status") or "") in _IN_FLIGHT
-        and int(row.get("ticket") or 0) not in known
+        and ticket_ref(row.get("ticket") or 0) not in known
     ]
-    ledger_tickets = {int(row.get("ticket") or 0) for row in ledger}
+    ledger_tickets = {ticket_ref(row.get("ticket") or 0) for row in ledger}
     untracked = [
         {
             "ticket": row.get("ticket"),
@@ -203,7 +204,7 @@ def exec_drift_check(context: NodeExecContext) -> dict[str, Any]:
             "magic": row.get("magic"),
         }
         for row in positions
-        if isinstance(row, dict) and int(row.get("ticket") or 0) not in ledger_tickets
+        if isinstance(row, dict) and ticket_ref(row.get("ticket") or 0) not in ledger_tickets
     ]
 
     synced_at = str(state.get("lastSyncedAt") or "")

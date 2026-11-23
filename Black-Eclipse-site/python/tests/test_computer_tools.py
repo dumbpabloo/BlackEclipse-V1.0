@@ -28,6 +28,10 @@ def manager(monkeypatch):
     mgr = ComputerManager(config=cfg)
     mgr.driver = _FakeDriver()
     mgr.ax = None
+    # Keep learned adapters in-memory for the test suite (never the real sidecar).
+    from harness.computer.applications.learned import LearnedAdapterBook
+
+    mgr.learned_adapters = LearnedAdapterBook(None)
 
     import asyncio
 
@@ -83,11 +87,127 @@ async def test_listing_tools(registry, manager):
 
 
 @pytest.mark.asyncio
+async def test_failed_capture_attaches_no_media(registry, manager):
+    await registry.execute("computer_session_start", "c", {}, _ctx())
+    first = await registry.execute("computer_use", "c", {"action": "capture"}, _ctx())
+    assert first.data["media"]["dataUrl"].startswith("data:image/")
+
+    from harness.computer.policy import DENY
+
+    session = manager.any_session()
+    session.policy.permissions["observe"] = DENY
+    failed = await registry.execute("computer_use", "c", {"action": "capture"}, _ctx())
+    assert "media" not in failed.data
+    assert "COMPUTER_PERMISSION_DENIED" in failed.text or "FAILED" in failed.text
+
+
+@pytest.mark.asyncio
+async def test_computer_run_is_honest_without_a_branch_runner(registry, manager):
+    r = await registry.execute("computer_run", "c", {"task": "open the settings dialog"}, _ctx())
+    assert "COMPUTER_BRANCH_RUNNER_UNAVAILABLE" in r.text
+
+
+@pytest.mark.asyncio
+async def test_computer_run_refuses_best_of_for_a_financial_mutation(registry, manager):
+    async def fake_runner(session, index, task, context):
+        return {"success": True, "summary": "should never run"}
+
+    manager.branch_runner = fake_runner
+    r = await registry.execute(
+        "computer_run", "c", {"task": "buy 10 shares of NVDA", "attempts": 3}, _ctx(),
+    )
+    assert "COMPUTER_MULTI_ATTEMPT_FINANCE" in r.text
+    assert r.data["code"] == "COMPUTER_MULTI_ATTEMPT_FINANCE"
+
+
+@pytest.mark.asyncio
+async def test_computer_forget_interface_removes_learned_knowledge(registry, manager):
+    manager.learned_adapters.record({
+        "application": "tester", "task": "save the file",
+        "steps": [
+            {"action": "click", "target": "button Save", "verdict": "success"},
+            {"action": "hotkey", "target": "ctrl+s", "verdict": "success"},
+        ],
+    })
+    assert manager.learned_adapters.get("tester") is not None
+    r = await registry.execute(
+        "computer_forget_interface", "c", {"application": "tester"}, _ctx(),
+    )
+    assert r.data["forgotten"] is True
+    assert manager.learned_adapters.get("tester") is None
+    recalled = await registry.execute("computer_recall", "c", {"query": "tester"}, _ctx())
+    assert "no stored knowledge" in recalled.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_computer_run_learns_and_exposes_an_adapter(registry, manager):
+    async def fake_runner(session, index, task, context):
+        await session.observe()
+        snap = session.latest_snapshot
+        el = next(e for e in snap.elements if e.name == "Save")
+        session.action_history.append({
+            "action": "click", "target": f"{el.role} {el.name}", "result": "ok",
+            "verdict": "success", "verification": "verified",
+        })
+        session.action_history.append({
+            "action": "hotkey", "target": "ctrl+s", "result": "ok",
+            "verdict": "success", "verification": "verified",
+        })
+        session.action_history.append({
+            "action": "done", "target": "", "result": "ok", "verdict": "success",
+            "verification": "",
+        })
+        return {"success": True, "verified": True, "summary": "done"}
+
+    manager.branch_runner = fake_runner
+    r = await registry.execute(
+        "computer_run", "c", {"task": "save the file", "attempts": 1}, _ctx(),
+    )
+    learned = r.data.get("learnedAdapter")
+    assert learned and learned["validated"] is True
+    assert learned["version"] == 1
+
+    recalled = await registry.execute(
+        "computer_recall", "c", {"query": "tester"}, _ctx(),
+    )
+    assert "Learned interface" in recalled.text
+    assert recalled.data["learnedAdapters"]
+
+
+@pytest.mark.asyncio
+async def test_computer_run_selects_a_verified_branch(registry, manager):
+    async def fake_runner(session, index, task, context):
+        session.action_history.extend([
+            {"action": "click", "result": "ok", "verdict": "success", "verification": "verified"},
+            {"action": "done", "result": "ok", "verdict": "success"},
+        ])
+        if index == 0:
+            return {"success": False, "summary": "the menu never opened"}
+        return {"success": True, "verified": True, "summary": "done"}
+
+    manager.branch_runner = fake_runner
+    r = await registry.execute(
+        "computer_run", "c", {"task": "open settings", "attempts": 2}, _ctx(),
+    )
+    assert r.data["chosen"] == 1
+    assert r.data["judgedBy"] == "deterministic"
+    assert len(r.data["branches"]) == 2
+    assert "branch 1" in r.text and "branch 2" in r.text
+    assert r.data["branches"][1]["verified"] is True
+
+
+@pytest.mark.asyncio
 async def test_session_start_and_capture(registry, manager):
     r = await registry.execute("computer_session_start", "c", {}, _ctx())
     assert r.ok
     r = await registry.execute("computer_use", "c", {"action": "capture", "mode": "som"}, _ctx())
     assert r.ok
+    # The screenshot is REAL model media, not only a path: tool_turn attaches
+    # result.data["media"] after the tool result.
+    assert r.data["media"]["dataUrl"].startswith("data:image/")
+    assert "screenshot is attached" in r.text
+    # SOM is annotated: the persisted frame differs from a blank image.
+    assert r.data["elements"]
     assert r.data.get("snapshotId")
     assert isinstance(r.data.get("elements"), list)
 

@@ -81,19 +81,26 @@ class RecoveryEngine:
         handlers: dict[str, Callable[[str], Awaitable[tuple[bool, str]]]],
         *,
         escalate_allowed: bool = True,
+        strategies: Optional[list[str]] = None,
+        max_attempts: Optional[int] = None,
     ) -> RecoveryResult:
         """Attempt the planned strategies in order until one succeeds.
 
         Each handler is `async (strategy) -> (success, detail)`. Missing handlers
-        are skipped. The budget bounds the number of ACTUAL attempts.
+        are skipped. `strategies` overrides the ladder for a caller that knows the
+        exact rungs it can execute; `max_attempts` overrides this engine's budget
+        for one call. The budget bounds the number of ACTUAL attempts.
         """
         result = RecoveryResult(recovered=False)
-        if not self.enabled or self.max_attempts == 0:
+        budget = self.max_attempts if max_attempts is None else max(0, int(max_attempts))
+        if not self.enabled or budget == 0:
             result.exhausted = True
             return result
-        planned = self.plan(failure, escalate_allowed=escalate_allowed)
+        planned = list(strategies) if strategies is not None else self.plan(
+            failure, escalate_allowed=escalate_allowed,
+        )
         for strategy in planned:
-            if len(result.attempts) >= self.max_attempts:
+            if len(result.attempts) >= budget:
                 result.exhausted = True
                 break
             if strategy not in handlers:

@@ -83,6 +83,7 @@ class ActionVerifier:
         action: str,
         expect: Optional[dict[str, Any]] = None,
         after_frame: Any = None,
+        after_text: str = "",
     ) -> VerificationResult:
         expect = expect or {}
         result = VerificationResult(status="uncertain", action=action)
@@ -133,10 +134,11 @@ class ActionVerifier:
                 failed_expectations.append("dialog_appeared")
         if expect.get("axContains"):
             needle = str(expect["axContains"]).lower()
-            passed = needle in (after.ax_digest or "") or needle in (after.ocr_digest or "")
-            # Digest won't contain text; if the caller passed text, we compare
-            # against the after snapshot's rendered text when provided.
-            passed = passed or needle in str(expect.get("_after_text", "")).lower()
+            # Compare against the AFTER snapshot's rendered text, which the
+            # session supplies. A digest is a hash and can never contain text, so
+            # the old digest comparison made this check dead.
+            haystack = (after_text or str(expect.get("_after_text", ""))).lower()
+            passed = needle in haystack
             result.checks.append({"name": "ax_contains", "passed": passed, "expected": needle})
             if not passed:
                 failed_expectations.append("ax_contains")

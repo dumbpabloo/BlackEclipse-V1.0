@@ -592,7 +592,7 @@ async def position_close(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
         volume = args.get("volume")
         if ticket is not None:
             result = service.close_position(
-                connection_id, int(ticket),
+                connection_id, ticket,
                 volume=float(volume) if volume is not None else None,
             )
             closed = bool(result.get("closed"))
@@ -617,7 +617,7 @@ async def position_close(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
             positions = service.positions(connection_id)
             rows = (positions.get("data") or []) if positions.get("available") else []
             wanted = [
-                int(row.get("ticket") or 0)
+                row.get("ticket")
                 for row in rows
                 if str(row.get("symbol") or "").upper() == symbol
             ]
@@ -627,7 +627,7 @@ async def position_close(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
                 }
             result = service.close_positions(connection_id, tickets=wanted)
         elif close_all or tickets:
-            wanted = [int(item) for item in tickets] if isinstance(tickets, list) else None
+            wanted = list(tickets) if isinstance(tickets, list) else None
             result = service.close_positions(connection_id, tickets=wanted)
         else:
             return (
@@ -672,7 +672,7 @@ async def position_modify(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
         if not connection_id:
             connection_id = _pick(service, {})
         result = service.modify_position(
-            connection_id, int(ticket),
+            connection_id, ticket,
             stop_loss=float(stop_loss) if stop_loss is not None else None,
             take_profit=float(take_profit) if take_profit is not None else None,
         )

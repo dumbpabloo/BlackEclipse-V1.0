@@ -6,6 +6,188 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-22
 
+- **fix(computer-use): a crashed OSWorld agent cannot pass, and a failed capture attaches no media.**
+  `run_osworld_episode` now exposes `agentCrashed` and reports `success` only when the agent run completed
+  cleanly AND the environment score is positive; the environment score is still returned separately, so a
+  lucky final state is visible but never counted as the agent's pass. Strengthened the test and added a
+  clean-pass test and a clean-zero-score test. Added the missing regression test that a failed capture
+  (permission denied after an earlier successful capture) carries no `media` in its tool result. Also added a
+  `focus` action (UIA SetFocus, no click) for keyboard input when a control is obscured, and made the local
+  benchmark deterministic (12/12 across three consecutive runs; the flaky synthetic typing task was replaced
+  with a window-listing task, with typing covered by unit tests). Verified: 17 audit tests, eval + tools
+  suites, full related suite green; `npx tsc --noEmit` clean.
+  docs updated: `docs/harness/computer-use.md`, `docs/CHANGELOG.md`.
+
+- **fix(computer-use): post-implementation audit defects (memory writes, masking offset, dead vision rung, branch leakage, dry-run, staleness).**
+  Fixed the defects found by the audit: `store_workflow` now uses the real `structured=` keyword (auto memory and
+  learned adapters were silently dead); sensitive-region masking subtracts the frame origin and scale (it was
+  blacking the wrong pixels and leaking the secret); vision-grounding results carry `name` so the grounder can
+  score them (the rung was dead); best-of-N branch sessions suppress shared memory/adapter writes and only the
+  winner is learned; security profiles apply to window-less vision/OCR captures (focused window resolved); the
+  masked image is what the describer sees, and sensitive text/element values are redacted; clipboard reads are
+  redacted and marked untrusted; `drag`/`wait`/`note`/`done`/`fail`/`clipboard_get` honour a per-call dry run;
+  `trajectory_summary` reports a loop from two identical signatures; element drags validate stale handles;
+  `set_value` dry runs no longer echo the value; `uncertain` verification is no longer recorded as success; a
+  failed capture no longer attaches the previous frame; learned/app identity strips display suffixes; best-of-N
+  cleans up sessions on partial creation/observer failure; `forget` stops live selection; the base `activate`
+  accepts `value`; `close` reports a failed close as retry. Also fixed invoke verification order (capture
+  before invoke) and the typing-settle path in the benchmark. Evidence: 15 new audit-regression tests pass;
+  **209 passed** across the related suite; `[windows-core] pass@1 = 12/12 (1.000)`; `npx tsc --noEmit` clean.
+  docs updated: `docs/harness/computer-use.md`, `docs/CHANGELOG.md`.
+
+- **fix(broker): the Settings › Broker connection panel now offers every registered broker, not just MT5.**
+  The add form and the per-connection editor reuse the sidebar dialog's `ConnectionForm`, so the
+  broker-type dropdown lists the registry's kinds (with per-host availability and the unavailable
+  reason) and the credential / endpoint / quote-asset fields follow the selected kind. Both surfaces
+  now default to the first *available* kind instead of a disabled `mt5`, a blank label follows the
+  picked broker, and the sidebar's add fallback no longer borrows the selected connection's name.
+  `npx tsc --noEmit` clean; vitest 5235 pass; desktop build refreshed. The Python suite still has
+  four pre-existing failures in unrelated in-flight areas (computer-use lambda signature, prompt
+  ceiling, file-size ratchets in `agents.py`/`service.py`/`computer/core.py`/`trade/service.py`).
+  docs updated: `docs/trading.md` (setup step + registry bullet), `docs/CHANGELOG.md`.
+
+- **feat(computer-use): 12-task local benchmark CLI + Windows application identity for every window.**
+  `python scripts/cua_benchmark.py` runs the shared `LocalWindowsSuite` (real Windows driver, owned Win32
+  window) and prints pass@1; the suite grew from 6 to 12 tasks (click, UIA invoke, set-value, typing,
+  wait-for, clipboard, drag, press-and-hold, scroll-into-view, region capture, learned interface). The pytest
+  live test now uses the same suite, so the two cannot drift. Fixed the driver identity gap found by the
+  benchmark: Windows `WindowInfo.app` was always empty and an untitled/custom window was absent from
+  `list_windows`, so `get_window` returned None and application profiles/learned adapters had no identity;
+  `list_windows` now records the process stem and `get_window` builds a record from the handle. Measured:
+  **`[windows-core] pass@1 = 12/12 (1.000)`** in ~10s. also 194 tests pass; `npx tsc --noEmit` clean.
+  docs updated: `docs/harness/computer-use.md`, `docs/research/agent-s-vs-eclipse/ANALYSIS.md`,
+  `docs/CHANGELOG.md`.
+
+- **feat(computer-use): a model behavior judge for best-of-N (captions only, deterministic fallback).**
+  `computer/judge.py` builds a judge from the run's own model settings and compares the deterministic branch
+  captions with a strict `CHOICE: n` contract. It sees no screenshots or raw UI, can only pick an already
+  successful/safe branch, never runs for a single branch, and a provider failure or unusable reply falls back to
+  the deterministic rank (`judgedBy: deterministic`). The tool now passes the judge automatically when
+  `attempts > 1`. Evidence: prompt/parser cases, sync/async model completions, a broken judge falling back, and
+  a model-judged selection in `test_computer_state_of_art.py`; 21 state tests pass; full related suite green;
+  `npx tsc --noEmit` clean; ADR check green (H1..H365).
+  docs updated: `docs/harness/computer-use.md`, `docs/harness/decisions.md` (ADR-H365),
+  `docs/research/agent-s-vs-eclipse/ANALYSIS.md`, `docs/CHANGELOG.md`.
+
+- **feat(computer-use): learned interfaces self-validate against the live UI and retire when stale.**
+  Every observation now feeds the learned adapter for that app: a known control resets the miss counter and
+  records `lastValidatedAt`; three consecutive observations without one mark the adapter `stale`, its
+  registry view stops matching (the grounder falls back instead of trusting a changed UI), and only a new
+  verified run (a new version) revives it. `LearnedAdapterBook.forget` removes one; `capabilities().learnedAdapters`
+  reports count/stale/versions. Added `computer_forget_interface` to the knowledge surface (registry 1115 tools).
+  Evidence: a new test drives confirm → 3 misses → stale → registry falls back → re-learn resets → forget;
+  32 tool/memory tests pass; full related suite green; `npx tsc --noEmit` clean; ADR check green (H1..H364).
+  docs updated: `docs/harness/computer-use.md`, `docs/harness/decisions.md` (ADR-H364),
+  `docs/research/agent-s-vs-eclipse/ANALYSIS.md`, `docs/CHANGELOG.md`.
+
+- **feat(computer-use): learned per-app interfaces from verified workflows (bounded S4).**
+  A verified workflow candidate now derives a versioned `LearnedAdapter` (`applications/learned.py`): the
+  controls it acted on (`button Save`), the shortcuts it used, and the task→steps recipe. Every derivation
+  bumps the version and merges controls/shortcuts/recipes; structural validation requires a named control, a
+  recipe and verified-run evidence (`validated` = derived from a verified run; the live-rig `verified` flag stays
+  separate/false). The adapter registers in the session's registry (the grounder's semantic rung uses it
+  immediately) and persists to a gitignored `learned_adapters.json` sidecar; `computer_recall` returns learned
+  interfaces even when Eclipse-Memory is empty. Evidence: learned-adapter derivation/validation, version merge +
+  reload, rejection without a named control/app, `done` learning + selectable adapter, best-of winner learning,
+  and a `computer_recall` round-trip — 15 memory/security tests and 1 new tool test; full related suite green;
+  `npx tsc --noEmit` clean; ADR check green (H1..H364). Remaining blocked: an OSWorld agent pass@1 needs the
+  OSWorld VM + model key, and macOS/Linux live verification needs those hosts.
+  docs updated: `docs/harness/computer-use.md`, `docs/harness/decisions.md` (ADR-H364), `docs/NAVIGATION.md`,
+  `docs/research/agent-s-vs-eclipse/ANALYSIS.md`, `docs/CHANGELOG.md`.
+
+- **feat(computer-use): automatic procedural memory and per-app redaction profiles.**
+  A `done` that is a verified success (verified step, no `fail`, enough actions) now builds a workflow
+  CANDIDATE in `computer/procedural.py`: step sequence, target labels, notes and task — no typed text, no
+  field values, no frames, secret-shaped text scrubbed. It is surfaced for an explicit `computer_remember`;
+  `memory.auto_capture=true` (`HARNESS_COMPUTER_MEMORY_AUTO_CAPTURE`) also stores it tagged `auto_capture`,
+  and best-of-N stores only the winner's candidate. Added `security.DEFAULT_APP_PROFILES`: trading terminals
+  (Buying Power/Net Liq/positions/P&L), broker web, password managers (every text field masked) and banking
+  (balances/routing/IBAN patterns); a custom profile is an `AppProfile` record. `observation` now passes the
+  window's app/title to the scanner, so a TradingView/MT5/TWS window is masked even when the generation label is
+  unusual. Evidence: 11 new memory/security tests pass (candidate qualification, no typed text/secrets, opt-in
+  store, done-action integration, best-of winner-only, trading/broker/vault profiles, mask pixels, observation
+  integration); 161 computer tests pass in total; `npx tsc --noEmit` clean; ADR check green (H1..H363).
+  docs updated: `docs/harness/computer-use.md`, `docs/harness/decisions.md` (ADR-H363), `computer.example.json`,
+  `docs/research/agent-s-vs-eclipse/ANALYSIS.md`, `docs/CHANGELOG.md`.
+
+- **feat(computer-use): best-of-N selection and a real evaluation lane (OSWorld adapter + first measured pass@1).**
+  `computer_run(task, attempts=N)` runs independent desktop-agent branches on fresh sessions, binds each
+  branch to its run id (`ComputerManager.session_for_run`), reduces each to a deterministic behavior caption
+  (outcome, verified success, steps, failed steps, trail, notes, final window), and selects a verified success
+  (fewest failed steps, then fewest steps). An optional judge may pick another successful branch but never an
+  unsafe/failed one; isolated desktops run concurrently and a shared desktop serializes; N>1 is refused for a
+  task naming a financial mutation; without the service branch runner the tool is
+  `COMPUTER_BRANCH_RUNNER_UNAVAILABLE`. Added `computer/eval/`: a suite runner with pass@1 and an OSWorld
+  driver/bridge that maps the engine onto `DesktopEnv` (screenshot + pyautogui `step`) and scores from
+  `env.evaluate()`, never the agent's claim. Evidence: the live Windows suite reports **pass@1 = 6/6 (1.000)**
+  on six real owned-window tasks; 6 eval tests pass (fake OSWorld env, score separation, suite math,
+  branch-runner guard) and 17 best-of-N/state tests pass; the tool refuses `COMPUTER_MULTI_ATTEMPT_FINANCE`
+  and selects branch 2 in the end-to-end tool test. Open: an actual OSWorld agent run needs the OSWorld VM and
+  a configured model key (neither exists in this shell).
+  docs updated: `docs/harness/computer-use.md`, `docs/harness/decisions.md` (ADR-H362),
+  `docs/NAVIGATION.md`, `docs/research/agent-s-vs-eclipse/ANALYSIS.md`, `docs/CHANGELOG.md`.
+
+- **feat(computer-use): the desktop agent can see, ground, recover and remember — the Agent-S gap analysis is implemented.**
+  Perception: an observation now attaches a real, bounded screenshot to the tool result (crop → downscale →
+  JPEG; newest 8 kept in context), `som` draws numbered badges on the frame (`screenshots/annotate.py`), and
+  `mode="vision"` returns the image plus an honest description. Grounding: the vision rung is finally wired —
+  `session.vision_ground` calls an optional UI-TARS-class endpoint (`grounding/backends.py`, declared coordinate
+  space, DPI-correct image→screen mapping; `HARNESS_COMPUTER_GROUNDING_*`), with AX/adapter/OCR still first.
+  Execution: `drag` is fixed (coordinates AND `from_element`/`to_element`; a schema regression test), plus
+  `invoke` (UIA Invoke/Toggle/Select/Value), `open`, `close`, `clipboard_get/set`, `wait_for`,
+  `press_and_hold`, `scroll_into_view`, `note`, `done`, `fail`, capture `region`/`display_id`, modifier-clicks
+  and real key-down/up. Reliability: deterministic loop guard (`COMPUTER_LOOP_SUSPECTED`, verdict `replan`),
+  bounded recovery execution (reobserve → retry) reported in `recovery`, `expect` wires the previously dead
+  expectation checks (`axContains` reads live AX text), and `capture_after` now defaults true (one model call
+  per action). Capture: per-window `PrintWindow(PW_RENDERFULLCONTENT)` first, `screen_grab` only as a fallback,
+  with `captureMethod` on the snapshot. Agent: a dedicated `desktop-agent` preset and a verify→look→act
+  protocol prompt. Evidence: 137 computer tests pass (incl. the 5 live owned-window workflows; 13 new in
+  `test_computer_state_of_art.py`), 159 with the related media/agent/public-API suites; a live Windows
+  probe shows `captureMethod: print_window`, an attached JPEG screenshot and a real clipboard
+  round-trip; `npx tsc --noEmit` clean. Open (needs infrastructure): an OSWorld/WAA run, best-of-N selection and
+  learned interfaces — tracked in `docs/research/agent-s-vs-eclipse/ANALYSIS.md` §11.
+  docs updated: `docs/harness/computer-use.md`, `docs/harness/decisions.md` (ADR-H361),
+  `docs/NAVIGATION.md`, `computer.example.json`,
+  `docs/research/agent-s-vs-eclipse/ANALYSIS.md`, `docs/CHANGELOG.md`.
+
+- **docs(research): Computer Use vs Agent-S gap analysis and a phased plan to state of the art.**
+  New `docs/research/agent-s-vs-eclipse/ANALYSIS.md` compares Eclipse's `python/harness/computer/`
+  with `simular-ai/Agent-S` (S3/S4) from source and a live Windows probe. Findings that drove it:
+  the model never receives the screenshot (`tools.py` returns text only; `tool_turn.py` sends
+  `ToolMessage(content=text)`), `mode="vision"` returns 64 chars (no description is ever requested),
+  `som` is an unannotated text list (11 AX elements vs 304 OCR words on the same screen), the
+  grounding ladder's vision rung is never wired (`vision_lookup` has no caller), `drag` is
+  unreachable through the registry (schema lacks `from_coordinates`/`to_coordinates` and pydantic
+  drops them), `RecoveryEngine.execute` has no caller, window capture is a screen-region grab (cannot
+  see a covered window), and the agent exposes ~366 tools with four bullets of CUA prompt. Plan is
+  measurement-first, then pixels+grounding, a dedicated CUA subagent, execution hardening, best-of-N.
+  docs updated: `docs/research/agent-s-vs-eclipse/ANALYSIS.md`, `docs/CHANGELOG.md` (`computer-use.md`
+  unchanged — no code was changed by this analysis).
+
+- **feat(trading): all 19 registered broker kinds now place orders — the read-only tier is gone.** Seventeen adapters
+  (OANDA, Tradier, Trading212, Zerodha, Alpaca, IBKR, MT4 bridge, Binance, Kraken, Coinbase, Bitstamp, OKX, Bybit,
+  Bitget, Gate.io, Deribit, Bitfinex, Coincheck) became `TradingAdapter`s with preview, single-send submit, cancel,
+  cancel-all, close, modify and order status; the registry declares `execution=True` with per-kind modes and the
+  capability matrix was regenerated. The contract was de-MT5-ified: order ids are `str | int` (`ticket_ref`; UUIDs and
+  leading zeros survive), account mode is `demo | real`, live arming no longer demands a terminal-only "Algo Trading"
+  flag when the account itself permits trading, REST order ownership is `eclipse-<magic>-<digest>`, and a spot balance
+  closes by resolving its asset to the venue's own pair (`symbolMap` → `quoteAsset` → listed pairs, never a guess).
+  A venue that cannot attach a stop refuses `STOP_UNSUPPORTED`; one with no client-order field refuses
+  `OWNERSHIP_UNAVAILABLE`; IBKR's confirmation question is answered once. Settings now lists every
+  registered kind (the form was hardcoded to four) with credential, endpoint, account-id and quote-asset
+  fields, and the live-arm phrase shown in the UI is the same `armRef` the service verifies. Graph Studio
+  ticket ports are now a real `ticket` type: they accept an MT5 integer or a REST opaque id, with a
+  literal editor and compatibility with `number`/`string` producers. Verification:
+  vitest **5,235 passed** (1 skipped); **865** trade/broker/adapter/graph Python tests passed;
+  `npx tsc --noEmit` clean. The full `npm run test` Python shard reported 3,482 passed with 5 failures
+  outside trading (4 `test_computer_tools` from the in-flight computer work, 1 stats performance flake).
+  docs updated: `docs/trading.md`, `docs/DECISIONS.md`, `skills/ARCHITECT.md`, `docs/CHANGELOG.md`.
+
+- **chore: normalized one CRLF line in `docs/harness/decisions.md` to LF.** The tracked-file line-ending guard
+  (`src/lib/gitignore-guard.test.ts`) scans the working tree and found one CRLF among 11,718 LF lines. Whitespace
+  only; no content changed.
+  no doc change — line-ending normalization only.
+
 - **release: v0.4.26 is published.** `desktop-release` built the Windows installer, the offline `-full` installer
   and the `any` build artifact; `stable.json` was signed locally with key id `47e545f302249385`
   (commit `f36ed0af`, buildId `0WON5LtNn3FoxiJCt1MF-`, build sha256 `2440c63f…`), uploaded while the release was

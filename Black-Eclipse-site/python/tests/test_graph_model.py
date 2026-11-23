@@ -149,3 +149,26 @@ def test_template_renders_and_refuses_unknown_names():
     assert render_template("{{ a }}", {"a": {"z": 1}}) == '{"z": 1}'
     with pytest.raises(ValueError):
         render_template("{{missing}}", {"a": 1})
+
+
+def test_a_ticket_port_accepts_a_number_or_an_opaque_string():
+    from harness.graph_runtime.model import PortKind
+    from harness.graph_runtime.registry import PortDef, ports_compatible
+
+    def port(kind: PortType) -> PortDef:
+        return PortDef(id="p", name="P", type=kind, kind=PortKind.DATA)
+
+    assert ports_compatible(port(PortType.NUMBER), port(PortType.TICKET))
+    assert ports_compatible(port(PortType.STRING), port(PortType.TICKET))
+    assert ports_compatible(port(PortType.TICKET), port(PortType.TICKET))
+    assert not ports_compatible(port(PortType.BOOLEAN), port(PortType.TICKET))
+    assert not ports_compatible(port(PortType.NUMBER), port(PortType.STRING))
+
+
+def test_a_ticket_value_is_an_id_not_a_number_only():
+    assert validate_port_value(PortType.TICKET, 314159) is None
+    assert validate_port_value(PortType.TICKET, "b9a1e5c4-7f00") is None
+    assert validate_port_value(PortType.TICKET, "BTC-USD") is None
+    assert validate_port_value(PortType.TICKET, True)
+    assert validate_port_value(PortType.TICKET, "")
+    assert validate_port_value(PortType.TICKET, {"id": 1})

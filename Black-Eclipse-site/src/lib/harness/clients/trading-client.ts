@@ -1,9 +1,11 @@
-// ── Broker connectivity client (P0, read-only) ───────────────────────────────
+// ── Broker connectivity client ───────────────────────────────────────────────
 // Client-safe: talks only to the Next.js `/api/trading/*` front door, which
-// proxies to the operator-gated Python routes. No Node APIs. This surface reads
-// accounts/positions/orders/quotes; it cannot submit an order.
+// proxies to the operator-gated Python routes. No Node APIs.
 
 export type BrokerMode = "demo" | "live" | "unknown";
+
+/** MetaTrader tickets are integers; REST venues use opaque ids. */
+export type BrokerTicket = number | string;
 
 export interface BrokerKind {
   id: string;
@@ -21,6 +23,8 @@ export interface BrokerKind {
 
 export interface BrokerAccount {
   login: number;
+  /** The account id the live-arm phrase uses (falls back to `login`). */
+  armRef?: string | null;
   mode: "demo" | "contest" | "real" | "unknown";
   server: string;
   company: string;
@@ -55,7 +59,8 @@ export interface BrokerConnection {
 }
 
 export interface BrokerPosition {
-  ticket: number;
+  /** MetaTrader uses an integer ticket; a REST venue uses an opaque id/symbol. */
+  ticket: BrokerTicket;
   symbol: string;
   side: "buy" | "sell";
   volume: number;
@@ -71,7 +76,7 @@ export interface BrokerPosition {
 }
 
 export interface BrokerWorkingOrder {
-  ticket: number;
+  ticket: BrokerTicket;
   symbol: string;
   type: string;
   volumeCurrent: number;
@@ -227,7 +232,7 @@ export interface BrokerFill {
 }
 
 export interface BrokerPositionSnapshot {
-  ticket: number;
+  ticket: BrokerTicket;
   symbol: string;
   side: "buy" | "sell";
   volume: number;
@@ -443,7 +448,7 @@ export interface LedgerOrder {
   approvalId: string;
   mandateId?: string | null;
   status: string;
-  ticket: number | null;
+  ticket: BrokerTicket | null;
   retcode: number | null;
   retcodeName: string | null;
   filledVolume: number | null;
@@ -490,40 +495,40 @@ export async function submitOrderWithMandate(
 
 export async function cancelBrokerOrder(
   connectionId: string,
-  ticket: number,
+  ticket: BrokerTicket,
 ): Promise<{ cancelled: boolean; result: Record<string, unknown> }> {
   return api<{ cancelled: boolean; result: Record<string, unknown> }>(
-    `connections/${connectionId}/orders/${ticket}/cancel`,
+    `connections/${connectionId}/orders/${encodeURIComponent(String(ticket))}/cancel`,
     { method: "POST", body: JSON.stringify({}) },
   );
 }
 
 export async function closeBrokerPosition(
   connectionId: string,
-  ticket: number,
+  ticket: BrokerTicket,
   volume?: number,
   deviation = 20,
 ): Promise<{ closed: boolean; result: Record<string, unknown> }> {
   return api<{ closed: boolean; result: Record<string, unknown> }>(
-    `connections/${connectionId}/positions/${ticket}/close`,
+    `connections/${connectionId}/positions/${encodeURIComponent(String(ticket))}/close`,
     { method: "POST", body: JSON.stringify({ deviation, volume }) },
   );
 }
 
 export async function modifyBrokerPosition(
   connectionId: string,
-  ticket: number,
+  ticket: BrokerTicket,
   levels: { stopLoss?: number; takeProfit?: number },
 ): Promise<{ modified: boolean; result: Record<string, unknown> }> {
   return api<{ modified: boolean; result: Record<string, unknown> }>(
-    `connections/${connectionId}/positions/${ticket}/modify`,
+    `connections/${connectionId}/positions/${encodeURIComponent(String(ticket))}/modify`,
     { method: "POST", body: JSON.stringify(levels) },
   );
 }
 
 export async function closeAllBrokerPositions(
   connectionId: string,
-  tickets?: number[],
+  tickets?: BrokerTicket[],
 ): Promise<{
   closed: number;
   failed: number;

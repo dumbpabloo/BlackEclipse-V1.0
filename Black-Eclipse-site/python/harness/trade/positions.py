@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from .adapter import AdapterUnavailable
-from .model import TradeRefused
+from .model import TradeRefused, ticket_ref
 
 
 def _execution_adapter(service: Any, connection_id: str, action: str) -> tuple[Any, Any]:
@@ -63,7 +63,7 @@ def _close(adapter: Any) -> None:
 
 
 def close_position(
-    service: Any, connection_id: str, ticket: int, *,
+    service: Any, connection_id: str, ticket: Any, *,
     deviation: int = 20, volume: Optional[float] = None,
 ) -> dict[str, Any]:
     """Close all or part of ONE position. No approval, no mandate."""
@@ -71,7 +71,7 @@ def close_position(
     try:
         try:
             result = adapter.close_position(
-                int(ticket), deviation=int(deviation or 0), volume=volume,
+                ticket_ref(ticket), deviation=int(deviation or 0), volume=volume,
             )
         except AdapterUnavailable as exc:
             raise TradeRefused(exc.code, exc.reason, status_code=503) from exc
@@ -81,7 +81,7 @@ def close_position(
         connection.id,
         "close",
         "ok" if result.get("ok") else "rejected",
-        {"ticket": int(ticket), "retcode": result.get("retcode"),
+        {"ticket": ticket_ref(ticket), "retcode": result.get("retcode"),
          "deal": result.get("deal"), "partial": result.get("partial"),
          "verified": result.get("verified")},
     )
@@ -94,7 +94,7 @@ def close_position(
 
 
 def close_positions(
-    service: Any, connection_id: str, *, tickets: Optional[list[int]] = None,
+    service: Any, connection_id: str, *, tickets: Optional[list[Any]] = None,
     deviation: int = 20,
 ) -> dict[str, Any]:
     """Close every open position, or only the named tickets."""
@@ -106,7 +106,7 @@ def close_positions(
             raise TradeRefused(exc.code, exc.reason, status_code=503) from exc
     finally:
         _close(adapter)
-    wanted = {int(ticket) for ticket in (tickets or [])}
+    wanted = {ticket_ref(ticket) for ticket in (tickets or [])}
     if connection.mode.value == "live" and not wanted:
         # A live "close all" means every position ECLIPSE owns, not every manual
         # position on the account. The magic is the ownership boundary the kill
@@ -120,15 +120,15 @@ def close_positions(
                 status_code=400,
             )
         targets = [
-            int(row.get("ticket") or 0)
+            ticket_ref(row.get("ticket") or 0)
             for row in rows
             if int(row.get("magic") or 0) == magic
         ]
     else:
         targets = [
-            int(row.get("ticket") or 0)
+            ticket_ref(row.get("ticket") or 0)
             for row in rows
-            if not wanted or int(row.get("ticket") or 0) in wanted
+            if not wanted or ticket_ref(row.get("ticket") or 0) in wanted
         ]
     results: list[dict[str, Any]] = []
     for ticket in targets:
@@ -142,7 +142,7 @@ def close_positions(
             })
     if wanted:
         found = set(targets)
-        for ticket in sorted(wanted - found):
+        for ticket in sorted(wanted - found, key=str):
             results.append({
                 "ok": False, "ticket": ticket,
                 "retcodeName": "POSITION_NOT_FOUND",
@@ -160,7 +160,7 @@ def close_positions(
 
 
 def modify_position(
-    service: Any, connection_id: str, ticket: int, *,
+    service: Any, connection_id: str, ticket: Any, *,
     stop_loss: Optional[float] = None, take_profit: Optional[float] = None,
 ) -> dict[str, Any]:
     """Move a position's stop and/or target. No approval, no mandate.
@@ -176,7 +176,7 @@ def modify_position(
     try:
         try:
             result = adapter.modify_position(
-                int(ticket), stop_loss=stop_loss, take_profit=take_profit,
+                ticket_ref(ticket), stop_loss=stop_loss, take_profit=take_profit,
             )
         except AdapterUnavailable as exc:
             raise TradeRefused(exc.code, exc.reason, status_code=503) from exc
@@ -186,7 +186,7 @@ def modify_position(
         connection.id,
         "modify",
         "ok" if result.get("ok") else "rejected",
-        {"ticket": int(ticket), "retcode": result.get("retcode"),
+        {"ticket": ticket_ref(ticket), "retcode": result.get("retcode"),
          "stopLoss": result.get("stopLoss"),
          "takeProfit": result.get("takeProfit"),
          "verified": result.get("verified")},
@@ -200,7 +200,7 @@ def modify_position(
 
 
 def modify_order(
-    service: Any, connection_id: str, ticket: int, *,
+    service: Any, connection_id: str, ticket: Any, *,
     price: Optional[float] = None,
     stop_loss: Optional[float] = None,
     take_profit: Optional[float] = None,
@@ -221,7 +221,7 @@ def modify_order(
     try:
         try:
             result = adapter.modify_order(
-                int(ticket), price=price,
+                ticket_ref(ticket), price=price,
                 stop_loss=stop_loss, take_profit=take_profit,
             )
         except AdapterUnavailable as exc:
@@ -232,7 +232,7 @@ def modify_order(
         connection.id,
         "modify-order",
         "ok" if result.get("ok") else "rejected",
-        {"ticket": int(ticket), "retcode": result.get("retcode"),
+        {"ticket": ticket_ref(ticket), "retcode": result.get("retcode"),
          "price": result.get("price"), "verified": result.get("verified")},
     )
     return {

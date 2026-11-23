@@ -248,13 +248,18 @@ def validate_config(definition: NodeDef, config: dict[str, Any]) -> list[str]:
 
 def ports_compatible(source: PortDef, target: PortDef) -> bool:
     """Control ports only connect to control ports; `any` matches anything;
-    otherwise the declared types must match exactly (no silent coercion)."""
+    a `ticket` accepts an id as a number or a string (MT5 vs REST); otherwise
+    the declared types must match exactly (no silent coercion)."""
     source_control = source.kind == PortKind.CONTROL
     target_control = target.kind == PortKind.CONTROL
     if source_control or target_control:
         return source_control and target_control
     if source.type == PortType.ANY or target.type == PortType.ANY:
         return True
+    if PortType.TICKET in (source.type, target.type):
+        return source.type == target.type or {
+            source.type, target.type,
+        } <= {PortType.TICKET, PortType.NUMBER, PortType.STRING}
     return source.type == target.type
 
 
@@ -282,6 +287,10 @@ def validate_port_value(port_type: PortType, value: Any) -> Optional[str]:
         return None
     if port_type == PortType.NUMBER:
         return None if isinstance(value, (int, float)) and not isinstance(value, bool) else "expected a number"
+    if port_type == PortType.TICKET:
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            return "expected an order/position id (a number or a string)"
+        return None if str(value).strip() else "expected a non-empty order/position id"
     if port_type == PortType.BOOLEAN:
         return None if isinstance(value, bool) else "expected a boolean"
     if port_type == PortType.STRING:

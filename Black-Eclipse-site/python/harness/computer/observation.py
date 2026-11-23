@@ -44,6 +44,7 @@ def _replace_frame_image(frame: Any, image: Any) -> Any:
         return ScreenFrame(
             data=image, width=frame.width, height=frame.height,
             bounds=frame.bounds, png_bytes=None, scale=frame.scale,
+            method=getattr(frame, "method", ""),
         )
     except Exception:  # noqa: BLE001
         return frame
@@ -90,19 +91,33 @@ class ObservationEngine:
         persist_image: bool = True,
         session_id: str = "session",
         include_vision_description: bool = False,
+        region: Optional[Any] = None,
+        display_id: Optional[str] = None,
     ) -> Snapshot:
         mode = (mode or self._config.observation_default_mode).lower()
+        # A `vision` observation is asking for a description by definition.
+        include_vision_description = include_vision_description or mode == "vision"
         snapshot_id = self.next_snapshot_id()
         generation = self._counter
 
         window_title = ""
+        window_app = ""
         bounds: Optional[Bounds] = None
+        if region is not None:
+            try:
+                from .models import Bounds as _Bounds  # noqa: PLC0415
+
+                bounds = region if isinstance(region, _Bounds) else _Bounds.from_any(region)
+            except Exception:  # noqa: BLE001
+                bounds = None
         if window_id:
             try:
                 window = self._driver.get_window(window_id)
                 if window is not None:
                     window_title = window.title
-                    bounds = window.bounds
+                    window_app = str(getattr(window, "app", "") or "")
+                    if region is None:
+                        bounds = window.bounds
             except Exception:  # noqa: BLE001
                 pass
 
@@ -122,7 +137,8 @@ class ObservationEngine:
         image = None
         if mode in ("ocr", "som", "vision"):
             try:
-                frame = await self._driver.capture(window_id=window_id)
+                frame = await self._driver.capture(window_id=window_id, region=bounds if region is not None else None,
+                                                   display_id=display_id)
                 image = getattr(frame, "data", None)
             except Exception:  # noqa: BLE001
                 frame = None
@@ -137,6 +153,27 @@ class ObservationEngine:
 
         text = self._render_text(mode, elements, ocr_result)
 
+        # SOM must be a SCREEN OF MARKS, not a list of numbers with no picture.
+        # Draw numbered badges on a copy of the frame so the text handles and the
+        # image agree. The security mask is applied AFTER this.
+        if mode in ("som", "ocr") and elements and image is not None:
+            try:
+                from .screenshots.annotate import annotate_som  # noqa: PLC0415
+
+                scale = 1.0
+                if bounds is not None and bounds.width > 0:
+                    scale = float(getattr(image, "width", bounds.width)) / float(bounds.width)
+                annotated = annotate_som(
+                    image, elements,
+                    origin=(bounds.x, bounds.y) if bounds is not None else None,
+                    scale=scale,
+                )
+                if annotated is not None:
+                    image = annotated
+                    frame = _replace_frame_image(frame, annotated)
+            except Exception:  # noqa: BLE001 - annotation must never break an observation
+                pass
+
         # ── Security: flag + mask sensitive content BEFORE the image is persisted.
         # A sensitive frame must never reach a cloud model or an exported
         # trajectory unmasked.
@@ -145,13 +182,26 @@ class ObservationEngine:
         if self._security is not None:
             security_report = self._security.scan_snapshot(
                 [e.to_dict() for e in elements], text=text,
+                application=window_app, window_title=window_title,
             )
             sensitive = bool(security_report.sensitive)
+            if sensitive:
+                # The text/element values leave the machine too; redact them, not
+                # only the image.
+                text = self._security.redact_text(text)
+                for element in elements:
+                    if element.value:
+                        element.value = self._security.redact_text(element.value)
 
         image_path = None
         if frame is not None and persist_image and mode != "ax":
             if sensitive and self._security is not None and image is not None:
-                masked = self._security.mask_image(image, security_report.regions)
+                origin = (bounds.x, bounds.y) if bounds is not None else None
+                scale = (float(image.width) / float(bounds.width)) if bounds and bounds.width else 1.0
+                masked = self._security.mask_image(
+                    image, security_report.regions, origin=origin, scale=scale,
+                )
+                image = masked
                 frame = _replace_frame_image(frame, masked)
             image_path = self._capture.persist(frame, session_id=session_id, label="snapshot")
 
@@ -166,6 +216,7 @@ class ObservationEngine:
             truncated=len(text) > self._config.snapshot_max_chars,
             sensitive=sensitive,
             security=(security_report.to_dict() if security_report else None),
+            capture_method=str(getattr(frame, "method", "") or "") if frame is not None else "",
         )
         if include_vision_description and image is not None:
             # Route on the snapshot's ACTUAL sensitivity: a sensitive frame must
@@ -178,6 +229,11 @@ class ObservationEngine:
                         snapshot.text = (snapshot.text + "\n\n" + result.text)[: self._config.snapshot_max_chars]
                 except Exception:  # noqa: BLE001
                     pass
+            else:
+                snapshot.text = (
+                    snapshot.text
+                    + "\n(no vision model is configured; the screenshot is still attached for a multimodal model)"
+                )[: self._config.snapshot_max_chars]
         return snapshot
 
     # ── element builders ─────────────────────────────────────────────────────
@@ -219,7 +275,10 @@ class ObservationEngine:
     def _render_text(self, mode: str, elements: list[SnapshotElement], ocr_result: Any) -> str:
         header = f"[observation mode: {mode}]"
         if not elements:
-            body = "(no interactable elements were found)"
+            if mode == "vision":
+                body = "(screenshot captured; the image is attached to this result and no accessibility elements were found)"
+            else:
+                body = "(no interactable elements were found)"
             if ocr_result is not None and getattr(ocr_result, "available", False) and ocr_result.text:
                 body = ocr_result.text
             return f"{header}\n{body}"

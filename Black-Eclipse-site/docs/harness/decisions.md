@@ -11635,3 +11635,134 @@ text never become labels. Alert rules are real rules, not commented templates,
 and a renamed metric fails CI. The probe synthesises every workstream's signal
 and advertises all capabilities for the synthetic report; live reports use the
 actual flags.
+
+## ADR-H361 - Computer use is screenshot-first, with a bounded image budget and an optional grounding backend
+
+**Decision.** A `computer_*` observation returns the REAL frame as model media
+(crop → downscale → JPEG, bounded), with the `#N` handles drawn on it as numbered
+badges, and a state-changing action attaches a fresh screenshot by default
+(`capture_after`). Only the newest eight screenshots stay in context; older media
+messages are dropped while every tool result and text turn remains. The grounding
+ladder stays accessibility-first, but rung 5 is a real backend: an optional
+UI-TARS-class endpoint that declares its coordinate grid and is mapped to screen
+pixels (DPI-correct) before an action. No endpoint is an honest
+`configured:false`, never a fabricated point, and a sensitive frame is never sent
+to it. Per-window capture tries `PrintWindow(PW_RENDERFULLCONTENT)` before a
+screen grab and records `captureMethod`, so background observation is not a lie.
+
+**Why.** The Agent-S comparison found the model never received the screenshot,
+`vision` mode returned nothing, `som` was an unannotated text list, and the
+vision rung had no caller. The safety system was strong; the perception pipeline
+was blind, which capped task success regardless of policy.
+
+**Consequences.** Every observation now costs image tokens, so the budget is
+explicit and pruned. A grounding endpoint is a deployment option, not a
+zero-config requirement. Images are model content, so they follow the existing
+sensitive-frame masking and never bypass it; a sensitive snapshot is not sent to
+an external grounding model. The eight-image window is the ONE context rule;
+per-agent duplication of it is a bug.
+
+## ADR-H362 - Best-of-N is a selection mechanism over isolated sessions, and the benchmark scores from the environment
+
+**Decision.** `computer_run(task, attempts=N)` runs independent desktop-agent
+branches on fresh sessions, reduces each to a deterministic behavior caption, and
+selects a **verified success** (fewest failed steps, then fewest steps). A judge
+callable may pick a different successful branch but never an unsafe/failed one. A
+branch is bound to its run id through `ComputerManager.session_for_run`, so
+parallel isolated branches cannot act on each other's desktop; the shared desktop
+runs branches serially. N>1 is refused for a task naming a financial mutation.
+Evaluation is a suite runner (`eval/suite.py`) plus an OSWorld driver/bridge
+(`drivers/osworld.py`, `eval/osworld.py`): the engine drives the environment, and
+the score is the environment's `evaluate()`, never the agent's claim. The local
+Windows suite publishes a pass@1 for the engine, not a claim about agent
+intelligence.
+
+**Why.** Agent S3's Behavior Best-of-N is the largest single accuracy lever in
+the literature (66% -> 72.6% on OSWorld), and Eclipse already had isolated
+desktops but no way to use them for selection. Separately, a benchmark whose
+score can be self-reported is not a benchmark.
+
+**Consequences.** A branch costs a full agent run, so N is capped at 4 and
+defaults to 1; approvals are per-branch and single-use. A judge failure falls back
+to the deterministic pick instead of failing the run. The OSWorld adapter is
+honest about its dependencies: without the OSWorld VM or a configured model it
+reports unavailable rather than producing a number.
+
+## ADR-H363 - A verified run may propose a workflow; per-app redaction is a profile
+
+**Decision.** A `done` that is a verified success (at least one verified step, no
+`fail`, enough real actions) produces a workflow CANDIDATE: step sequence, target
+labels, notes and task, with typed text/values excluded and secret-shaped text
+scrubbed. By default the candidate is only surfaced for an explicit
+`computer_remember`; `memory.auto_capture=true` records it tagged
+`source=auto_capture`, and best-of-N stores only the winner's candidate. Separately,
+sensitive-data detection is extended by per-application profiles (trading
+terminal, broker web, password manager, banking): a profile adds labels/patterns
+for its window and a password-manager profile masks every text field. A new app
+family is a profile record, not new detection code.
+
+**Why.** Explicit-only memory is safe but forgetful; the same verified task is
+re-derived forever. Unconditional auto-write is worse: it can persist a secret or
+a wrong shortcut. A verified candidate plus an opt-in store keeps the knowledge
+gain and the inspectability. Generic labels also cannot know that "Buying Power"
+is account data in a trading terminal or that a vault view is entirely secret.
+
+**Consequences.** A false-positive redaction only masks more than necessary
+(safe); a false negative leaks, so profiles err toward masking. The candidate is
+bounded (20 steps), never contains a screenshot or a typed value, and a memory
+outage cannot fail a desktop task. Auto-capture is a config decision, visible in
+`computer.example.json` and the capabilities payload.
+
+## ADR-H364 - Learned application interfaces are derived from verified runs, versioned, and never executable
+
+**Decision.** A verified workflow candidate derives a `LearnedAdapter`
+(application, controls it acted on, shortcuts, task→steps recipe), with a
+monotonic version and merged knowledge. Structural validation requires a named
+control, a recipe and verified-run evidence; `validated` means "derived from a
+verified run", while the live-rig `verified` flag stays separate and false. The
+adapter is registered in the session's adapter registry (so the grounder's
+semantic rung can use it immediately) and persisted to the gitignored
+`learned_adapters.json` sidecar under the artifacts root. `computer_recall`
+returns learned interfaces even when Eclipse-Memory is empty.
+
+**Why.** Agent S4 shows interfaces can be evolved from experience; Eclipse had
+hand-written adapters that never improved. A full meta-agent/population search is
+research, but the useful, safe core is: learn the controls and recipes from a run
+that was actually verified, keep it inspectable, and never let learned knowledge
+execute anything.
+
+**Consequences.** Learned knowledge is bounded (20 recipes, 20 evidence digests),
+contains no typed text, and a malformed/conflicting record cannot be selected.
+Every observation live-validates a learned interface: a known control resets the
+miss counter, three consecutive observations without one mark it stale, and a
+stale interface stops matching (the grounder falls back) until a new verified run
+learns the changed UI. A change in the app is therefore detected by the same
+mechanism that learned it, and the record is a knowledge cache, not a source of
+truth.
+
+## ADR-H365 - The behavior judge compares captions, never screenshots, and can only confirm a winner
+
+**Decision.** Best-of-N's optional model judge receives the deterministic branch
+captions and the task, nothing else, and replies with one index. Parsing is
+strict (`CHOICE: n`, tolerant of a trailing number), an out-of-range/zero/none
+reply is no choice, and a judge exception or provider failure falls back to the
+deterministic pick. The judge can only choose among branches the engine already
+marked successful and safe. It is built from the run's own model settings and
+only when attempts > 1.
+
+**Why.** Behavior judging is the largest single accuracy lever in the CUA
+literature, but a judge that sees raw screenshots can be steered by on-screen
+text, and a judge that can override safety is a second authority. Text captions
+are already scrubbed and bounded; the deterministic rank remains the floor when
+the model is absent or wrong.
+
+**Consequences.** A judge call costs one model request per selection and never
+runs for a single branch. No screenshot leaves the machine for judging. The
+judge's choice is reported as `judgedBy: behavior_judge` so the outcome is
+auditable and a deterministic result is visibly different.
+
+
+
+
+
+

@@ -394,7 +394,7 @@ export function BrokerPositionsPanel({
   positions: BrokerPosition[];
   loading: boolean;
   busy: string | null;
-  onClose: (ticket: number) => void;
+  onClose: (ticket: number | string) => void;
   onCloseAll: () => void;
   onRefresh: () => void;
 }) {
@@ -498,7 +498,7 @@ export function BrokerOrdersPanel({
   orders: BrokerWorkingOrder[];
   loading: boolean;
   busy: string | null;
-  onCancel: (ticket: number) => void;
+  onCancel: (ticket: number | string) => void;
   onRefresh: () => void;
 }) {
   return (

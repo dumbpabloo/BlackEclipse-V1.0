@@ -40,6 +40,33 @@ def stable_key(name: str, args: dict[str, Any]) -> str:
     return f"{name}:{json.dumps(args, sort_keys=True, default=str)}"
 
 
+def _has_image(message: BaseMessage) -> bool:
+    content = getattr(message, "content", None)
+    if not isinstance(content, list):
+        return False
+    if getattr(message, "additional_kwargs", {}).get("eclipse_media") != "desktop_screenshot":
+        return False
+    return any(
+        isinstance(part, dict) and part.get("type") in ("image_url", "image")
+        for part in content
+    )
+
+
+def _prune_media_messages(messages: list[BaseMessage], keep: int = 8) -> list[BaseMessage]:
+    """Keep only the newest `keep` synthetic media messages.
+
+    Screenshots are the bulk of a long desktop trajectory. The text history and
+    every ToolMessage stay intact; only the extra HumanMessage that carries an
+    image is dropped, oldest first. This is what stops a 60-step task from
+    re-sending 60 full screenshots on every model call.
+    """
+    indices = [i for i, message in enumerate(messages) if _has_image(message)]
+    if len(indices) <= keep:
+        return messages
+    drop = set(indices[: len(indices) - keep])
+    return [message for i, message in enumerate(messages) if i not in drop]
+
+
 def resolve_parallel_safe(registry: Any, name: str) -> bool:
     """Whether this call may share a batch. Explicit opt-in only."""
     tool = registry.get(name) if hasattr(registry, "get") else None
@@ -529,6 +556,7 @@ class ToolTurn:
         turn_set = sorted(set(turn_keys))
         stalled = bool(turn_set) and turn_set == sorted(set(prev_keys))
         all_messages = [*state["messages"], *out_messages]
+        all_messages = _prune_media_messages(all_messages)
         from .context.pruning import maybe_prune_for_run  # noqa: PLC0415
 
         all_messages, _pruned_count = await maybe_prune_for_run(

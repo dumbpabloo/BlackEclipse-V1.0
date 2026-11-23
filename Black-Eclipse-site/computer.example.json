@@ -17,10 +17,24 @@
       "allow_cloud_for_sensitive": false,
       "model": null
     },
+    "grounding": {
+      "_comment": "Optional UI-TARS-class grounding endpoint (OpenAI-compatible). Empty url/model = unavailable; the ladder then uses AX, app adapters and OCR only.",
+      "url": "",
+      "model": "",
+      "api_key": "",
+      "width": 1000,
+      "height": 1000,
+      "timeout_seconds": 30
+    },
     "ocr": { "enabled": true, "backend": "auto" },
     "verification": { "enabled": true },
     "recovery": { "enabled": true, "max_attempts": 3 },
     "security": { "sensitive_data_redaction": true },
+    "memory": {
+      "_comment": "A done that is a verified success yields a workflow candidate. auto_capture=false surfaces it for computer_remember; true also stores it in Eclipse-Memory (never screenshots, never typed text).",
+      "auto_capture": false,
+      "min_actions": 2
+    },
     "finance": {
       "mode": "read_only",
       "max_order_value": 0,

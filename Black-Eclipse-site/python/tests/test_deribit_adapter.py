@@ -116,7 +116,7 @@ def test_account_reports_the_currency_it_actually_queried(monkeypatch):
     assert account["currency"] == "ETH"
     assert account["equity"] == pytest.approx(2.5)
     assert account["marginFree"] == pytest.approx(2.0)
-    assert account["tradeAllowed"] is False
+    assert account["tradeAllowed"] is True
 
 
 def test_positions_use_the_direction_and_skip_closed(monkeypatch):
@@ -160,8 +160,8 @@ def test_quote_reads_the_public_ticker(monkeypatch):
     assert quote["serverTimeMs"] == 1700000000000
 
 
-def test_registry_declares_options_and_read_only():
+def test_registry_declares_options_and_execution():
     kind = get_kind("deribit")
-    assert kind.execution is False
+    assert kind.execution is True
     assert "options" in kind.asset_classes
     assert any(row["id"] == "deribit" for row in list_kinds())

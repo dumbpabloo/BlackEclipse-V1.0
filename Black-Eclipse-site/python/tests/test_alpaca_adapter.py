@@ -1,4 +1,4 @@
-"""Alpaca read-only adapter: REST mapping + FIFO deal normalization."""
+"""Alpaca broker adapter: REST mapping + FIFO deal normalization."""
 
 from __future__ import annotations
 
@@ -44,9 +44,21 @@ POSITIONS = [
      "unrealized_pl": "100"}
 ]
 
+OPEN_ORDERS = [
+    {"id": "order-eclipse", "symbol": "AAPL", "side": "buy", "qty": "1",
+     "status": "new", "type": "limit", "limit_price": "100",
+     "client_order_id": "eclipse-77-abc123456789", "submitted_at": "2026-11-01T14:00:00Z"},
+    {"id": "order-manual", "symbol": "AAPL", "side": "buy", "qty": "1",
+     "status": "new", "type": "limit", "limit_price": "100",
+     "client_order_id": "manual-1", "submitted_at": "2026-11-01T14:00:00Z"},
+]
+CLOSED_ORDERS = ORDERS
+
 
 class Handler(BaseHTTPRequestHandler):
     token = None
+    SUBMITTED: list = []
+    CANCELLED: list = []
 
     def log_message(self, *args):
         return
@@ -73,18 +85,63 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, POSITIONS)
         elif path == "/v2/orders":
             if "status=open" in query:
-                self._send(200, [])
+                self._send(200, OPEN_ORDERS)
             else:
                 self._send(200, ORDERS)
+        elif path.startswith("/v2/orders/"):
+            order_id = path.rsplit("/", 1)[-1]
+            row = next((o for o in CLOSED_ORDERS if o["id"] == order_id), None)
+            self._send(200, row) if row else self._send(404, {"message": "not found"})
         elif path == "/v2/stocks/AAPL/quotes/latest":
             self._send(200, {"quote": {"bp": 109.9, "ap": 110.1, "t": "2026-11-01T15:00:00Z"}})
         else:
             self._send(404, {"message": "not found"})
 
+    def _body(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        return json.loads(self.rfile.read(length) or b"{}")
+
+    def do_POST(self):  # noqa: N802
+        if self.headers.get("APCA-API-KEY-ID") != "key":
+            self._send(401, {"message": "unauthorized"})
+            return
+        body = self._body()
+        if self.path == "/v2/orders" and body.get("symbol") == "AAPL":
+            Handler.SUBMITTED.append(body)
+            self._send(200, {
+                "id": "order-new", "symbol": "AAPL", "side": body.get("side"),
+                "qty": body.get("qty"), "status": "accepted",
+                "filled_qty": "0", "filled_avg_price": None,
+                "client_order_id": body.get("client_order_id"),
+            })
+        else:
+            self._send(422, {"message": "rejected by test venue"})
+
+    def do_DELETE(self):  # noqa: N802
+        if self.headers.get("APCA-API-KEY-ID") != "key":
+            self._send(401, {"message": "unauthorized"})
+            return
+        path, _, _query = self.path.partition("?")
+        if path == "/v2/positions/AAPL":
+            self._send(200, {"symbol": "AAPL", "qty": "10", "side": "long",
+                             "avg_entry_price": "100"})
+        elif path.startswith("/v2/orders/"):
+            Handler.CANCELLED.append(path.rsplit("/", 1)[-1])
+            self._send(204, None)
+        else:
+            self._send(404, {"message": "not found"})
+
+    def do_PATCH(self):  # noqa: N802
+        body = self._body()
+        self._send(200, {"id": self.path.rsplit("/", 1)[-1], "symbol": "AAPL",
+                         "status": "new", "limit_price": body.get("limit_price")})
+
 
 @pytest.fixture()
 def api(monkeypatch):
     Handler.token = None
+    Handler.SUBMITTED = []
+    Handler.CANCELLED = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{server.server_address[1]}"
@@ -109,9 +166,11 @@ def test_account_positions_quote(api, monkeypatch):
     Handler.token = "key"
     adapter = adapter_for(api)
     assert adapter.account()["equity"] == 10500.0
-    assert adapter.account()["mode"] == "live"  # the test baseUrl is not a `paper` host
+    # The trade layer's account-mode vocabulary is demo|real (MT5's own words).
+    assert adapter.account()["mode"] == "real"
     positions = adapter.positions()
     assert positions[0]["symbol"] == "AAPL"
+    assert positions[0]["ticket"] == "AAPL"
     assert positions[0]["side"] == "buy"
     quote = adapter.quote("aapl")
     assert quote["bid"] == 109.9
@@ -136,3 +195,86 @@ def test_missing_and_bad_credentials_are_named_refusals(api):
     with pytest.raises(AdapterUnavailable) as info:
         adapter_for(api).account()
     assert info.value.code == "ALPACA_CREDENTIALS"
+
+
+# ── execution ────────────────────────────────────────────────────────────────
+
+def _intent(**overrides):
+    from harness.trade.model import OrderIntent
+
+    values = dict(
+        connection_id="conn", symbol="AAPL", side="buy", order_type="market",
+        volume=2, price=None, stop_loss=None, take_profit=None, magic=77,
+    )
+    values.update(overrides)
+    return OrderIntent(**values)
+
+
+def test_preview_normalises_the_order_and_bracket(api, monkeypatch):
+    monkeypatch.setenv("TEST_ALPACA_KEYS", "key:secret")
+    Handler.token = "key"
+    preview = adapter_for(api).order_preview(
+        _intent(order_type="limit", price=100, stop_loss=95, take_profit=110)
+    )
+    assert preview["ok"] is True
+    assert preview["symbol"] == "AAPL"
+    assert preview["volume"] == 2
+    assert preview["price"] == 100
+    assert preview["notional"] == 200
+    assert preview["margin"] == 200
+    assert preview["openPositions"] == 1
+
+
+def test_a_bracket_on_the_wrong_side_is_refused_before_sending(api, monkeypatch):
+    monkeypatch.setenv("TEST_ALPACA_KEYS", "key:secret")
+    Handler.token = "key"
+    preview = adapter_for(api).order_preview(
+        _intent(order_type="limit", price=100, stop_loss=105, take_profit=110)
+    )
+    assert preview["ok"] is False
+    assert any("stop loss must be below" in reason for reason in preview["reasons"])
+
+
+def test_submit_sends_one_bracketed_order_with_the_ownership_tag(api, monkeypatch):
+    monkeypatch.setenv("TEST_ALPACA_KEYS", "key:secret")
+    Handler.token = "key"
+    result = adapter_for(api).submit_order(
+        _intent(order_type="limit", price=100, stop_loss=95, take_profit=110)
+    )
+    assert result["ok"] is True
+    assert result["ticket"] == "order-new"
+    assert result["status"] == "placed"
+    sent = Handler.SUBMITTED[-1]
+    assert sent["symbol"] == "AAPL"
+    assert sent["order_class"] == "bracket"
+    assert sent["client_order_id"].startswith("eclipse-77-")
+    assert sent["stop_loss"]["stop_price"] == "95.000000"
+    assert sent["take_profit"]["limit_price"] == "110.000000"
+
+
+def test_cancel_all_only_touches_eclipse_orders(api, monkeypatch):
+    monkeypatch.setenv("TEST_ALPACA_KEYS", "key:secret")
+    Handler.token = "key"
+    result = adapter_for(api).cancel_all(77)
+    assert result["cancelled"] == 1
+    assert Handler.CANCELLED == ["order-eclipse"]
+
+
+def test_close_by_symbol_is_risk_reducing(api, monkeypatch):
+    monkeypatch.setenv("TEST_ALPACA_KEYS", "key:secret")
+    Handler.token = "key"
+    result = adapter_for(api).close_position("AAPL")
+    assert result["ok"] is True
+    assert result["ticket"] == "AAPL"
+    assert result["verified"] is True
+
+
+def test_replace_price_and_refuse_a_bracket_edit(api, monkeypatch):
+    monkeypatch.setenv("TEST_ALPACA_KEYS", "key:secret")
+    Handler.token = "key"
+    adapter = adapter_for(api)
+    replaced = adapter.modify_order("order-eclipse", price=101.5)
+    assert replaced["ok"] is True
+    refused = adapter.modify_order("order-eclipse", stop_loss=90)
+    assert refused["ok"] is False
+    assert refused["retcodeName"] == "ORDER_BRACKET_UNSUPPORTED"

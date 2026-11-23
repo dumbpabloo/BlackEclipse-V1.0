@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..trade.analysis import bar_summary
+from ..trade.model import ticket_ref
 from .model import ExecutionMode, PortDef, PortType, SideEffect
 from .registry import ConfigField, NodeDef, NodeExecContext
 
@@ -29,6 +30,16 @@ def _service() -> Any:
     if service is None:
         raise ValueError("broker connectivity is unavailable in this runtime")
     return service
+
+
+def _ticket_id(context: NodeExecContext, handle: str = "ticket"):
+    """A ticket can be an MT5 integer or a REST venue's opaque id."""
+    raw = context.inputs.get(handle)
+    if raw in (None, ""):
+        raw = context.config.get(handle)
+    if raw in (None, ""):
+        return None
+    return ticket_ref(raw)
 
 
 def _connection(context: NodeExecContext) -> str:
@@ -210,7 +221,7 @@ def exec_broker_symbol(context: NodeExecContext) -> dict[str, Any]:
 
 def exec_broker_modify_order(context: NodeExecContext) -> dict[str, Any]:
     """Re-price or re-bracket a WORKING order. Risk-reducing: no mandate."""
-    ticket = _number(context, "ticket")
+    ticket = _ticket_id(context)
     if ticket is None:
         raise ValueError("broker modify-order needs a ticket input")
     price = _number(context, "price")
@@ -219,13 +230,13 @@ def exec_broker_modify_order(context: NodeExecContext) -> dict[str, Any]:
     if price is None and stop_loss is None and take_profit is None:
         raise ValueError("pass a price, a stopLoss and/or a takeProfit to modify")
     result = _service().modify_order(
-        _connection(context), int(ticket),
+        _connection(context), ticket,
         price=price, stop_loss=stop_loss, take_profit=take_profit,
     )
     modified = bool(result.get("modified"))
     detail = result.get("result") if isinstance(result.get("result"), dict) else {}
     context.emit(
-        f"modify order {int(ticket)}: "
+        f"modify order {ticket}: "
         + (f"stored @ {detail.get('price')}" if modified else f"refused ({_reason(result) or 'not modified'})")
     )
     return {
@@ -239,7 +250,7 @@ def exec_broker_modify_order(context: NodeExecContext) -> dict[str, Any]:
 def exec_broker_close(context: NodeExecContext) -> dict[str, Any]:
     service = _service()
     connection_id = _connection(context)
-    ticket = _number(context, "ticket")
+    ticket = _ticket_id(context)
     volume = _number(context, "volume")
     symbol = str(context.inputs.get("symbol") or context.config.get("symbol") or "").strip().upper()
     deviation = int(context.config.get("deviation", 20) or 20)
@@ -247,7 +258,7 @@ def exec_broker_close(context: NodeExecContext) -> dict[str, Any]:
         return _batch_close(service.close_positions(connection_id, deviation=deviation))
     if ticket is not None:
         result = service.close_position(
-            connection_id, int(ticket), volume=volume, deviation=deviation,
+            connection_id, ticket, volume=volume, deviation=deviation,
         )
         closed = bool(result.get("closed"))
         return {
@@ -260,7 +271,7 @@ def exec_broker_close(context: NodeExecContext) -> dict[str, Any]:
         positions = service.positions(connection_id)
         rows = positions.get("data") if isinstance(positions.get("data"), list) else []
         tickets = [
-            int(row.get("ticket") or 0)
+            ticket_ref(row.get("ticket") or 0)
             for row in rows
             if str(row.get("symbol") or "").upper() == symbol
         ]
@@ -278,11 +289,11 @@ def exec_broker_close(context: NodeExecContext) -> dict[str, Any]:
 
 
 def exec_broker_modify(context: NodeExecContext) -> dict[str, Any]:
-    ticket = _number(context, "ticket")
+    ticket = _ticket_id(context)
     if ticket is None:
         raise ValueError("broker modify needs a ticket input")
     result = _service().modify_position(
-        _connection(context), int(ticket),
+        _connection(context), ticket,
         stop_loss=_number(context, "stopLoss"),
         take_profit=_number(context, "takeProfit"),
     )
@@ -295,10 +306,10 @@ def exec_broker_modify(context: NodeExecContext) -> dict[str, Any]:
     }
 
 def exec_broker_cancel(context: NodeExecContext) -> dict[str, Any]:
-    ticket = _number(context, "ticket")
+    ticket = _ticket_id(context)
     if ticket is None:
         raise ValueError("broker cancel needs a ticket input")
-    result = _service().cancel_order(_connection(context), int(ticket))
+    result = _service().cancel_order(_connection(context), ticket)
     cancelled = bool(result.get("cancelled"))
     return {
         "result": result,
@@ -445,7 +456,7 @@ def build_broker_nodes() -> list[NodeDef]:
             type="trading.broker_modify_order", version="1.0.0", label="Modify order",
             category="trading",
             inputs=(
-                PortDef(id="ticket", name="Ticket", type=PortType.NUMBER),
+                PortDef(id="ticket", name="Ticket", type=PortType.TICKET),
                 PortDef(id="price", name="New price", type=PortType.NUMBER, optional=True),
                 PortDef(id="stopLoss", name="Stop loss", type=PortType.NUMBER, optional=True),
                 PortDef(id="takeProfit", name="Take profit", type=PortType.NUMBER, optional=True),
@@ -465,7 +476,7 @@ def build_broker_nodes() -> list[NodeDef]:
             type="trading.broker_close", version="1.0.0", label="Close position",
             category="trading",
             inputs=(
-                PortDef(id="ticket", name="Ticket", type=PortType.NUMBER, optional=True),
+                PortDef(id="ticket", name="Ticket", type=PortType.TICKET, optional=True),
                 PortDef(id="symbol", name="Symbol", type=PortType.STRING, optional=True),
                 PortDef(id="volume", name="Volume", type=PortType.NUMBER, optional=True),
             ),
@@ -489,7 +500,7 @@ def build_broker_nodes() -> list[NodeDef]:
             type="trading.broker_modify", version="1.0.0", label="Modify position",
             category="trading",
             inputs=(
-                PortDef(id="ticket", name="Ticket", type=PortType.NUMBER),
+                PortDef(id="ticket", name="Ticket", type=PortType.TICKET),
                 PortDef(id="stopLoss", name="Stop loss", type=PortType.NUMBER, optional=True),
                 PortDef(id="takeProfit", name="Take profit", type=PortType.NUMBER, optional=True),
             ),
@@ -507,7 +518,7 @@ def build_broker_nodes() -> list[NodeDef]:
         NodeDef(
             type="trading.broker_cancel", version="1.0.0", label="Cancel order",
             category="trading",
-            inputs=(PortDef(id="ticket", name="Ticket", type=PortType.NUMBER),),
+            inputs=(PortDef(id="ticket", name="Ticket", type=PortType.TICKET),),
             outputs=(
                 PortDef(id="result", name="Result", type=PortType.OBJECT),
                 PortDef(id="status", name="Status", type=PortType.STRING),

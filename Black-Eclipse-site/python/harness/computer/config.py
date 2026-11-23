@@ -99,6 +99,11 @@ class ComputerConfig:
     recovery_max_attempts: int = 3
     # Security.
     sensitive_data_redaction: bool = True
+    # Automatic procedural memory: a VERIFIED workflow becomes a candidate after
+    # a successful desktop run. Off by default (suggestion only); when on, the
+    # candidate is also written to Eclipse-Memory, tagged as auto.
+    memory_auto_capture: bool = False
+    memory_min_actions: int = 2
     # Finance.
     finance_mode: str = "read_only"   # read_only | assisted | autonomous | simulation
     finance_max_order_value: float = 0.0
@@ -120,6 +125,13 @@ class ComputerConfig:
     # Confirmation threshold: grounding confidence below this is AMBIGUOUS for a
     # high-risk target.
     grounding_min_confidence: float = 0.6
+    # GUI grounding backend (UI-TARS-class), OpenAI-compatible.
+    grounding_url: str = ""
+    grounding_model: str = ""
+    grounding_api_key: str = ""
+    grounding_width: int = 1000
+    grounding_height: int = 1000
+    grounding_timeout_seconds: int = 30
     # Application policy.
     allowed_apps: list[str] = field(default_factory=list)
     denied_apps: list[str] = field(default_factory=list)
@@ -151,7 +163,10 @@ class ComputerConfig:
             "verification": {"enabled": self.verification_enabled},
             "recovery": {"enabled": self.recovery_enabled, "maxAttempts": self.recovery_max_attempts},
             "security": {"sensitiveDataRedaction": self.sensitive_data_redaction},
-            "finance": {
+            "memory": {
+                "autoCaptureProcedures": self.memory_auto_capture,
+                "minActions": self.memory_min_actions,
+            },            "finance": {
                 "mode": self.finance_mode, "maxOrderValue": self.finance_max_order_value,
                 "allowedApps": list(self.finance_allowed_apps),
                 "allowedAccounts": list(self.finance_allowed_accounts),
@@ -166,6 +181,11 @@ class ComputerConfig:
             },
             "snapshotMaxChars": self.snapshot_max_chars,
             "groundingMinConfidence": self.grounding_min_confidence,
+            "grounding": {
+                "url": self.grounding_url, "model": self.grounding_model,
+                "width": self.grounding_width, "height": self.grounding_height,
+                "configured": bool(self.grounding_url and self.grounding_model),
+            },
             "policy": {
                 "allowedApps": list(self.allowed_apps),
                 "deniedApps": list(self.denied_apps),
@@ -269,6 +289,15 @@ def load_computer_config() -> ComputerConfig:
         recovery_enabled=_truthy(os.environ.get("HARNESS_COMPUTER_RECOVERY"), bool(recovery.get("enabled", True))),
         recovery_max_attempts=_int(os.environ.get("HARNESS_COMPUTER_RECOVERY_ATTEMPTS"), int(recovery.get("max_attempts", 3)), low=0, high=10),
         sensitive_data_redaction=_truthy(os.environ.get("HARNESS_COMPUTER_REDACTION"), bool(security.get("sensitive_data_redaction", True))),
+        memory_auto_capture=_truthy(
+            os.environ.get("HARNESS_COMPUTER_MEMORY_AUTO_CAPTURE"),
+            bool((overrides.get("memory") or {}).get("auto_capture", False)),
+        ),
+        memory_min_actions=_int(
+            os.environ.get("HARNESS_COMPUTER_MEMORY_MIN_ACTIONS"),
+            int((overrides.get("memory") or {}).get("min_actions", 2) or 2),
+            low=1, high=50,
+        ),
         finance_mode=_choice(os.environ.get("HARNESS_COMPUTER_FINANCE_MODE") or finance.get("mode", "read_only"), FINANCE_MODES, "read_only"),
         finance_max_order_value=float(finance.get("max_order_value", 0.0) or 0.0),
         finance_allowed_apps=_csv_or_file(
@@ -288,6 +317,33 @@ def load_computer_config() -> ComputerConfig:
         action_timeout_seconds=_int(os.environ.get("HARNESS_COMPUTER_ACTION_TIMEOUT"), int(limits.get("action_timeout_seconds", 30)), low=1, high=600),
         snapshot_max_chars=_int(os.environ.get("HARNESS_COMPUTER_SNAPSHOT_CHARS"), int(top("snapshot_max_chars", 24_000)), low=1_000, high=200_000),
         grounding_min_confidence=float(top("grounding_min_confidence", 0.6) or 0.6),
+        grounding_url=str(
+            os.environ.get("HARNESS_COMPUTER_GROUNDING_URL")
+            or (overrides.get("grounding") or {}).get("url", "")
+        ),
+        grounding_model=str(
+            os.environ.get("HARNESS_COMPUTER_GROUNDING_MODEL")
+            or (overrides.get("grounding") or {}).get("model", "")
+        ),
+        grounding_api_key=str(
+            os.environ.get("HARNESS_COMPUTER_GROUNDING_API_KEY")
+            or (overrides.get("grounding") or {}).get("api_key", "")
+        ),
+        grounding_width=_int(
+            os.environ.get("HARNESS_COMPUTER_GROUNDING_WIDTH"),
+            int((overrides.get("grounding") or {}).get("width", 1000) or 1000),
+            low=100, high=10_000,
+        ),
+        grounding_height=_int(
+            os.environ.get("HARNESS_COMPUTER_GROUNDING_HEIGHT"),
+            int((overrides.get("grounding") or {}).get("height", 1000) or 1000),
+            low=100, high=10_000,
+        ),
+        grounding_timeout_seconds=_int(
+            os.environ.get("HARNESS_COMPUTER_GROUNDING_TIMEOUT"),
+            int((overrides.get("grounding") or {}).get("timeout_seconds", 30) or 30),
+            low=1, high=120,
+        ),
         allowed_apps=_str_list((overrides.get("policy") or {}).get("allowed_apps") if isinstance(overrides.get("policy"), dict) else top("allowed_apps", [])),
         denied_apps=_str_list((overrides.get("policy") or {}).get("denied_apps") if isinstance(overrides.get("policy"), dict) else top("denied_apps", [])),
         allowed_actions=_str_list((overrides.get("policy") or {}).get("allowed_actions") if isinstance(overrides.get("policy"), dict) else top("allowed_actions", [])),

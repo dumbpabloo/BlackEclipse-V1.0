@@ -111,7 +111,7 @@ def test_account_sums_balances_from_the_flat_payload(monkeypatch):
     assert account["server"] == "bitstamp"
     assert account["balance"] == pytest.approx(1000.5)
     assert account["marginFree"] == pytest.approx(900.4)
-    assert account["tradeAllowed"] is False
+    assert account["tradeAllowed"] is True
 
 
 def test_positions_are_balances_and_not_marked(monkeypatch):
@@ -150,8 +150,8 @@ def test_quote_strips_the_pair_of_separators(monkeypatch):
     assert quote["serverTimeMs"] == 1700000000000
 
 
-def test_registry_declares_the_kind_read_only():
+def test_registry_declares_the_kind_executable():
     kind = get_kind("bitstamp")
-    assert kind.execution is False
+    assert kind.execution is True
     assert "quote" in kind.capabilities
     assert any(row["id"] == "bitstamp" for row in list_kinds())

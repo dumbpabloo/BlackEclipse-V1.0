@@ -23,6 +23,12 @@ describe('port compatibility', () => {
     expect(portsCompatible(port({ type: 'number' }), port({ type: 'string' }))).toBe(false);
     expect(portsCompatible(port({ type: 'ohlcv' }), port({ type: 'ohlcv' }))).toBe(true);
   });
+  it('lets a ticket take an MT5 number or a REST opaque string', () => {
+    expect(portsCompatible(port({ type: 'number' }), port({ type: 'ticket' }))).toBe(true);
+    expect(portsCompatible(port({ type: 'string' }), port({ type: 'ticket' }))).toBe(true);
+    expect(portsCompatible(port({ type: 'ticket' }), port({ type: 'ticket' }))).toBe(true);
+    expect(portsCompatible(port({ type: 'boolean' }), port({ type: 'ticket' }))).toBe(false);
+  });
   it('keeps control ports separate from data ports', () => {
     expect(portsCompatible(port({ type: 'any', kind: 'control' }), port({ type: 'any' }))).toBe(false);
     expect(portsCompatible(port({ type: 'any', kind: 'control' }), port({ type: 'any', kind: 'control' }))).toBe(true);

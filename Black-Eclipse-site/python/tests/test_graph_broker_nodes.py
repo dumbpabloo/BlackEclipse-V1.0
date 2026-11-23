@@ -345,6 +345,18 @@ def test_close_by_symbol_closes_only_that_symbol(service):
     assert kwargs["tickets"] == [11, 12]
 
 
+def test_a_rest_ticket_survives_without_int_coercion(service):
+    # A REST venue's position id is opaque; the node must pass it through, not
+    # parse it as a number.
+    result = _exec(
+        "trading.broker_close", {"connectionId": "brk_1"}, {"ticket": "BTC-USD"},
+    )
+    assert result["ok"] is True
+    name, args, kwargs = service.calls[-1]
+    assert name == "close_position"
+    assert args[1] == "BTC-USD"
+
+
 def test_close_by_symbol_is_a_named_outcome_when_nothing_is_held(service):
     result = _exec("trading.broker_close", {"connectionId": "brk_1"}, {"symbol": "GBPUSD"})
     assert result["ok"] is False

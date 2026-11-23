@@ -29,7 +29,7 @@ from ..models import (
 class ScreenFrame:
     """A captured image plus its geometry. The bytes are PNG when encoded."""
 
-    __slots__ = ("data", "width", "height", "bounds", "png_bytes", "scale")
+    __slots__ = ("data", "width", "height", "bounds", "png_bytes", "scale", "method")
 
     def __init__(
         self,
@@ -40,6 +40,7 @@ class ScreenFrame:
         bounds: Optional[Bounds] = None,
         png_bytes: Optional[bytes] = None,
         scale: float = 1.0,
+        method: str = "",
     ) -> None:
         self.data = data              # a PIL.Image when available, else None
         self.width = width
@@ -47,12 +48,14 @@ class ScreenFrame:
         self.bounds = bounds or Bounds(0, 0, width, height)
         self.png_bytes = png_bytes
         self.scale = scale
+        # print_window | screen_grab ("" when unknown).
+        self.method = method
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "width": self.width, "height": self.height,
             "bounds": self.bounds.to_dict(), "scale": self.scale,
-            "hasBytes": self.png_bytes is not None,
+            "hasBytes": self.png_bytes is not None, "method": self.method,
         }
 
 
@@ -228,6 +231,26 @@ class ComputerDriver:
         from ..errors import UnsupportedAction  # noqa: PLC0415
 
         raise UnsupportedAction("This platform driver cannot set a value directly.", code="COMPUTER_CAPABILITY_UNSUPPORTED")
+
+    # ── clipboard ────────────────────────────────────────────────────────────
+
+    async def get_clipboard(self) -> Optional[str]:
+        """The clipboard's text, or None when the platform cannot read it."""
+        return None
+
+    async def set_clipboard(self, text: str) -> bool:
+        """Replace the clipboard's text. False when unsupported or refused."""
+        return False
+
+    async def key_down(self, key: str, *, delivery_mode: str = "background",
+                       window_id: Optional[str] = None) -> Any:
+        """Press and HOLD a key (used for modifier-clicks). Best-effort."""
+        return await self.key([key], delivery_mode=delivery_mode, window_id=window_id)
+
+    async def key_up(self, key: str, *, delivery_mode: str = "background",
+                     window_id: Optional[str] = None) -> Any:
+        """Release a held key."""
+        return await self.key([key], delivery_mode=delivery_mode, window_id=window_id)
 
     def pointer_position(self) -> Optional[tuple[int, int]]:
         return None

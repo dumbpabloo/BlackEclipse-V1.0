@@ -52,6 +52,13 @@ export function portsCompatible(source: PortDef, target: PortDef): boolean {
   const targetControl = target.kind === 'control';
   if (sourceControl || targetControl) return sourceControl && targetControl;
   if (source.type === 'any' || target.type === 'any') return true;
+  // A ticket is an id: MT5 supplies a number, a REST venue an opaque string.
+  if (source.type === 'ticket' || target.type === 'ticket') {
+    const pair = new Set([source.type, target.type]);
+    return pair.size === 1
+      || (pair.has('ticket')
+        && [...pair].every((type) => type === 'ticket' || type === 'number' || type === 'string'));
+  }
   return source.type === target.type;
 }
 

@@ -24,6 +24,7 @@ from .model import (
     BrokerConnection,
     ConnectionMode,
     normalise_mode,
+    ticket_ref,
     validate_config,
 )
 
@@ -106,7 +107,7 @@ CREATE INDEX IF NOT EXISTS idx_broker_fill_connection
 
 CREATE TABLE IF NOT EXISTS BrokerPositionSnapshot (
   connectionId  TEXT NOT NULL,
-  ticket        INTEGER NOT NULL,
+  ticket        TEXT NOT NULL,
   symbol        TEXT NOT NULL,
   side          TEXT NOT NULL,
   volume        REAL NOT NULL,
@@ -222,6 +223,46 @@ class BrokerConnectionStore:
         for name in ("automationId", "automationVersion"):
             if name not in order_columns:
                 self._db.execute(f"ALTER TABLE BrokerOrder ADD COLUMN {name} TEXT")
+        # REST venues return opaque position ids; the snapshot key must be TEXT.
+        # A database created before that change has an INTEGER PRIMARY KEY, which
+        # refuses a non-numeric id, so the cache table is rebuilt once (it is a
+        # cache: the broker remains the source of truth).
+        snapshot_columns = {
+            row["name"]: str(row["type"] or "").upper()
+            for row in self._db.execute(
+                "PRAGMA table_info(BrokerPositionSnapshot)"
+            ).fetchall()
+        }
+        if snapshot_columns.get("ticket") == "INTEGER":
+            self._db.executescript(
+                """
+                ALTER TABLE BrokerPositionSnapshot RENAME TO BrokerPositionSnapshot_old;
+                CREATE TABLE BrokerPositionSnapshot (
+                  connectionId  TEXT NOT NULL,
+                  ticket        TEXT NOT NULL,
+                  symbol        TEXT NOT NULL,
+                  side          TEXT NOT NULL,
+                  volume        REAL NOT NULL,
+                  openPrice     REAL NOT NULL,
+                  currentPrice  REAL NOT NULL,
+                  stopLoss      REAL,
+                  takeProfit    REAL,
+                  profit        REAL NOT NULL DEFAULT 0,
+                  swap          REAL NOT NULL DEFAULT 0,
+                  magic         INTEGER NOT NULL DEFAULT 0,
+                  comment       TEXT,
+                  openedAt      INTEGER NOT NULL,
+                  syncedAt      TEXT NOT NULL,
+                  PRIMARY KEY(connectionId, ticket)
+                );
+                INSERT OR IGNORE INTO BrokerPositionSnapshot
+                  SELECT connectionId, CAST(ticket AS TEXT), symbol, side, volume,
+                         openPrice, currentPrice, stopLoss, takeProfit, profit,
+                         swap, magic, comment, openedAt, syncedAt
+                  FROM BrokerPositionSnapshot_old;
+                DROP TABLE BrokerPositionSnapshot_old;
+                """
+            )
         self._db.commit()
 
     # ── reads ───────────────────────────────────────────────────────────────
@@ -527,8 +568,8 @@ class BrokerConnectionStore:
                 (
                     str(connection_id),
                     int(fill.get("dealTicket") or 0),
-                    int(fill.get("orderTicket") or 0) or None,
-                    int(fill.get("positionTicket") or 0) or None,
+                    ticket_ref(fill.get("orderTicket")) if fill.get("orderTicket") not in (None, "", 0, "0") else None,
+                    ticket_ref(fill.get("positionTicket")) if fill.get("positionTicket") not in (None, "", 0, "0") else None,
                     str(fill.get("symbol") or ""),
                     str(fill.get("side") or ""),
                     str(fill.get("entry") or "") or None,
@@ -639,7 +680,7 @@ class BrokerConnectionStore:
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         str(connection_id),
-                        int(position.get("ticket") or 0),
+                        ticket_ref(position.get("ticket") or 0),
                         str(position.get("symbol") or ""),
                         str(position.get("side") or ""),
                         float(position.get("volume") or 0),

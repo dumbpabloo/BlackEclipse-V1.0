@@ -335,7 +335,8 @@ producer — for example Parse JSON carrying its text, or Load dataset carrying
 its ref. A connected wire **always wins**; the inspector says "wired" and the
 validator warns that the literal is ignored. Required inputs are satisfied by a
 wire **or** a literal. Control ports never take literals (they gate execution,
-not values). Type-aware editors cover text, number, boolean and JSON values, and
+not values). Type-aware editors cover text, number, boolean, ticket (an MT5
+integer or a REST opaque id) and JSON values, and
 the node **Test** tab prefills from the literals. The runtime resolves
 `wire → literal → optional/null` in `executor.py`, and the compiler accepts the
 same rule, so the editor and the Python runtime cannot disagree.

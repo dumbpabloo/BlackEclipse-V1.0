@@ -1,7 +1,7 @@
 ---
 title: Broker Connectivity
 status: Current
-last-verified: 2026-11-17
+last-verified: 2026-11-23
 ---
 
 # Broker Connectivity
@@ -9,16 +9,20 @@ last-verified: 2026-11-17
 **Who this is for:** anyone connecting a broker to Eclipse, adding a broker
 adapter, or wondering why a trading widget says `UNAVAILABLE`.
 
-This is **P4: demo + armed live execution with reconciliation**. Eclipse can attach
-to a broker, report its account, positions, working orders and quotes, submit orders
-for a **demo** account or an **armed live** account, and durably reconcile fills,
-positions and order state. Live is off by default: arming requires a typed phrase, a
-non-zero magic, a positive maxMargin and a time box, and every live order needs its
-own typed phrase. Chat surfaces that live approval as a **one-click card** above the
-composer. Live exits (close/modify) are arm-free so risk reduction is never blocked.
-Graph Studio can submit demo orders — and, since P6, **live orders under a
-workflow-pinned live mandate on an armed live connection**. The internal simulator
-(`trading.paper_order`) remains available.
+This is **P4/P9: demo + armed live execution with reconciliation, on every
+declared broker kind**. Eclipse can attach to a broker, report its account,
+positions, working orders and quotes, submit orders for a **demo** account or an
+**armed live** account, and durably reconcile fills, positions and order state.
+Nineteen kinds are registered; each executes through the same `TradingAdapter`
+contract (MetaTrader 5 over local IPC, the MT4 bridge over its operator-run HTTP
+contract, and 17 REST venues), with per-venue capabilities named rather than
+assumed. Live is off by default: arming requires a typed phrase, a non-zero
+magic, a positive maxMargin and a time box, and every manual live order needs its
+own typed phrase. Chat surfaces that live approval as a **one-click card** above
+the composer. Live exits (close/modify) are arm-free so risk reduction is never
+blocked. Graph Studio can submit demo orders — and **live orders under a
+workflow-pinned live mandate on an armed live connection**. The internal
+simulator (`trading.paper_order`) remains available.
 
 ## The one rule
 
@@ -56,16 +60,19 @@ credentials. Nothing secret enters the app, the database or model context.
 | Kind | Transport | Auth | Eclipse path |
 |---|---|---|---|
 | **MetaTrader 5** (`mt5`) | Local IPC to `terminal64.exe` | attach to a logged-in terminal | `adapters/mt5.py` |
-| MetaTrader 4 (`mt4_bridge`, read-only) | Local HTTP JSON bridge | bridge secret name | `adapters/mt4_bridge.py` |
-| Alpaca (`alpaca`, read-only) | HTTPS REST | `credentialRef` NAME (`KEY:SECRET`) | `adapters/alpaca.py` |
-| IBKR (`ibkr`, read-only) | Client Portal Gateway HTTPS | `credentialRef` NAME (gateway cookie) | `adapters/ibkr.py` |
+| MetaTrader 4 (`mt4_bridge`) | Local HTTP JSON bridge | bridge secret name | `adapters/mt4_bridge.py` |
+| Alpaca (`alpaca`) | HTTPS REST | `credentialRef` NAME (`KEY:SECRET`) | `adapters/alpaca.py` |
+| IBKR (`ibkr`) | Client Portal Gateway HTTPS | `credentialRef` NAME (gateway cookie) | `adapters/ibkr.py` |
+| Trading 212, Zerodha, Tradier, OANDA | HTTPS REST | `credentialRef` NAME | `adapters/` |
+| Binance, Kraken, Coinbase, Bitstamp, OKX, Bybit, Bitget, Gate.io, Deribit, Bitfinex, Coincheck | HTTPS REST | `credentialRef` NAME | `adapters/` |
 | Any plugin broker | plugin host | per-plugin encrypted secrets | `plugins/` |
 
 A new broker is a **registration**, not a refactor. It implements
-`BrokerAdapter` and is declared in `trade/registry.py`:
+`BrokerAdapter` (reads) — and `TradingAdapter` if it can place orders — and is
+declared in `trade/registry.py`:
 
 ```python
-class MyBrokerAdapter(BrokerAdapter):
+class MyBrokerAdapter(TradingAdapter):
     kind = "mybroker"
 
     @classmethod
@@ -77,13 +84,66 @@ class MyBrokerAdapter(BrokerAdapter):
     def positions(self) -> list[dict]: ...
     def orders(self) -> list[dict]: ...
     def quote(self, symbol: str) -> dict: ...
+    def order_preview(self, intent) -> dict: ...
+    def submit_order(self, intent) -> dict: ...
+    def cancel_order(self, ticket) -> dict: ...
+    def cancel_all(self, magic: int) -> dict: ...
 
-register_kind(BrokerKind(id="mybroker", label="My broker", auth="credentials"),
+register_kind(BrokerKind(id="mybroker", label="My broker", auth="credentials",
+                         execution=True, execution_modes=("demo", "live")),
               MyBrokerAdapter)
 ```
 
-Then the existing routes (`/trading/connections/{id}/...`), the read-only tools
-(`broker_account`, `broker_positions`, …) and the UI work unchanged.
+Then the existing routes (`/trading/connections/{id}/...`), the agent tools and
+the UI work unchanged.
+
+## Execution across REST venues
+
+Every declared kind that executes implements `TradingAdapter`, so it goes through
+**the same** preview → approval/mandate → guardrails → single send path. The
+venue-specific parts are named, never hidden:
+
+- **Account mode is `demo` or `real`.** The service refuses a mismatch. A REST
+  adapter derives it from the endpoint (`paper`, `sandbox`, `practice`, `demo`,
+  `testnet`, `sim` → `demo`; anything else → `real`). This is the trade layer's
+  vocabulary, not MetaTrader's `trade_mode`.
+- **Tickets are `str | int`.** MetaTrader returns integers; REST venues return
+  UUIDs, exchange order ids or a symbol. The service carries either form and
+  never coerces an opaque id (a numeric string with a leading zero keeps its
+  zero). See `trade/model.py::ticket_ref`.
+- **Ownership is a client order id.** MetaTrader scopes Eclipse orders with its
+  `magic`; a REST venue gets `eclipse-<magic>-<digest>` in its client-order field.
+  `cancel_all` (and the kill switch) cancel only orders carrying that prefix. A
+  venue with no client-order field returns `OWNERSHIP_UNAVAILABLE` instead of
+  cancelling every order on the account.
+- **Spot vs derivatives.** On spot, `positions()` reports non-zero balances and
+  the ticket is the asset; `close_position` submits an opposite market order for
+  the held quantity. An attached stop/target is refused with
+  `STOP_UNSUPPORTED` when the venue cannot hold one on the entry, never silently
+  dropped. Derivatives venues (OKX, Bybit, Bitget, Gate.io futures, Deribit)
+  support attached SL/TP and close with a reduce-only opposite order.
+- **Named refusals, not optimism.** `BROKER_READ_ONLY` (no execution adapter),
+  `OWNERSHIP_UNAVAILABLE`, `STOP_UNSUPPORTED`, `BRACKET_UNSUPPORTED`,
+  `POSITION_NOT_FOUND`, `IBKR_CONFIRMATION_REQUIRED`, `BRIDGE_EXECUTION_UNSUPPORTED`.
+  An ambiguous send is recorded `unknown`; it is never retried.
+- **The money gates are unchanged.** Live still requires an armed connection
+  (typed phrase, non-zero magic, positive `maxMargin`, time box), a per-order
+  `LIVE …` phrase or a pinned mandate, guardrails, the daily-loss brake and the
+  proof/ramp ladder for unattended bots. `terminal.tradeAllowed` is read from
+  the account when the venue has no separate "Algo Trading" switch.
+- **A broker without a native adapter** can still be reached through the
+  `mt4_bridge` JSON contract: the operator runs a small HTTP bridge (it may wrap
+  any venue's API) and Eclipse treats it as a normal executing connection. The
+  bridge owns credentials and the terminal/API session; Eclipse never stores a
+  password.
+- **Settings lists every registered kind**, read from `/trading/brokers` rather
+  than a hardcoded four. The add form and the per-connection editor share the
+  sidebar dialog's form, so both surfaces follow the selected kind's auth style.
+  The form shows the credential name, an optional base URL / account id, and (for
+  spot venues) the optional `quoteAsset` used when a balance is closed. Live
+  arming shows the exact `ARM LIVE <armRef>` phrase the service verifies.
+
+
 
 ## MetaTrader 5 setup (demo first)
 
@@ -96,9 +156,11 @@ Then the existing routes (`/trading/connections/{id}/...`), the read-only tools
    `pip install MetaTrader5` (Windows x64; now pinned in `python/requirements.txt`
    with a Windows-x64 marker, so `npm run setup:python` installs it; the terminal
    remains a separate manual install).
-4. Open **Settings › Broker connection** and click **Add & test connection** (kind `mt5`,
-   mode `demo`, terminal path prefilled). The panel shows the account, server,
-   balance/equity, margin mode and warnings. The API equivalent is
+4. Open **Settings › Broker connection** and click **Add & test connection**
+   (pick kind `mt5`, mode `demo`, terminal path prefilled). The panel shows the
+   account, server, balance/equity, margin mode and warnings. The same panel
+   lists every registered kind, so a REST venue is connected from the same form
+   by changing **Broker type**. The API equivalent is
    `POST /trading/connections`:
    ```json
    { "kind": "mt5", "label": "MT5 demo", "mode": "demo",
@@ -148,29 +210,43 @@ Market Watch) is subscribed with `symbol_select` and retried for up to ~2 s. Tha
 is a local terminal subscription, not an order or account mutation. A tick that
 stays all-zero is reported as `SYMBOL_NOT_FOUND`, never as a price.
 
-### The MT4 bridge contract (read-only)
+### The MT4 bridge contract (reads + writes)
 
 MT4 has no supported local Python IPC, so `mt4_bridge` attaches to a small HTTP
-bridge the operator runs next to the terminal. The bridge owns the login; Eclipse
-only reads:
+bridge the operator runs next to the terminal. The bridge owns the login and the
+terminal; Eclipse speaks JSON:
 
 ```
-GET {bridgeUrl}/account
-GET {bridgeUrl}/positions
-GET {bridgeUrl}/orders
-GET {bridgeUrl}/orders/{ticket}
-GET {bridgeUrl}/quote?symbol=EURUSD
-GET {bridgeUrl}/deals?from=<epoch_ms>&to=<epoch_ms>
+GET  {bridgeUrl}/account
+GET  {bridgeUrl}/positions
+GET  {bridgeUrl}/orders
+GET  {bridgeUrl}/orders/{ticket}
+GET  {bridgeUrl}/quote?symbol=EURUSD
+GET  {bridgeUrl}/symbol?symbol=EURUSD        (optional symbol spec)
+GET  {bridgeUrl}/deals?from=<epoch_ms>&to=<epoch_ms>
+
+POST {bridgeUrl}/orders
+     {symbol, side, volume, type, price, stopLoss, takeProfit, magic,
+      comment, deviation}
+     -> {ok, ticket, price, retcode, retcodeName, reasons, message}
+POST {bridgeUrl}/orders/{ticket}/cancel
+POST {bridgeUrl}/orders/{ticket}/modify      {price?, stopLoss?, takeProfit?}
+GET  {bridgeUrl}/orders/{ticket}/status
+POST {bridgeUrl}/positions/{ticket}/close    {volume?}   ({} = full close)
+POST {bridgeUrl}/positions/{ticket}/modify   {stopLoss?, takeProfit?}
 ```
 
 Responses are JSON; lists may be a bare array or wrapped as `positions` /
 `orders` / `deals`. `bridgeSecretRef` is a **name** (an environment variable, or
 a `secret://…` vault reference), never a value; when set it is sent as
-`Authorization: Bearer …`. The adapter is not a `TradingAdapter`, so there is no
-order path. Point the bridge at loopback and keep it read-only. Tests:
-`python/tests/test_mt4_bridge_adapter.py`.
+`Authorization: Bearer …`. A bridge that answers 404/405 on a write endpoint is
+reported as `BRIDGE_EXECUTION_UNSUPPORTED` — the read path keeps working, and
+nothing pretends the order was sent. Cancelling all orders matches the
+connection's magic, so the kill switch never touches a manually opened order.
+Tests: `python/tests/test_mt4_bridge_adapter.py`,
+`python/tests/test_mt4_bridge_execution.py`.
 
-### Alpaca and IBKR (read-only, FIFO-normalized)
+### Alpaca and IBKR (execution, FIFO-normalized)
 
 Neither API exposes an MT5-style `position_id` on its execution stream. Both
 adapters therefore feed filled orders/executions through the shared
@@ -179,10 +255,16 @@ pro-rata fees, partial fills and shorts. That P&L is **Eclipse-computed**, so
 the journal records `pnlBasis="computed"` and the trade detail says so.
 
 - **Alpaca**: `baseUrl` (default paper), `dataUrl`, optional `accountId`,
-  `credentialRef` → `KEY:SECRET` or JSON `{"key","secret"}`.
+  `credentialRef` → `KEY:SECRET` or JSON `{"key","secret"}`. Market/limit/stop,
+  bracket/OTO, cancel, replace and close-by-symbol. A paper host is the demo
+  account.
 - **IBKR**: `baseUrl` (default `https://localhost:5000/v1/api`), `accountId`,
   `credentialRef` → gateway cookie (`SESSION=…` or JSON `{"cookie":…}`). TLS
-  verification is relaxed only for a loopback gateway.
+  verification is relaxed only for a loopback gateway. The gateway's order
+  confirmation question is answered **once**; a second question refuses with
+  `IBKR_CONFIRMATION_REQUIRED` rather than looping. Bracket legs and
+  `cancel_all` are named refusals because CPAPI cannot link either to an order
+  tag.
 
 A `credentialRef` is a NAME (env var or `secret://…`), never a value.
 
@@ -822,12 +904,13 @@ good fills and snapshot; it never deletes history or fabricates a fill.
 connections whose status is `connected` or `unavailable`, and it never places an
 order. Manual `POST .../sync` always works.
 
-**History window.** Each sync asks MetaTrader for the last 7 days of deals, with a
-2-day future margin and a 3-day lower-bound margin. `history_deals_get` expects
-**server** time, and the Python process clock can be hours behind or ahead (the
-current demo is +2h); a tight local-time cursor silently drops the oldest or newest
-fill. Dedupe by deal ticket absorbs the overlap, so the stored cursor is advisory,
-not authoritative.
+**History window.** Each adapter answers `deals_window(N)` from its own history
+API. MetaTrader uses the last 7 days of deals with a 2-day future margin and a
+3-day lower-bound margin: `history_deals_get` expects **server** time, and the
+Python process clock can be hours behind or ahead (the current demo is +2h); a
+tight local-time cursor silently drops the oldest or newest fill. REST venues page
+their own fill/execution endpoints. Dedupe by deal ticket absorbs the overlap, so
+the stored cursor is advisory, not authoritative.
 
 **Journal projection.** The reconciled mirror is also the input to the
 trading journal: `POST /api/journal/broker/sync` groups `BrokerFill` deals by
@@ -855,6 +938,8 @@ adapter's `deals_window(N)` and still dedupes by deal ticket. See
 | Approval + guardrail seam | `python/harness/trade/authorizer.py` |
 | MT5 adapter | `python/harness/trade/adapters/mt5.py` |
 | MT5 wire tables | `python/harness/trade/adapters/mt5_contract.py` |
+| Shared REST execution helpers | `python/harness/trade/adapters/orders.py` |
+| REST adapters (17) | `python/harness/trade/adapters/{alpaca,ibkr,trading212,zerodha,tradier,oanda,binance,kraken,coinbase,bitstamp,okx,bybit,bitget,gateio,deribit,bitfinex,coincheck}.py` |
 | MT4 bridge adapter | `python/harness/trade/adapters/mt4_bridge.py` |
 | Reconciliation | `python/harness/trade/reconcile.py` |
 | Graph node | `python/harness/graph_runtime/trading_nodes.py`, `trading_calc_nodes.py`, `trading_ops_nodes.py`, `trading_lifecycle_nodes.py`, `broker_nodes.py`, `src/lib/graph-studio/registry-trading.ts` |
@@ -934,12 +1019,14 @@ exact same operator routes.
 | **P0 (done)** | attach + read account/positions/orders/quotes | read-only |
 | **P1 (done)** | demo order submission via `order_check` -> approval -> `order_send` | connection AND broker account must be `demo`; single-use approval |
 | **P2 (done)** | armed live submission + kill switch | real account, Algo Trading, typed arm phrase, non-zero magic, positive `maxMargin`, time-boxed arm, per-order `LIVE ...` phrase |
-| **P3 (done)** | Graph Studio `trading.broker_order` + bounded, revocable demo mandates | paper-mode graph + operator paper grant + demo connection + active mandate; live trading nodes remain refused |
+| **P3 (done)** | Graph Studio `trading.broker_order` + bounded, revocable demo mandates | paper-mode graph + operator paper grant + demo connection + active mandate |
 | **P4 (done)** | durable fills/positions/order-state reconciliation | broker history is the only source; a failed sync is an error, never a fake fill |
 | **P4.5 (done)** | close (ticket, symbol or all), partial close, SL/TP modify, read-back verification | risk-reducing, no mandate/approval/arm; demo or live with a matching account; a live close-all is scoped to the connection magic |
 | **P4.6 (done)** | per-trade risk, per-symbol notional, rolling 24 h loss brake, spread cap | config on the connection; brake blocks entries, never exits |
 | **P4.7 (done)** | chat one-click live approval (`TradeApprovalBanner`) + Settings mode switch | preview -> approval -> typed LIVE phrase -> submit; no unattended live |
-| **P5 (available, operator-gated)** | unattended live mandates | L2 + proof (out-of-sample + demo fills) + ramp stage + armed live connection + pinned live mandate <= 24 h + supervisor day/week stops; the graph compiler still refuses live *nodes* (they have no live adapter) |
+| **P5 (available, operator-gated)** | unattended live mandates | L2 + proof (out-of-sample + demo fills) + ramp stage + armed live connection + pinned live mandate <= 24 h + supervisor day/week stops |
+| **P6 (done)** | live Graph Studio orders under an `allowLiveTrading` grant + workflow-pinned live mandate | compiler grant + armed connection + pinned mandate <= 24 h |
+| **P9 (done)** | execution on every declared kind (19 brokers) through the same `TradingAdapter` contract | per-venue named capabilities; see *Execution across REST venues* |
 
 **Autonomous live trading is enabled, and it is earned.** An operator who wants a bot
 to trade live without a card must satisfy ALL of these, in order - there is no setting
@@ -968,18 +1055,28 @@ how the evidence in step 2 is earned.
   from other providers.
 - Reads are synchronous IPC calls; every call opens a short session. A future
   streaming/reconciliation loop will own a long-lived session.
-- Live submission requires an **armed** connection, a real account, a non-zero
-  magic and a positive `maxMargin`; a demo account is refused on a live connection
-  and a real account is refused on a demo connection. The check reads
-  `account_info()` itself.
-- The kill switch cancels **working orders only** (by magic). It does not close
-  positions. Closing a position is a separate action and is not implemented yet.
+- Live submission requires an **armed** connection, an account the broker reports
+  as `real`, a non-zero magic and a positive `maxMargin`; a demo account is refused
+  on a live connection and a real account is refused on a demo connection. The
+  arm reads the broker's own account mode; on MT5 it also requires Algo Trading.
+- The kill switch cancels **working orders only** (by the connection's magic, or
+  the `eclipse-<magic>-…` client id on REST venues). It does not close positions;
+  `positions/close` (or the Open Positions widget) does that, arm-free because it
+  only reduces exposure.
 - Unattended mandates are not demo-only: a **bot** may hold a live mandate once L2,
-  proof and the ramp stage allow it. The Graph Studio **node** remains paper-only (it has
-  no live adapter) and a live graph is still refused by the compiler.
-- Reconciliation copies what the broker reports. It does not mark positions to
-  market itself; `currentPrice`/`profit` are the broker's values at sync time.
-- The background reconciler is off unless `TRADING_RECONCILE_SECONDS` is set.
+  proof and the ramp stage allow it. A Graph Studio **node** may place a live
+  order only under an `allowLiveTrading` grant plus a workflow-pinned live
+  mandate; without both the compiler refuses it.
+- Execution is per venue, not uniform: a spot exchange cannot hold an attached
+  stop on the entry (`STOP_UNSUPPORTED`), and a venue with no client-order field
+  cannot offer a scoped cancel-all (`OWNERSHIP_UNAVAILABLE`). Both are named
+  refusals; neither is silently approximated.
+- Graph Studio's ticket inputs are `ticket` ports: they accept an MT5 integer
+  or a REST venue's opaque id (a UUID, an exchange id, `EUR_USD:LONG`), with a
+  literal editor and compatibility with `number` and `string` producers. The
+  canvas and the broker panel take the same id.
+- REST venues are polled per read; there is no websocket stream. The background
+  reconciler is off unless `TRADING_RECONCILE_SECONDS` is set.
 - A demo fill is still a real broker round-trip (latency, requotes, spread), but
   it is not evidence that a live strategy is profitable.
 
@@ -997,24 +1094,24 @@ a kind without execution is read-only.
 
 | Kind | Label | Auth | Modes | Asset classes | Capabilities | Execution | Available |
 |---|---|---|---|---|---|---|---|
-| `alpaca` | Alpaca | `credentials` | `demo`, `live` | `crypto`, `etf`, `stocks` | `account`, `orders`, `positions`, `quote` | no (read-only) | yes |
-| `binance` | Binance (spot) | `credentials` | `live` | `crypto` | `account`, `orders`, `positions`, `quote` | no (read-only) | yes |
-| `bitfinex` | Bitfinex v2 | `credentials` | `live` | `crypto`, `derivatives` | `account`, `orders`, `positions`, `quote` | no (read-only) | yes |
-| `bitget` | Bitget v2 | `credentials` | `live` | `crypto`, `derivatives` | `account`, `orders`, `positions`, `quote` | no (read-only) | yes |
-| `bitstamp` | Bitstamp v2 | `credentials` | `live` | `crypto` | `account`, `orders`, `positions`, `quote` | no (read-only) | yes |
-| `bybit` | Bybit (unified) | `credentials` | `live` | `crypto`, `derivatives` | `account`, `orders`, `positions`, `quote` | no (read-only) | yes |
-| `coinbase` | Coinbase Exchange | `credentials` | `live` | `crypto` | `account`, `orders`, `positions`, `quote` | no (read-only) | yes |
-| `coincheck` | Coincheck | `credentials` | `live` | `crypto` | `account`, `orders`, `positions`, `quote` | no (read-only) | yes |
-| `deribit` | Deribit (derivatives) | `credentials` | `live` | `crypto`, `derivatives`, `options` | `account`, `orders`, `positions`, `quote` | no (read-only) | yes |
-| `gateio` | Gate.io v4 | `credentials` | `live` | `crypto`, `derivatives` | `account`, `orders`, `positions`, `quote` | no (read-only) | yes |
-| `ibkr` | Interactive Brokers | `credentials` | `demo`, `live` | `etf`, `futures`, `fx`, `options`, `stocks` | `account`, `orders`, `positions`, `quote` | no (read-only) | yes |
-| `kraken` | Kraken | `credentials` | `live` | `crypto` | `account`, `orders`, `positions`, `quote` | no (read-only) | yes |
-| `mt4_bridge` | MetaTrader 4 (bridge) | `bridge` | `demo`, `live` | `cfd`, `futures`, `fx`, `metals`, `stocks` | `account`, `orders`, `positions`, `quote` | no (read-only) | yes |
+| `alpaca` | Alpaca | `credentials` | `demo`, `live` | `crypto`, `etf`, `stocks` | `account`, `orders`, `positions`, `quote` | yes | yes |
+| `binance` | Binance (spot) | `credentials` | `live` | `crypto` | `account`, `orders`, `positions`, `quote` | yes | yes |
+| `bitfinex` | Bitfinex v2 | `credentials` | `live` | `crypto`, `derivatives` | `account`, `orders`, `positions`, `quote` | yes | yes |
+| `bitget` | Bitget v2 | `credentials` | `live` | `crypto`, `derivatives` | `account`, `orders`, `positions`, `quote` | yes | yes |
+| `bitstamp` | Bitstamp v2 | `credentials` | `live` | `crypto` | `account`, `orders`, `positions`, `quote` | yes | yes |
+| `bybit` | Bybit (unified) | `credentials` | `live` | `crypto`, `derivatives` | `account`, `orders`, `positions`, `quote` | yes | yes |
+| `coinbase` | Coinbase Exchange | `credentials` | `live` | `crypto` | `account`, `orders`, `positions`, `quote` | yes | yes |
+| `coincheck` | Coincheck | `credentials` | `live` | `crypto` | `account`, `orders`, `positions`, `quote` | yes | yes |
+| `deribit` | Deribit (derivatives) | `credentials` | `live` | `crypto`, `derivatives`, `options` | `account`, `orders`, `positions`, `quote` | yes | yes |
+| `gateio` | Gate.io v4 | `credentials` | `live` | `crypto`, `derivatives` | `account`, `orders`, `positions`, `quote` | yes | yes |
+| `ibkr` | Interactive Brokers | `credentials` | `demo`, `live` | `etf`, `futures`, `fx`, `options`, `stocks` | `account`, `orders`, `positions`, `quote` | yes | yes |
+| `kraken` | Kraken | `credentials` | `live` | `crypto` | `account`, `orders`, `positions`, `quote` | yes | yes |
+| `mt4_bridge` | MetaTrader 4 (bridge) | `bridge` | `demo`, `live` | `cfd`, `futures`, `fx`, `metals`, `stocks` | `account`, `orders`, `positions`, `quote` | yes | yes |
 | `mt5` | MetaTrader 5 | `attach` | `demo`, `live` | `cfd`, `crypto`, `futures`, `fx`, `metals`, `stocks` | `account`, `orders`, `positions`, `quote` | yes | yes |
-| `oanda` | OANDA v20 (FX/CFD) | `credentials` | `live` | `cfd`, `fx`, `metals` | `account`, `orders`, `positions`, `quote` | no (read-only) | yes |
-| `okx` | OKX | `credentials` | `live` | `crypto` | `account`, `orders`, `positions`, `quote` | no (read-only) | yes |
-| `tradier` | Tradier | `credentials` | `demo`, `live` | `etf`, `options`, `stocks` | `account`, `orders`, `positions`, `quote` | no (read-only) | yes |
-| `trading212` | Trading212 | `credentials` | `demo`, `live` | `etf`, `stocks` | `account`, `orders`, `positions` | no (read-only) | yes |
-| `zerodha` | Zerodha Kite | `credentials` | `live` | `etf`, `futures`, `options`, `stocks` | `account`, `orders`, `positions`, `quote` | no (read-only) | yes |
+| `oanda` | OANDA v20 (FX/CFD) | `credentials` | `demo`, `live` | `cfd`, `fx`, `metals` | `account`, `orders`, `positions`, `quote` | yes | yes |
+| `okx` | OKX | `credentials` | `live` | `crypto` | `account`, `orders`, `positions`, `quote` | yes | yes |
+| `tradier` | Tradier | `credentials` | `demo`, `live` | `etf`, `options`, `stocks` | `account`, `orders`, `positions`, `quote` | yes | yes |
+| `trading212` | Trading212 | `credentials` | `demo`, `live` | `etf`, `stocks` | `account`, `orders`, `positions` | yes | yes |
+| `zerodha` | Zerodha Kite | `credentials` | `live` | `etf`, `futures`, `options`, `stocks` | `account`, `orders`, `positions`, `quote` | yes | yes |
 
 <!-- END GENERATED broker-capability-matrix -->

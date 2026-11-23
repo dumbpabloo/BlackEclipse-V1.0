@@ -154,8 +154,8 @@ def test_a_restricted_jurisdiction_is_named(monkeypatch):
     assert exc.value.code == "BINANCE_RESTRICTED"
 
 
-def test_registry_declares_the_kind_read_only():
+def test_registry_declares_the_kind_executable():
     kind = get_kind("binance")
-    assert kind.execution is False
+    assert kind.execution is True
     assert "quote" in kind.capabilities
     assert any(row["id"] == "binance" for row in list_kinds())

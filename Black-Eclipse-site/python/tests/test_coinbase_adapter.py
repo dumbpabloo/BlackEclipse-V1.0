@@ -116,7 +116,7 @@ def test_account_sums_balances(monkeypatch):
     account = adapter.account()
     assert account["server"] == "coinbase"
     assert account["equity"] == pytest.approx(1000.5)
-    assert account["tradeAllowed"] is False
+    assert account["tradeAllowed"] is True
 
 
 def test_positions_are_balances_not_marked_to_market(monkeypatch):
@@ -179,8 +179,8 @@ def test_an_api_error_message_is_a_named_refusal(monkeypatch):
     assert exc.value.code == "COINBASE_UNAUTHORIZED"
 
 
-def test_registry_declares_the_kind_read_only():
+def test_registry_declares_the_kind_executable():
     kind = get_kind("coinbase")
-    assert kind.execution is False
+    assert kind.execution is True
     assert "quote" in kind.capabilities
     assert any(row["id"] == "coinbase" for row in list_kinds())

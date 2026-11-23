@@ -152,7 +152,7 @@ def test_quote_reads_the_public_ticker(monkeypatch):
     assert quote["last"] == pytest.approx(60000.5)
 
 
-def test_registry_declares_the_kind_read_only():
+def test_registry_declares_the_kind_executable():
     kind = get_kind("coincheck")
-    assert kind.execution is False
+    assert kind.execution is True
     assert any(row["id"] == "coincheck" for row in list_kinds())

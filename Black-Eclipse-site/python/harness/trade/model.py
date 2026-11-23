@@ -16,7 +16,7 @@ import json
 import math
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 KIND_MT5 = "mt5"
 KIND_MT4_BRIDGE = "mt4_bridge"
@@ -59,6 +59,12 @@ ALLOWED_CONFIG_KEYS: frozenset[str] = frozenset({
     "terminalPath", "portable", "login", "server", "magic", "symbolMap",
     "symbols", "bridgeUrl", "bridgeSecretRef", "baseUrl", "dataUrl", "accountId",
     "host", "port", "clientId", "credentialRef", "notes",
+    # Spot venues: the quote asset used to resolve an asset holding to the pair
+    # that closes it (e.g. USDT -> BTC/USDT). Never guessed when absent.
+    "quoteAsset",
+    # Venue quoting/normalisation selectors read by the REST adapters.
+    "authStyle", "currency", "category", "productType", "settle", "instType",
+    "tdMode", "marginMode", "market",
     # Terminal launch policy: attach-only unless autoLaunchTerminal is true; the
     # post-order focus can be switched off with openTerminalOnTrade: false.
     "autoLaunchTerminal", "openTerminalOnTrade",
@@ -177,6 +183,37 @@ ORDER_SIDES = ("buy", "sell")
 ORDER_TYPES = ("market", "limit", "stop")
 ORDER_TIFS = ("gtc", "day")
 MAX_COMMENT = 31  # MetaTrader's comment field
+
+#: A broker's order/position identifier. MetaTrader uses integers; every REST
+#: venue uses an opaque id (a UUID, an exchange order id, a position id). The
+#: trade layer therefore carries either form and never coerces an id it cannot
+#: round-trip: a numeric id stays an int, everything else stays a string.
+Ticket = Union[str, int]
+
+
+def ticket_ref(value: Any) -> Ticket:
+    """Normalise an order/position id without losing a non-numeric id.
+
+    MetaTrader's tickets are integers and existing callers pass `"4242"`, so a
+    plain decimal string becomes an int. A leading zero is preserved (an
+    exchange id like `"00123"` is not the number 123), and any non-decimal id
+    (UUID, `ord_...`, an exchange's mixed id) stays exactly as the broker sent
+    it.
+    """
+    if isinstance(value, bool):
+        raise TradeRefused("INVALID_TICKET", "a ticket must be an order id")
+    if isinstance(value, int):
+        return value
+    text = str(value if value is not None else "").strip()
+    if not text:
+        raise TradeRefused("INVALID_TICKET", "a ticket is required")
+    if text in (".", ".."):
+        # A ticket is an id, never a path segment that walks the venue's URL.
+        raise TradeRefused("INVALID_TICKET", "a ticket cannot be a path segment")
+    digits = text[1:] if text.startswith("-") else text
+    if 0 < len(digits) <= 18 and digits.isdigit() and not (len(digits) > 1 and digits[0] == "0"):
+        return int(text)
+    return text
 
 
 class TradeRefused(Exception):
@@ -415,7 +452,9 @@ __all__ = [
     "ORDER_TYPES",
     "OrderIntent",
     "SECRET_KEYS",
+    "Ticket",
     "TradeRefused",
     "normalise_mode",
+    "ticket_ref",
     "validate_config",
 ]

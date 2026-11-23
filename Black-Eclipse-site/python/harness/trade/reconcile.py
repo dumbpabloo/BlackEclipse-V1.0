@@ -22,6 +22,7 @@ from contextlib import suppress
 from typing import Any, Optional
 
 from .adapter import AdapterUnavailable, BrokerAdapter, TradingAdapter
+from .model import ticket_ref
 from .registry import make_adapter
 
 log = logging.getLogger("harness.trade.reconcile")
@@ -29,12 +30,22 @@ log = logging.getLogger("harness.trade.reconcile")
 _OPEN_LEDGER_STATES = {"submitting", "unknown", "placed", "partial"}
 _STATE_TO_LEDGER = {
     "filled": "filled",
+    "done": "filled",
+    "closed": "filled",
     "partial": "partial",
+    "partially_filled": "partial",
+    "partially-filled": "partial",
     "cancelled": "cancelled",
+    "canceled": "cancelled",
     "rejected": "rejected",
     "expired": "expired",
     "placed": "placed",
     "started": "placed",
+    "new": "placed",
+    "open": "placed",
+    "working": "placed",
+    "accepted": "placed",
+    "pending_new": "placed",
 }
 
 
@@ -115,13 +126,13 @@ class BrokerReconciler:
         """Update in-flight ledger orders from broker history; never guesses."""
         if not isinstance(adapter, TradingAdapter):
             return 0
-        working_tickets = {int(row.get("ticket") or 0) for row in working}
+        working_tickets = {ticket_ref(row.get("ticket") or 0) for row in working}
         updated = 0
         for order in self.store.list_orders(connection_id, limit=200):
             if order.get("status") not in _OPEN_LEDGER_STATES:
                 continue
-            ticket = int(order.get("ticket") or 0)
-            if ticket <= 0:
+            ticket = ticket_ref(order.get("ticket") or 0)
+            if ticket in ("", "0", 0):
                 continue
             # A still-working order is already in the broker's working set.
             if ticket in working_tickets:
@@ -129,10 +140,17 @@ class BrokerReconciler:
                     self.store.update_order(order["id"], status="placed")
                     updated += 1
                 continue
-            state = adapter.order_status(ticket)
+            try:
+                state = adapter.order_status(ticket)
+            except AdapterUnavailable:
+                # A venue that cannot answer for this id is not evidence that
+                # the order is gone; leave the ledger row untouched.
+                continue
             if not state.get("found"):
                 continue
-            target = _STATE_TO_LEDGER.get(str(state.get("stateName") or ""), None)
+            target = _STATE_TO_LEDGER.get(
+                str(state.get("stateName") or "").strip().lower(), None
+            )
             if target and target != order.get("status"):
                 self.store.update_order(order["id"], status=target)
                 updated += 1

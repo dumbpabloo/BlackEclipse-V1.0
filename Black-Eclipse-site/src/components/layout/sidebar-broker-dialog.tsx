@@ -188,15 +188,16 @@ function SidebarBrokerDialog({
   const [quoteError, setQuoteError] = useState<string | null>(null);
 
   const [kind, setKind] = useState<BrokerKindId>("mt5");
-  const [label, setLabel] = useState("MT5 demo");
+  const [label, setLabel] = useState("");
   const [mode, setMode] = useState<"demo" | "live">("demo");
   const [terminalPath, setTerminalPath] = useState(DEFAULT_TERMINAL);
   const [bridgeUrl, setBridgeUrl] = useState("http://127.0.0.1:8090");
   const [bridgeSecretRef, setBridgeSecretRef] = useState("");
-  const [baseUrl, setBaseUrl] = useState("https://paper-api.alpaca.markets");
-  const [dataUrl, setDataUrl] = useState("https://data.alpaca.markets");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [dataUrl, setDataUrl] = useState("");
   const [credentialRef, setCredentialRef] = useState("");
   const [brokerAccountId, setBrokerAccountId] = useState("");
+  const [quoteAsset, setQuoteAsset] = useState("");
   const [magic, setMagic] = useState("0");
   const [maxMargin, setMaxMargin] = useState("0");
   const [editOpen, setEditOpen] = useState(false);
@@ -217,6 +218,17 @@ function SidebarBrokerDialog({
       setKinds(nextKinds);
       setConnections(nextConnections);
       setShowForm((prev) => (nextConnections.length === 0 ? true : prev));
+      // A default kind this host cannot load would make the first "add" fail;
+      // fall back to any available adapter while keeping an explicit pick.
+      setKind((prev) => {
+        const current = nextKinds.find((entry) => entry.id === prev);
+        if (current?.available) return prev;
+        return (
+          nextKinds.find((entry) => entry.available)?.id ??
+          nextKinds[0]?.id ??
+          prev
+        );
+      });
       setSelectedId((prev) => {
         if (prev && nextConnections.some((c) => c.id === prev)) return prev;
         return (
@@ -312,28 +324,16 @@ function SidebarBrokerDialog({
     setQuote(null);
     setQuoteError(null);
     setLabel(connection.label);
-    const nextKind: BrokerKindId =
-      connection.kind === "mt4_bridge" ||
-      connection.kind === "alpaca" ||
-      connection.kind === "ibkr"
-        ? connection.kind
-        : "mt5";
-    setKind(nextKind);
+    setKind(connection.kind);
     setMode(connection.mode === "live" ? "live" : "demo");
     setTerminalPath(String(connection.config?.terminalPath ?? DEFAULT_TERMINAL));
     setBridgeUrl(String(connection.config?.bridgeUrl ?? "http://127.0.0.1:8090"));
     setBridgeSecretRef(String(connection.config?.bridgeSecretRef ?? ""));
-    setBaseUrl(
-      String(
-        connection.config?.baseUrl ??
-          (nextKind === "ibkr"
-            ? "https://localhost:5000/v1/api"
-            : "https://paper-api.alpaca.markets"),
-      ),
-    );
-    setDataUrl(String(connection.config?.dataUrl ?? "https://data.alpaca.markets"));
+    setBaseUrl(String(connection.config?.baseUrl ?? ""));
+    setDataUrl(String(connection.config?.dataUrl ?? ""));
     setCredentialRef(String(connection.config?.credentialRef ?? ""));
     setBrokerAccountId(String(connection.config?.accountId ?? ""));
+    setQuoteAsset(String(connection.config?.quoteAsset ?? ""));
     setMagic(String(connection.config?.magic ?? "0"));
     setMaxMargin(String(connection.config?.maxMargin ?? "0"));
     setEditOpen(false);
@@ -368,42 +368,35 @@ function SidebarBrokerDialog({
     if (forKind === "mt4_bridge") {
       if (bridgeUrl.trim()) config.bridgeUrl = bridgeUrl.trim();
       if (bridgeSecretRef.trim()) config.bridgeSecretRef = bridgeSecretRef.trim();
-    } else if (forKind === "alpaca" || forKind === "ibkr") {
-      config.baseUrl =
-        baseUrl.trim() ||
-        (forKind === "ibkr"
-          ? "https://localhost:5000/v1/api"
-          : "https://paper-api.alpaca.markets");
+    } else if (forKind === "mt5") {
+      if (terminalPath.trim()) config.terminalPath = terminalPath.trim();
+    } else {
+      if (baseUrl.trim()) config.baseUrl = baseUrl.trim();
       if (forKind === "alpaca" && dataUrl.trim()) config.dataUrl = dataUrl.trim();
       if (brokerAccountId.trim()) config.accountId = brokerAccountId.trim();
       if (credentialRef.trim()) config.credentialRef = credentialRef.trim();
-    } else {
-      Object.assign(config, selected?.config ?? {}, { terminalPath: terminalPath.trim() });
-      // Never carry another adapter's settings into an MT5 connection.
-      for (const key of ["bridgeUrl", "bridgeSecretRef", "credentialRef", "dataUrl", "accountId"]) {
-        delete config[key];
-      }
-      const marginNumber = Number(maxMargin);
-      if (Number.isFinite(marginNumber) && marginNumber > 0) config.maxMargin = marginNumber;
-      else delete config.maxMargin;
+      if (quoteAsset.trim()) config.quoteAsset = quoteAsset.trim().toUpperCase();
     }
+    const marginNumber = Number(maxMargin);
+    if (Number.isFinite(marginNumber) && marginNumber > 0) config.maxMargin = marginNumber;
+    else delete config.maxMargin;
     if (forKind === "mt5" || forKind === "mt4_bridge") {
       const magicNumber = Number(magic);
       if (Number.isFinite(magicNumber) && magicNumber > 0) config.magic = magicNumber;
       else delete config.magic;
+    }
+    // Editing an existing connection keeps its other caps (risk, allowlists,
+    // symbols); a NEW connection never inherits another kind's settings.
+    if (selected && selected.kind === forKind) {
+      return { ...(selected.config ?? {}), ...config };
     }
     return config;
   };
 
   const add = () => {
     const fallbackLabel =
-      kind === "mt4_bridge"
-        ? "MT4 bridge"
-        : kind === "alpaca"
-          ? "Alpaca"
-          : kind === "ibkr"
-            ? "Interactive Brokers"
-            : "MT5";
+      kinds.find((entry) => entry.id === kind)?.label ??
+      kind;
     void run(
       "create",
       async () => {
@@ -423,20 +416,9 @@ function SidebarBrokerDialog({
 
   const saveEdit = () => {
     if (!selected) return;
-    const forKind: BrokerKindId =
-      selected.kind === "mt4_bridge" ||
-      selected.kind === "alpaca" ||
-      selected.kind === "ibkr"
-        ? selected.kind
-        : "mt5";
+    const forKind: BrokerKindId = selected.kind;
     const fallbackLabel =
-      forKind === "mt4_bridge"
-        ? "MT4 bridge"
-        : forKind === "alpaca"
-          ? "Alpaca"
-          : forKind === "ibkr"
-            ? "Interactive Brokers"
-            : "MT5";
+      kinds.find((entry) => entry.id === forKind)?.label ?? forKind;
     void run(
       "save",
       () =>
@@ -493,7 +475,7 @@ function SidebarBrokerDialog({
     );
   };
 
-  const closeOne = async (ticket: number) => {
+  const closeOne = async (ticket: number | string) => {
     if (!selected) return;
     if (!(await confirmDialog({ title: `Close position #${ticket} at market?`, description: "This cannot be undone.", tone: "danger" }))) return;
     void run(`close:${ticket}`, () => closeBrokerPosition(selected.id, ticket), `Position #${ticket} closed.`);
@@ -507,7 +489,7 @@ function SidebarBrokerDialog({
     void run("close-all", () => closeAllBrokerPositions(selected.id), "Close-all sent to the broker.");
   };
 
-  const cancel = async (ticket: number) => {
+  const cancel = async (ticket: number | string) => {
     if (!selected) return;
     if (!(await confirmDialog({ title: `Cancel working order #${ticket}?`, tone: "danger" }))) return;
     void run(`cancel:${ticket}`, () => cancelBrokerOrder(selected.id, ticket), `Order #${ticket} cancelled.`);
@@ -694,13 +676,16 @@ function SidebarBrokerDialog({
                 <div className="rounded-xl border border-primary/15 bg-primary/[0.04] px-3 py-2.5">
                   <p className="text-[11px] font-semibold text-foreground">No broker connected yet</p>
                   <p className="mt-0.5 text-[10.5px] text-muted-foreground">
-                    Add a MetaTrader 5 terminal, a read-only MT4 bridge, or an Alpaca / IBKR
-                    account. Eclipse tests the connection immediately and never stores a password.
+                    Connect any registered broker: MetaTrader 5, the MT4 HTTP bridge, or a REST
+                    venue (Alpaca, IBKR, OANDA, Tradier, Trading212, Zerodha, Binance, Kraken,
+                    Coinbase, Bitstamp, OKX, Bybit, Bitget, Gate.io, Deribit, Bitfinex, Coincheck).
+                    Eclipse tests the connection immediately and never stores a password.
                   </p>
                 </div>
                 <ConnectionForm
                   kind={kind}
                   setKind={setKind}
+                  kinds={kinds}
                   allowKindChange
                   label={label}
                   setLabel={setLabel}
@@ -720,6 +705,8 @@ function SidebarBrokerDialog({
                   setCredentialRef={setCredentialRef}
                   brokerAccountId={brokerAccountId}
                   setBrokerAccountId={setBrokerAccountId}
+                  quoteAsset={quoteAsset}
+                  setQuoteAsset={setQuoteAsset}
                   magic={magic}
                   setMagic={setMagic}
                   maxMargin={maxMargin}
@@ -819,6 +806,7 @@ function SidebarBrokerDialog({
                           <ConnectionForm
                             kind={kind}
                             setKind={setKind}
+                  kinds={kinds}
                             allowKindChange={false}
                             label={label}
                             setLabel={setLabel}
@@ -838,6 +826,8 @@ function SidebarBrokerDialog({
                             setCredentialRef={setCredentialRef}
                             brokerAccountId={brokerAccountId}
                             setBrokerAccountId={setBrokerAccountId}
+                            quoteAsset={quoteAsset}
+                            setQuoteAsset={setQuoteAsset}
                             magic={magic}
                             setMagic={setMagic}
                             maxMargin={maxMargin}
@@ -871,7 +861,7 @@ function SidebarBrokerDialog({
                         <p className="text-[10px] text-rose-200/90">
                           Type{" "}
                           <span className="font-mono">
-                            ARM LIVE {account?.login ?? "<login>"}
+                            ARM LIVE {account?.armRef ?? account?.login ?? "<login>"}
                           </span>{" "}
                           to arm for 30 minutes. The kill switch cancels every working order Eclipse
                           owns.
@@ -880,7 +870,7 @@ function SidebarBrokerDialog({
                           <input
                             value={armPhrase}
                             onChange={(event) => setArmPhrase(event.target.value)}
-                            placeholder={`ARM LIVE ${account?.login ?? ""}`}
+                            placeholder={`ARM LIVE ${account?.armRef ?? account?.login ?? ""}`}
                             className={inputClass}
                           />
                           <Button
@@ -950,6 +940,7 @@ function SidebarBrokerDialog({
                         <ConnectionForm
                           kind={kind}
                           setKind={setKind}
+                  kinds={kinds}
                           allowKindChange
                           label={label}
                           setLabel={setLabel}
@@ -969,6 +960,8 @@ function SidebarBrokerDialog({
                           setCredentialRef={setCredentialRef}
                           brokerAccountId={brokerAccountId}
                           setBrokerAccountId={setBrokerAccountId}
+                          quoteAsset={quoteAsset}
+                          setQuoteAsset={setQuoteAsset}
                           magic={magic}
                           setMagic={setMagic}
                           maxMargin={maxMargin}

@@ -35,6 +35,20 @@ class AXProvider:
     def tree(self, window_id: Optional[str] = None) -> Optional[AXNode]:
         return None
 
+    def activate(self, *, window_id: Optional[str] = None, name: str = "",
+                 role: str = "", bounds: Any = None, value: str = "") -> bool:
+        """Activate an element through its accessibility pattern.
+
+        The default is an honest False: the caller then falls back to a real
+        click. A provider that supports UIA patterns overrides this.
+        """
+        return False
+
+    def focus(self, *, window_id: Optional[str] = None, name: str = "",
+              role: str = "", bounds: Any = None) -> bool:
+        """Give an element keyboard focus without a click. Honest False default."""
+        return False
+
     def describe(self) -> dict[str, Any]:
         return {"provider": self.id, "available": self.available}
 

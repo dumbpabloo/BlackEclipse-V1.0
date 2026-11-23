@@ -1,4 +1,4 @@
-"""Resolve a credential reference for a read-only broker adapter.
+"""Resolve a credential reference for a broker adapter.
 
 A connection config never stores a secret VALUE. It stores a NAME:
   * an environment-variable name (`ALPACA_KEYS`), or

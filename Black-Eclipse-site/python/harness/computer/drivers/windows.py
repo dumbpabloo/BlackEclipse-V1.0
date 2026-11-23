@@ -54,6 +54,37 @@ else:  # pragma: no cover - imported for typing/tests on non-Windows
                     ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
 
 
+if _IS_WINDOWS:
+    # 64-bit handles must not be truncated to int: declare the clipboard memory
+    # APIs' pointer types explicitly (the default int restype silently corrupts
+    # every handle on x64).
+    kernel32.GlobalAlloc.restype = ctypes.c_void_p
+    kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.GetClipboardData.restype = ctypes.c_void_p
+    user32.GetClipboardData.argtypes = [wintypes.UINT]
+    user32.SetClipboardData.restype = ctypes.c_void_p
+    user32.SetClipboardData.argtypes = [wintypes.UINT, ctypes.c_void_p]
+    # Per-window capture: HWND/HDC are pointer-sized on x64, so declare them.
+    user32.PrintWindow.argtypes = [wintypes.HWND, wintypes.HDC, wintypes.UINT]
+    user32.PrintWindow.restype = wintypes.BOOL
+    user32.GetWindowDC.argtypes = [wintypes.HWND]
+    user32.GetWindowDC.restype = wintypes.HDC
+    user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+    gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+    gdi32.CreateCompatibleDC.restype = wintypes.HDC
+    gdi32.CreateCompatibleBitmap.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
+    gdi32.CreateCompatibleBitmap.restype = wintypes.HBITMAP
+    gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+    gdi32.SelectObject.restype = wintypes.HGDIOBJ
+    gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+    gdi32.DeleteDC.argtypes = [wintypes.HDC]
+
+
 class RECT(ctypes.Structure):
     _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG),
                 ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
@@ -274,8 +305,8 @@ class WindowsDriver(ComputerDriver):
                 pid = wintypes.DWORD()
                 user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
                 windows.append(WindowInfo(
-                    id=str(int(hwnd)), title=buf.value, pid=pid.value,
-                    bounds=_rect_to_bounds(rect),
+                    id=str(int(hwnd)), title=buf.value, app=self._process_name(pid.value)[0],
+                    pid=pid.value, bounds=_rect_to_bounds(rect),
                     minimized=bool(user32.IsIconic(hwnd)),
                     maximized=bool(user32.IsZoomed(hwnd)),
                     visible=True, focused=(hwnd == foreground),
@@ -301,6 +332,29 @@ class WindowsDriver(ComputerDriver):
         for window in self.list_windows():
             if window.id == str(window_id):
                 return window
+        # A window with no caption (a custom/owned window) is not in
+        # `list_windows` (which filters empty titles), but it is still a real
+        # window we can observe and drive. Build its record from the handle so
+        # application identity, title and bounds are never silently empty.
+        hwnd = self._hwnd(str(window_id))
+        if hwnd and _IS_WINDOWS and user32.IsWindow(hwnd):
+            try:
+                length = user32.GetWindowTextLengthW(hwnd)
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                rect = RECT()
+                user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                pid = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                return WindowInfo(
+                    id=str(int(hwnd)), title=buf.value, app=self._process_name(pid.value)[0],
+                    pid=pid.value, bounds=_rect_to_bounds(rect),
+                    minimized=bool(user32.IsIconic(hwnd)),
+                    maximized=bool(user32.IsZoomed(hwnd)), visible=True,
+                    focused=(hwnd == user32.GetForegroundWindow()),
+                )
+            except Exception:  # noqa: BLE001
+                return None
         return None
 
     async def focus_window(self, window_id: str, *, foreground: bool = False) -> InputResult:
@@ -487,7 +541,21 @@ class WindowsDriver(ComputerDriver):
         if bounds.width <= 0 or bounds.height <= 0:
             raise UnsupportedAction("Cannot capture a zero-sized region.")
 
-        img = self._grab(bounds)
+        # A window capture tries a PER-WINDOW grab first: PrintWindow with
+        # PW_RENDERFULLCONTENT renders a covered (and most minimised) DWM window
+        # without lifting it, which is what background operation promises. Only
+        # if that yields nothing do we fall back to grabbing the screen region
+        # (which returns whatever is on top).
+        img = None
+        method = "screen_grab"
+        if window_id and region is None and display_id is None:
+            hwnd = self._hwnd(window_id)
+            if hwnd:
+                img = self._print_window(hwnd, bounds)
+                if img is not None:
+                    method = "print_window"
+        if img is None:
+            img = self._grab(bounds)
         png = None
         try:
             if img is not None:
@@ -501,7 +569,73 @@ class WindowsDriver(ComputerDriver):
         return ScreenFrame(
             data=img, width=bounds.width, height=bounds.height, bounds=bounds, png_bytes=png,
             scale=(self.display_of_point(*bounds.center).scale if self.display_of_point(*bounds.center) else 1.0),
+            method=method,
         )
+
+    def _hwnd(self, window_id: str) -> int:
+        try:
+            return int(window_id)
+        except (TypeError, ValueError):
+            return 0
+
+    def _print_window(self, hwnd: int, bounds: Bounds) -> Any:
+        """Render a window with PrintWindow(PW_RENDERFULLCONTENT), else None.
+
+        This works for DWM-composed content (Chromium/Electron/UWP) and for a
+        window that is behind another. It is the only honest way to observe a
+        background window; a flat/empty bitmap is a failure, not a snapshot.
+        """
+        if not _IS_WINDOWS:
+            return None
+        try:
+            if not user32.IsWindow(hwnd) or not user32.IsWindowVisible(hwnd):
+                return None
+            hdc_window = user32.GetWindowDC(hwnd)
+            if not hdc_window:
+                return None
+            hdc_mem = gdi32.CreateCompatibleDC(hdc_window)
+            hbitmap = gdi32.CreateCompatibleBitmap(hdc_window, bounds.width, bounds.height)
+            gdi32.SelectObject(hdc_mem, hbitmap)
+            PW_RENDERFULLCONTENT = 0x00000002
+            ok = user32.PrintWindow(hwnd, hdc_mem, PW_RENDERFULLCONTENT)
+            image = None
+            if ok:
+                header = BITMAPINFOHEADER()
+                header.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+                header.biWidth = bounds.width
+                header.biHeight = -bounds.height
+                header.biPlanes = 1
+                header.biBitCount = 32
+                buffer = ctypes.create_string_buffer(bounds.width * bounds.height * 4)
+                gdi32.GetDIBits(hdc_mem, hbitmap, 0, bounds.height, buffer, ctypes.byref(header), 0)
+                try:
+                    from PIL import Image  # noqa: PLC0415
+
+                    image = Image.frombuffer(
+                        "RGBA", (bounds.width, bounds.height), buffer, "raw", "BGRA", 0, 1
+                    ).convert("RGB")
+                    if self._is_blank(image):
+                        image = None
+                except Exception:  # noqa: BLE001
+                    image = None
+            gdi32.DeleteObject(hbitmap)
+            gdi32.DeleteDC(hdc_mem)
+            user32.ReleaseDC(hwnd, hdc_window)
+            return image
+        except Exception:  # noqa: BLE001 - fall back to the screen
+            return None
+
+    @staticmethod
+    def _is_blank(image: Any) -> bool:
+        """True when a capture is one flat colour (PrintWindow refused)."""
+        try:
+            small = image.resize((16, 16))
+            pixels = list(small.getdata())
+            first = pixels[0]
+            return all(abs(p[0] - first[0]) + abs(p[1] - first[1]) + abs(p[2] - first[2]) < 6
+                       for p in pixels)
+        except Exception:  # noqa: BLE001
+            return False
 
     def _grab(self, bounds: Bounds) -> Any:
         """Grab a region as a PIL image (ImageGrab), else a GDI bitmap."""
@@ -927,6 +1061,39 @@ class WindowsDriver(ComputerDriver):
         self._fg_key(keys)
         return InputResult(delivered=True, delivery_mode="foreground")
 
+    async def key_down(self, key: str, *, delivery_mode: str = "background", window_id: Optional[str] = None) -> InputResult:
+        """Press and HOLD one key, so a following click carries the modifier."""
+        if not _IS_WINDOWS:
+            raise UnsupportedAction("Holding a key requires Windows.")
+        vk = virtual_key(key)
+        if vk is None:
+            raise UnsupportedAction(f"Eclipse doesn't recognise the key {key!r}.")
+        if delivery_mode == "background":
+            hwnd = self._target_hwnd(window_id)
+            if hwnd:
+                target = self._focused_control(hwnd) or hwnd
+                ok = bool(user32.PostMessageW(target, WM_KEYDOWN, vk, 0))
+                return InputResult(delivered=ok, delivery_mode="background", detail=f"held {key} (posted)")
+        self._require_foreground_owner(window_id)
+        self._send_inputs([INPUT(type=INPUT_KEYBOARD, union=_INPUTunion(ki=KEYBDINPUT(vk, 0, 0, 0, None)))])
+        return InputResult(delivered=True, delivery_mode="foreground", detail=f"held {key}")
+
+    async def key_up(self, key: str, *, delivery_mode: str = "background", window_id: Optional[str] = None) -> InputResult:
+        if not _IS_WINDOWS:
+            raise UnsupportedAction("Releasing a key requires Windows.")
+        vk = virtual_key(key)
+        if vk is None:
+            raise UnsupportedAction(f"Eclipse doesn't recognise the key {key!r}.")
+        if delivery_mode == "background":
+            hwnd = self._target_hwnd(window_id)
+            if hwnd:
+                target = self._focused_control(hwnd) or hwnd
+                ok = bool(user32.PostMessageW(target, WM_KEYUP, vk, 0))
+                return InputResult(delivered=ok, delivery_mode="background", detail=f"released {key} (posted)")
+        self._require_foreground_owner(window_id)
+        self._send_inputs([INPUT(type=INPUT_KEYBOARD, union=_INPUTunion(ki=KEYBDINPUT(vk, 0, KEYEVENTF_KEYUP, 0, None)))])
+        return InputResult(delivered=True, delivery_mode="foreground", detail=f"released {key}")
+
     async def press_combo(self, combo: str, *, delivery_mode: str = "background", window_id: Optional[str] = None) -> InputResult:
         normalized = normalize_combo(combo)
         keys = normalized.split("+") if normalized else []
@@ -968,6 +1135,64 @@ class WindowsDriver(ComputerDriver):
         if user32.GetCursorPos(ctypes.byref(pt)):
             return (pt.x, pt.y)
         return None
+
+    # ── clipboard ────────────────────────────────────────────────────────────
+
+    async def get_clipboard(self) -> Optional[str]:
+        if not _IS_WINDOWS:
+            return None
+        CF_UNICODETEXT = 13
+        try:
+            if not user32.OpenClipboard(0):
+                return None
+            try:
+                handle = user32.GetClipboardData(CF_UNICODETEXT)
+                if not handle:
+                    return None
+                ptr = kernel32.GlobalLock(handle)
+                if not ptr:
+                    return None
+                try:
+                    return ctypes.wstring_at(ptr)
+                finally:
+                    kernel32.GlobalUnlock(handle)
+            finally:
+                user32.CloseClipboard()
+        except Exception:  # noqa: BLE001 - an unreadable clipboard is honest
+            return None
+
+    async def set_clipboard(self, text: str) -> bool:
+        if not _IS_WINDOWS:
+            return False
+        CF_UNICODETEXT = 13
+        GMEM_MOVEABLE = 0x0002
+        try:
+            encoded = (str(text) + "\0").encode("utf-16-le")
+            handle = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(encoded))
+            if not handle:
+                return False
+            ptr = kernel32.GlobalLock(handle)
+            if not ptr:
+                kernel32.GlobalFree(handle)
+                return False
+            try:
+                ctypes.memmove(ptr, encoded, len(encoded))
+            finally:
+                kernel32.GlobalUnlock(handle)
+            if not user32.OpenClipboard(0):
+                kernel32.GlobalFree(handle)
+                return False
+            try:
+                user32.EmptyClipboard()
+                if not user32.SetClipboardData(CF_UNICODETEXT, handle):
+                    kernel32.GlobalFree(handle)
+                    return False
+                # Ownership transferred to the clipboard on success.
+                return True
+            finally:
+                user32.CloseClipboard()
+        except Exception:  # noqa: BLE001
+            return False
 
 
 __all__ = ["WindowsDriver"]

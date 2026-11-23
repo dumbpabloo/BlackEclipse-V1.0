@@ -143,7 +143,7 @@ export function PortValueEditor({
                 (event.target as HTMLInputElement).blur();
               }
             }}
-            placeholder={port.type === 'string' ? 'text value' : port.type}
+            placeholder={port.type === 'string' ? 'text value' : port.type === 'ticket' ? '314159 or BTC-USD' : port.type}
             className={INPUT}
           />
           {value !== undefined && (

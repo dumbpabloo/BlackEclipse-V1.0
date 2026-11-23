@@ -1,7 +1,7 @@
 {
-  "digest": "a9ec22da70d3e10e",
+  "digest": "2f95165df746631c",
   "manifestVersion": "1",
-  "toolCount": 1113,
+  "toolCount": 1115,
   "tools": [
     {
       "deprecated": false,
@@ -8394,6 +8394,29 @@
     },
     {
       "deprecated": false,
+      "description": "Forget a learned per-app interface (a stale or wrong adapter). The shipped adapters are unaffected.",
+      "effect": null,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "application": {
+            "description": "The application whose learned interface should be forgotten.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "application"
+        ],
+        "type": "object"
+      },
+      "name": "computer_forget_interface",
+      "permission": "read",
+      "replacement": null,
+      "risk": "low",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
       "description": "Pause a session.",
       "effect": null,
       "inputSchema": {
@@ -8418,7 +8441,7 @@
     },
     {
       "deprecated": false,
-      "description": "Observe the screen (or a window) as numbered elements without acting.",
+      "description": "Observe the screen (or a window) as a screenshot with numbered marks and an element list, without acting.",
       "effect": null,
       "inputSchema": {
         "additionalProperties": false,
@@ -8451,7 +8474,7 @@
     },
     {
       "deprecated": false,
-      "description": "Recall previously learned desktop knowledge.",
+      "description": "Recall previously learned desktop knowledge, including learned per-app interfaces (controls, shortcuts, known tasks).",
       "effect": null,
       "inputSchema": {
         "additionalProperties": false,
@@ -8613,6 +8636,37 @@
     },
     {
       "deprecated": false,
+      "description": "Run a desktop task as best-of-N: N independent desktop-agent rollouts, each captioned by what it did, then one winner chosen from the captions (verified success first). Isolated desktops run concurrently; a shared desktop runs them serially. A task naming a financial mutation cannot use N>1. Use for a brittle multi-step desktop task where one wrong click compounds.",
+      "effect": null,
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "attempts": {
+            "description": "How many independent rollouts to run (1-4, default 3). Each rollout may be asked to approve its own actions.",
+            "type": "integer"
+          },
+          "session_id": {
+            "description": "Which desktop session to use. Omit to use the most recently active one.",
+            "type": "string"
+          },
+          "task": {
+            "description": "The desktop task to accomplish (plain English).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "type": "object"
+      },
+      "name": "computer_run",
+      "permission": "read",
+      "replacement": null,
+      "risk": "medium",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
       "description": "Close a desktop session.",
       "effect": null,
       "inputSchema": {
@@ -8722,7 +8776,7 @@
     },
     {
       "deprecated": false,
-      "description": "Operate the real desktop: observe it and act on native applications (Excel, VS Code, terminals, PDF apps, trading terminals). Start with action='capture' to get numbered elements (#1, #2, …), then act with element=<number> and the returned snapshot_id. Background delivery is the default and does NOT steal your focus; a foreground escalation is explicit. A financial mutation is routed through the finance firewall.",
+      "description": "Operate the real desktop: observe it and act on native applications (Excel, VS Code, terminals, PDF apps, trading terminals). Start with action='capture' to get a screenshot with numbered marks plus the #N element list; then act with element=<number> and the returned snapshot_id. Background delivery is the default and does NOT steal your focus; a foreground escalation is explicit. State-changing actions attach a fresh screenshot of the result by default. A financial mutation is routed through the finance firewall.",
       "effect": null,
       "inputSchema": {
         "additionalProperties": false,
@@ -8743,17 +8797,40 @@
               "key",
               "hotkey",
               "set_value",
+              "invoke",
+              "focus",
+              "press_and_hold",
               "wait",
+              "wait_for",
+              "scroll_into_view",
+              "open",
+              "close",
+              "clipboard_get",
+              "clipboard_set",
               "list_apps",
               "list_windows",
               "list_displays",
-              "focus_app"
+              "focus_app",
+              "note",
+              "done",
+              "fail"
             ],
             "type": "string"
           },
+          "allow_coordinates": {
+            "description": "Permit a coordinate-only target. A critical action also needs confirm_coordinates.",
+            "type": "boolean"
+          },
           "app": {
-            "description": "Application name for focus_app/list filtering.",
+            "description": "Application name/path for open/close/focus_app/list filtering.",
             "type": "string"
+          },
+          "args": {
+            "description": "Arguments for `open`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "button": {
             "enum": [
@@ -8764,12 +8841,16 @@
             "type": "string"
           },
           "capture_after": {
-            "description": "Observe again after the action and return the new state (for state-changing actions).",
+            "description": "Observe again after the action (default true for state-changing actions) and attach the new screenshot.",
             "type": "boolean"
           },
           "combo": {
             "description": "Alias for `key` for the hotkey action.",
             "type": "string"
+          },
+          "confirm_coordinates": {
+            "description": "Second explicit confirmation for a coordinate target on a critical action.",
+            "type": "boolean"
           },
           "coordinates": {
             "description": "Fallback [x, y] or [left, top, right, bottom]. Coordinates are a last resort.",
@@ -8781,6 +8862,10 @@
           "count": {
             "description": "Click count (2 = double click).",
             "type": "integer"
+          },
+          "display_id": {
+            "description": "Capture a whole display instead of a window.",
+            "type": "string"
           },
           "dry_run": {
             "description": "Describe the action without executing it.",
@@ -8798,9 +8883,39 @@
             "description": "An element number from a `capture` snapshot (#1, #2, …). Prefer this over coordinates.",
             "type": "integer"
           },
+          "expect": {
+            "additionalProperties": false,
+            "description": "What should change: {stateChanged, windowChanged, dialogAppeared, axContains:'text'}.",
+            "properties": {
+              "axContains": {
+                "type": "string"
+              },
+              "dialogAppeared": {
+                "type": "boolean"
+              },
+              "stateChanged": {
+                "type": "boolean"
+              },
+              "windowChanged": {
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
           "foreground": {
             "description": "Force foreground delivery (moves the real cursor / raises focus). Use only when background fails.",
             "type": "boolean"
+          },
+          "from_coordinates": {
+            "description": "Drag start [x, y] or [left, top, right, bottom].",
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "from_element": {
+            "description": "Drag source element number from `capture`.",
+            "type": "integer"
           },
           "identity": {
             "description": "Optional element identity from the snapshot, for strict stale detection.",
@@ -8811,7 +8926,7 @@
             "type": "string"
           },
           "mode": {
-            "description": "Observation mode for `capture`. `som` (default) is a screen-of-marks with numbered elements.",
+            "description": "Observation mode for `capture`. `som` (default) is a screen-of-marks with numbered elements drawn on the attached screenshot.",
             "enum": [
               "som",
               "vision",
@@ -8820,12 +8935,36 @@
             ],
             "type": "string"
           },
+          "modifiers": {
+            "description": "Keys held while clicking (multi-select, open-in-new-tab).",
+            "items": {
+              "enum": [
+                "ctrl",
+                "shift",
+                "alt",
+                "meta"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
           "ms": {
-            "description": "Milliseconds for `wait`.",
+            "description": "Milliseconds for `wait`; the hold duration for `press_and_hold`; the timeout for `wait_for`.",
             "type": "integer"
           },
           "name": {
             "description": "Exact accessible name to match.",
+            "type": "string"
+          },
+          "region": {
+            "description": "Capture only [x, y, width, height] in screen coordinates.",
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "relative": {
+            "description": "A fractional or offset point inside the window, e.g. '0.5,0.5' or 'left+10,top+20'.",
             "type": "string"
           },
           "role": {
@@ -8845,8 +8984,19 @@
             "type": "string"
           },
           "text": {
-            "description": "Text to type. Never echoed back.",
+            "description": "Text to type, clipboard text to set, or the note to store. Never echoed back.",
             "type": "string"
+          },
+          "to_coordinates": {
+            "description": "Drag end [x, y] or [left, top, right, bottom].",
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "to_element": {
+            "description": "Drag target element number from `capture`.",
+            "type": "integer"
           },
           "value": {
             "description": "Value for `set_value`.",

@@ -123,7 +123,7 @@ def test_account_sums_spot_balances(monkeypatch):
     assert account["server"] == "bitget"
     assert account["balance"] == pytest.approx(1000.5)
     assert account["marginFree"] == pytest.approx(900.5)
-    assert account["tradeAllowed"] is False
+    assert account["tradeAllowed"] is True
 
 
 def test_positions_map_hold_side_and_skip_closed(monkeypatch):
@@ -166,8 +166,8 @@ def test_quote_reads_the_public_ticker(monkeypatch):
     assert quote["serverTimeMs"] == 1700000000000
 
 
-def test_registry_declares_the_kind_read_only():
+def test_registry_declares_the_kind_executable():
     kind = get_kind("bitget")
-    assert kind.execution is False
+    assert kind.execution is True
     assert "derivatives" in kind.asset_classes
     assert any(row["id"] == "bitget" for row in list_kinds())

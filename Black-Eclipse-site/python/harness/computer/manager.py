@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 from .config import ComputerConfig, computer_config, MAX_SESSIONS_CEILING
@@ -44,7 +45,15 @@ class ComputerManager:
         self.store = ComputerStore(agent_store) if agent_store is not None else None
         from .memory import ComputerMemory  # noqa: PLC0415
 
+        from .applications.learned import LearnedAdapterBook  # noqa: PLC0415
+
         self.memory = ComputerMemory(memory_service)
+        # Learned per-app interfaces (from verified workflows), versioned in a
+        # gitignored JSON sidecar under the artifacts root.
+        self.learned_adapters = LearnedAdapterBook(
+            path=(Path(self.config.artifacts_root) / "learned_adapters.json")
+            if getattr(self.config, "artifacts_root", None) else None
+        )
         self.driver = build_driver(self.config.driver_backend)
         self.ax = None
         # `ocr_enabled=false` disables OCR entirely; otherwise the backend choice
@@ -65,6 +74,13 @@ class ComputerManager:
         self.security = SecurityLayer(redaction_enabled=self.config.sensitive_data_redaction)
         self.extractor = FinancialExtractor()
         self._sessions: dict[str, ComputerSession] = {}
+        # run_id -> session_id, so a branch run's tools resolve THEIR desktop even
+        # when several isolated branches are live at once.
+        self._run_sessions: dict[str, str] = {}
+        # An optional async branch runner installed by the service: drives ONE
+        # desktop-agent rollout on a given session for best-of-N. None = the
+        # capability is honestly unavailable.
+        self.branch_runner: Any = None
         self._lock = asyncio.Lock()
         self._sweep_task: Optional[asyncio.Task[Any]] = None
 
@@ -153,10 +169,24 @@ class ComputerManager:
                 "actionTimeoutSeconds": self.config.action_timeout_seconds,
             },
             "adapters": build_adapter_registry().describe(),
+            "learnedAdapters": self.learned_adapters.describe(),
             "desktop": provisioner.describe(),
             "broker": self.broker.to_dict(),
+            "grounding": self._grounding_description(),
             "artifactsRoot": str(self.config.artifacts_root),
         }
+
+    def _grounding_description(self) -> dict[str, Any]:
+        try:
+            from .grounding.backends import build_grounding_backend  # noqa: PLC0415
+
+            backend = build_grounding_backend(self.config)
+        except Exception:  # noqa: BLE001
+            backend = None
+        if backend is None:
+            return {"configured": False, "available": False,
+                    "reason": "no grounding endpoint is configured"}
+        return {"configured": True, **backend.describe()}
 
     def health(self) -> dict[str, Any]:
         return {
@@ -262,9 +292,26 @@ class ComputerManager:
             session._broker_release = lambda: self.broker.release(session_id)  # noqa: SLF001
         session._instance = instance  # noqa: SLF001
         session._isolated = bool(instance is not None and instance.isolated)  # noqa: SLF001
+        # The session's memory handle, so a verified `done` can capture a workflow
+        # without reaching for a process global.
+        session.memory = self.memory
+        session.learned_adapters = self.learned_adapters
+        self.learned_adapters.register_into(session.adapters)
         self._sessions[session_id] = session
+        if run_id:
+            self._run_sessions[str(run_id)] = session_id
         self._emit("computer.session.created", session.snapshot_summary())
         return session
+
+    def session_for_run(self, run_id: Optional[str]) -> Optional[ComputerSession]:
+        """The live session bound to `run_id`, if any (best-of-N branch binding)."""
+        if not run_id:
+            return None
+        session_id = self._run_sessions.get(str(run_id))
+        if not session_id:
+            return None
+        session = self._sessions.get(session_id)
+        return session if session is not None and not session.state.terminal else None
 
     def _router(self) -> Any:
         if self.vision is None:
@@ -296,6 +343,9 @@ class ComputerManager:
         session = self._sessions.pop(session_id, None)
         if session is None:
             return {"destroyed": False, "reason": "no such session"}
+        for run_id, bound in list(self._run_sessions.items()):
+            if bound == session_id:
+                self._run_sessions.pop(run_id, None)
         await session.close()
         # Tear down an isolated desktop (a shared one owns nothing).
         instance = getattr(session, "_instance", None)

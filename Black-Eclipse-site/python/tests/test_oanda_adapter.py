@@ -82,7 +82,7 @@ def test_the_account_id_is_discovered_when_not_configured(monkeypatch):
     assert account["equity"] == pytest.approx(1000.0)
     assert account["marginFree"] == pytest.approx(800.0)
     assert account["currency"] == "USD"
-    assert account["tradeAllowed"] is False
+    assert account["tradeAllowed"] is True
 
 
 def test_an_empty_account_list_is_a_refusal(monkeypatch):
@@ -162,8 +162,8 @@ def test_an_api_error_message_is_a_named_refusal(monkeypatch):
     assert "Invalid access token" in exc.value.reason
 
 
-def test_registry_declares_fx_and_read_only():
+def test_registry_declares_fx_and_execution():
     kind = get_kind("oanda")
-    assert kind.execution is False
+    assert kind.execution is True
     assert "fx" in kind.asset_classes
     assert any(row["id"] == "oanda" for row in list_kinds())

@@ -10,6 +10,7 @@ const PORT_COLORS: Record<PortType, string> = {
   object: '#a78bfa',
   array: '#c084fc',
   datetime: '#fbbf24',
+  ticket: '#f59e0b',
   instrument: '#22d3ee',
   ohlcv: '#2dd4bf',
   indicator: '#818cf8',
