@@ -84,8 +84,16 @@ export async function findPython(mod?: string): Promise<PythonInfo> {
   const ttl = mod ? 5 * 60 * 1000 : Infinity;
   if (hit && Date.now() - hit.at < ttl) return hit.value;
 
-  // Vendored embedded Python is the primary choice on Windows.
-  if (VENDOR_INTERPRETER && (mod ? await canRun(VENDOR_INTERPRETER, mod) : true)) {
+  // Vendored embedded Python is the primary choice on Windows — but only when
+  // it actually exists on disk. The path is built at module load, and reporting
+  // a missing interpreter as "found" made every caller spawn a file that is not
+  // there: the chart-engine probe then read that failed spawn as "this Python
+  // has no matplotlib" and refused every chart.
+  if (
+    VENDOR_INTERPRETER &&
+    existsSync(VENDOR_INTERPRETER) &&
+    (mod ? await canRun(VENDOR_INTERPRETER, mod) : true)
+  ) {
     const result: PythonInfo = { cmd: VENDOR_INTERPRETER };
     store.__pyCache.set(key, { value: result, at: Date.now() });
     return result;

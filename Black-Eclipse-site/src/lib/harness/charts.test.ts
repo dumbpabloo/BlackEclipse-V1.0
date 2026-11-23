@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // out, and a failure is an error the UI can show — never a silent empty
 // chart.
 
-import { chartImageSrc, renderChart } from "@/lib/harness/charts";
+import { ChartRenderError, chartImageSrc, isRetryableChartError, renderChart } from "@/lib/harness/charts";
 
 const okFigure = {
   kind: "line",
@@ -105,5 +105,39 @@ describe("renderChart", () => {
         artifact: { id: null, name: "x.png", bytes: 0, sha256: "", downloadUrl: null },
       } as Parameters<typeof chartImageSrc>[0]),
     ).toBeNull();
+  });
+});
+
+describe("retryable chart failures", () => {
+  // A cold-starting runtime is NOT a broken chart. The surface retries these
+  // instead of showing an error, so the user is never told to install a runtime
+  // that is already installed and booting.
+  it("treats a starting/unavailable runtime as retryable", () => {
+    expect(isRetryableChartError(new ChartRenderError("booting", "RUNTIME_STARTING"))).toBe(true);
+    expect(isRetryableChartError(new ChartRenderError("down", "RUNTIME_UNAVAILABLE"))).toBe(true);
+  });
+
+  it("does not retry a spec or drawing failure", () => {
+    expect(isRetryableChartError(new ChartRenderError("bad spec", "CHART_SPEC_INVALID"))).toBe(false);
+    expect(isRetryableChartError(new ChartRenderError("no plotly", "CHART_RENDER_UNAVAILABLE"))).toBe(false);
+    expect(isRetryableChartError(new Error("plain"))).toBe(false);
+    expect(isRetryableChartError(undefined)).toBe(false);
+  });
+
+  it("classifies a dropped connection during a restart as retryable", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    }));
+    const err = await renderChart({ kind: "line", series: [{ name: "s", data: [1] }] }).catch((e) => e);
+    expect(err).toBeInstanceOf(ChartRenderError);
+    expect((err as ChartRenderError).code).toBe("RUNTIME_UNAVAILABLE");
+    expect(isRetryableChartError(err)).toBe(true);
+  });
+
+  it("classifies a codeless 5xx as retryable infrastructure", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 502, json: async () => ({}) })));
+    const err = await renderChart({ kind: "line", series: [{ name: "s", data: [1] }] }).catch((e) => e);
+    expect((err as ChartRenderError).code).toBe("RUNTIME_UNAVAILABLE");
+    expect(isRetryableChartError(err)).toBe(true);
   });
 });

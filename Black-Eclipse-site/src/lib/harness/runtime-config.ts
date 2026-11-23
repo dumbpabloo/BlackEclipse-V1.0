@@ -2,11 +2,19 @@
 // what "installed" means.
 
 /**
- * The importable probe for "is the agent stack installed". Must be a real
- * installed package (not the local `harness` package, which is only importable
- * with PYTHONPATH set). `langgraph` is the runtime marker.
+ * The importable probe for "is the agent stack installed". Must be real
+ * installed packages (not the local `harness` package, which is only importable
+ * with PYTHONPATH set).
+ *
+ * `langgraph` ALONE is not enough. A system Python that ran a partial/older
+ * install can import `langgraph` while every provider package is absent; the
+ * launcher would then pick it over the complete vendored interpreter and every
+ * model call died with `No module named 'langchain_openai'`. The probe is a
+ * comma-separated import list (`import langgraph, langchain_openai` is valid
+ * Python), so the runtime is only considered installed when the graph engine
+ * AND at least one provider integration can both load.
  */
-export const PYTHON_RUNTIME_DEPS = "langgraph";
+export const PYTHON_RUNTIME_DEPS = "langgraph, langchain_openai";
 
 /** A second probe for a package added after the initial runtime (Phase 5 MCP). */
 export const PYTHON_MCP_DEPS = "mcp";
@@ -99,6 +107,27 @@ export function chartEngineReadiness(
   const present = new Set(available);
   const missing = PYTHON_CHART_PACKAGES.filter((name) => !present.has(name));
   return { ready: Boolean(python) && missing.length === 0, python, missing };
+}
+
+/**
+ * Turn the runtime's `GET /charts/health` document into the one readiness
+ * decision. Returns null when the document is not the runtime's own answer
+ * (`status` absent/not OK), so the caller can fall back to probing an
+ * interpreter.
+ *
+ * The runtime reports the plotting modules it can import; `pydantic` is not in
+ * that document because the runtime is built on it — a process that answered
+ * the route has it by definition.
+ */
+export function chartEngineReadinessFromHealth(body: unknown): ChartEngineReadiness | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const doc = body as Record<string, unknown>;
+  if (doc.status !== "OK") return null;
+  const python = typeof doc.python === "string" && doc.python ? doc.python : null;
+  const available = PYTHON_CHART_PACKAGES.filter(
+    (name) => name === "pydantic" || doc[name] === true,
+  );
+  return chartEngineReadiness(python, available);
 }
 
 /**

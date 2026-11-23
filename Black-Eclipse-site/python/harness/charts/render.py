@@ -641,7 +641,7 @@ def _render_scene(spec: ChartSpec, theme: ChartTheme, plt: Any) -> bytes:
     or a dual-axis chart is not a new kind - it is a composition of the
     primitives.
     """
-    from .scene_render import draw_mark  # noqa: PLC0415
+    from .scene_render import draw_mark, panel_categories  # noqa: PLC0415
 
     panels = spec.panels
     count = len(panels)
@@ -665,6 +665,25 @@ def _render_scene(spec: ChartSpec, theme: ChartTheme, plt: Any) -> bytes:
         setattr(ax, "_eclipse_theme", theme)
         for index, mark in enumerate(panel.marks):
             draw_mark(ax, mark, theme, index, panel)
+        # A label axis is drawn as ticks on the shared index, so "Q1/Q2/Q3"
+        # reads as labels instead of bare 0/1/2. Charts that own their axis
+        # (a heatmap's grid, a pie) set their own ticks and are left alone.
+        categories = panel_categories(panel)
+        owns_axis = any(
+            mark.type in ("heatmap", "pie", "donut", "candlestick", "waterfall")
+            for mark in panel.marks
+        )
+        if categories and not owns_axis and getattr(ax, "name", "") != "3d":
+            try:
+                ax.set_xticks(range(len(categories)))
+                crowded = len(categories) > 6
+                ax.set_xticklabels(
+                    categories,
+                    rotation=45 if crowded else 0,
+                    ha="right" if crowded else "center",
+                )
+            except Exception:  # noqa: BLE001 - ticks are cosmetic, never fatal
+                pass
         if panel.title:
             ax.set_title(panel.title, loc="left", fontsize=11, fontweight="bold", color=theme.ink, pad=8)
         if panel.x_label:

@@ -25,10 +25,12 @@ import {
 import path from "path";
 import { findProjectRoot, findPython } from "@/lib/scraper/fetchers/python";
 import { resolveLLMProviderId } from "@/lib/agent/presets";
+import { runtimeCallbackToken } from "./runtime-auth";
 import {
   PYTHON_CHART_PACKAGES,
   PYTHON_RUNTIME_DEPS,
   chartEngineReadiness,
+  chartEngineReadinessFromHealth,
   type ChartEngineReadiness,
 } from "./runtime-config";
 import { isRecentlyHealthy, resolveRequestWaitMs, resolveStartTimeoutMs, shouldReplaceStaleRuntime } from "./runtime-supervision";
@@ -74,19 +76,53 @@ const execFileAsync = promisify(execFile);
 // must become visible without restarting the app. 60 s is the compromise.
 const CHART_PROBE_TTL_MS = 60_000;
 
+/** The runtime's own drawing capability (`GET /charts/health`), or null when
+ * it does not answer. This is the process that will draw the chart, so its
+ * answer is authoritative; a separate interpreter probe is only a fallback. */
+async function runtimeChartHealth(): Promise<ChartEngineReadiness | null> {
+  try {
+    const token = runtimeCallbackToken();
+    const res = await fetch(`${HARNESS_PY_URL}/charts/health`, {
+      headers: token ? { "X-Harness-Operator": token } : {},
+      signal: AbortSignal.timeout(6_000),
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as Record<string, unknown>;
+    return chartEngineReadinessFromHealth(body);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Can the chart engine actually DRAW?
  *
  * `ensurePythonRuntime()` only proves the agent stack can boot. It says nothing
  * about matplotlib/plotly, which are imported lazily at render time — so a
  * machine could (and did) report a healthy runtime while every chart 503'd.
- * This probes the SAME interpreter `findPython()` selects and reports exactly
- * which modules are missing, so the failure names the capability instead of
- * pointing at a runtime that is already installed.
+ *
+ * The runtime IT asked is the only answer that matters: the process that draws
+ * the chart is the one whose imports count. `GET /charts/health` reports
+ * `sys.executable` and the modules importable IN THAT PROCESS, so we ask it
+ * first. Probing a separately-resolved interpreter used to disagree with the
+ * running runtime (a stale or platform-mismatched vendored path, or a system
+ * Python without the user-site packages) and turned a working chart engine into
+ * `CHART_RENDER_UNAVAILABLE` — every chart a 503 while the runtime could draw.
+ *
+ * The local interpreter probe is the fallback for a runtime that is not up
+ * (the caller then knows the capability even before it starts), and it is
+ * cached with the same short TTL so a `pip install` becomes visible.
  */
 export async function probeChartEngine(): Promise<ChartEngineReadiness> {
   const cached = g.__chartEngineProbe;
   if (cached && Date.now() - cached.at < CHART_PROBE_TTL_MS) return cached.value;
+
+  const fromRuntime = await runtimeChartHealth();
+  if (fromRuntime) {
+    g.__chartEngineProbe = { value: fromRuntime, at: Date.now() };
+    return fromRuntime;
+  }
 
   const py = await findPython();
   if (!py) {

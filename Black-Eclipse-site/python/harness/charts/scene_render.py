@@ -32,13 +32,58 @@ def _values(mark: ChartMark) -> list[float]:
 
 
 def _series(mark: ChartMark) -> list[Optional[float]]:
-    """The mark's y values, with the gaps kept as None."""
-    return [None if v is None else float(v) for v in (mark.y or [])]
+    """The mark's y values, with the gaps kept as None.
+
+    A value the renderer cannot draw as a number is a GAP, never an invented
+    point and never a crash: a stray label in a numeric series used to raise
+    `could not convert string to float` and lose the whole picture.
+    """
+    out: list[Optional[float]] = []
+    for value in mark.y or []:
+        if value is None:
+            out.append(None)
+            continue
+        try:
+            out.append(float(value))
+        except (TypeError, ValueError):
+            out.append(None)
+    return out
 
 
-def _x_series(mark: ChartMark) -> list[float]:
+def panel_categories(panel: ChartPanel) -> list[str]:
+    """The panel's category labels, in first-seen order.
+
+    A scene mark's `x` may be LABELS ("Q1", "Jan", a product name) rather than
+    numbers — that is how a person writes a bar chart. matplotlib needs a
+    numeric position, so labels map to their index on a shared axis; every mark
+    in the panel uses the same order, so a bar and a line line up.
+    """
+    seen: list[str] = []
+    for mark in panel.marks:
+        for value in mark.x or []:
+            if isinstance(value, str) and value not in seen:
+                seen.append(value)
+    return seen
+
+
+def _x_series(mark: ChartMark, categories: Optional[list[str]] = None) -> list[float]:
     if mark.x:
-        return [float(v) if v is not None else float("nan") for v in mark.x]
+        out: list[float] = []
+        for value in mark.x:
+            if value is None:
+                out.append(float("nan"))
+            elif isinstance(value, str):
+                # A label is drawn at its index on the panel's shared axis.
+                if categories and value in categories:
+                    out.append(float(categories.index(value)))
+                else:
+                    out.append(float("nan"))
+            else:
+                try:
+                    out.append(float(value))
+                except (TypeError, ValueError):
+                    out.append(float("nan"))
+        return out
     return [float(i) for i in range(len(mark.y or mark.values))]
 
 
@@ -74,12 +119,15 @@ def draw_mark(ax: Any, mark: ChartMark, theme: ChartTheme, index: int, panel: Ch
     color = _color(mark, theme, index)
     alpha = mark.alpha if mark.alpha is not None else 1.0
     width = mark.width or (1.6 if mark.type in ("line", "area") else None)
+    # A label axis is shared by every mark in the panel, so a bar and a line
+    # over the same quarters line up instead of one of them being refused.
+    categories = panel_categories(panel)
 
     if mark.type in ("line", "area"):
         ys = _series(mark)
         if not ys:
             return
-        xs = _x_series(mark)
+        xs = _x_series(mark, categories)
         if mark.fill or mark.type == "area":
             ax.fill_between(xs, ys, color=color, alpha=0.22 * alpha, label=mark.name)
         ax.plot(
@@ -93,13 +141,13 @@ def draw_mark(ax: Any, mark: ChartMark, theme: ChartTheme, index: int, panel: Ch
         if not ys:
             return
         ax.bar(
-            _x_series(mark), ys, bottom=_stack_base(mark, panel), color=color,
+            _x_series(mark, categories), ys, bottom=_stack_base(mark, panel), color=color,
             alpha=alpha, width=width or 0.7, label=mark.name,
         )
         return
 
     if mark.type == "scatter":
-        xs = [v for v in _x_series(mark) if v == v]
+        xs = [v for v in _x_series(mark, categories) if v == v]
         ys = [v for v in _series(mark) if v is not None]
         if not xs or not ys:
             return
@@ -118,12 +166,14 @@ def draw_mark(ax: Any, mark: ChartMark, theme: ChartTheme, index: int, panel: Ch
         # arithmetic as the live figure, so the exported picture agrees with
         # what the reader saw.
         ys = _series(mark)
+        # A regression is arithmetic over NUMBERS: a label axis has no
+        # meaningful slope, so its points are drawn but never fitted.
         xs = _x_series(mark)
         pairs = [
             (x, y)
             for x, y in zip(xs, ys)
-            if isinstance(x, (int, float)) and not isinstance(x, bool)
-            and isinstance(y, (int, float)) and not isinstance(y, bool)
+            if isinstance(x, (int, float)) and not isinstance(x, bool) and x == x
+            and isinstance(y, (int, float)) and not isinstance(y, bool) and y == y
         ]
         if len(pairs) < 2:
             if pairs:
@@ -182,7 +232,7 @@ def draw_mark(ax: Any, mark: ChartMark, theme: ChartTheme, index: int, panel: Ch
         return
 
     if mark.type == "label":
-        xs = _x_series(mark)
+        xs = _x_series(mark, categories)
         ys = _series(mark)
         if not xs or not ys:
             return
@@ -264,7 +314,7 @@ def draw_mark(ax: Any, mark: ChartMark, theme: ChartTheme, index: int, panel: Ch
         return
 
     if mark.type == "errorbar":
-        xs = _x_series(mark)
+        xs = _x_series(mark, categories)
         ys = _series(mark)
         if not xs or not ys:
             return
@@ -360,7 +410,7 @@ def draw_mark(ax: Any, mark: ChartMark, theme: ChartTheme, index: int, panel: Ch
             return
         offset = float(mark.width or 0.0)
         ax.fill_between(
-            _x_series(mark), offset, [offset + (v or 0.0) for v in ys],
+            _x_series(mark, categories), offset, [offset + (v or 0.0) for v in ys],
             color=color, alpha=0.6, linewidth=0,
         )
         return
@@ -369,7 +419,7 @@ def draw_mark(ax: Any, mark: ChartMark, theme: ChartTheme, index: int, panel: Ch
         ys = _series(mark)
         if not ys:
             return
-        ax.stem(_x_series(mark), ys, linefmt=color, markerfmt="o", basefmt=" ")
+        ax.stem(_x_series(mark, categories), ys, linefmt=color, markerfmt="o", basefmt=" ")
         return
 
 

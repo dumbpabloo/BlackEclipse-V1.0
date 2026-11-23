@@ -46,8 +46,14 @@ vi.mock("@/lib/harness/runtime-auth", () => ({
   runtimeCallbackToken: () => "token",
 }));
 
+vi.mock("@/lib/scraper/fetchers/python", () => ({
+  findPython: vi.fn(async () => null),
+  findProjectRoot: () => process.cwd(),
+}));
+
 import { POST } from "@/app/api/harness/charts/route";
 import { ensurePythonRuntime, probeChartEngine } from "@/lib/harness/python-runtime";
+import { findPython } from "@/lib/scraper/fetchers/python";
 
 function req(body: unknown): Request {
   return new Request("http://localhost:3000/api/harness/charts", {
@@ -62,6 +68,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", runtimeFetch);
   vi.mocked(ensurePythonRuntime).mockResolvedValue(true);
   vi.mocked(probeChartEngine).mockResolvedValue({ ready: true, python: "/v/python", missing: [] });
+  vi.mocked(findPython).mockResolvedValue(null);
   runtimeFetch.mockImplementation(async (_url: string, _init?: RequestInit) => ({
     ok: true,
     status: 200,
@@ -135,11 +142,28 @@ describe("POST /api/harness/charts", () => {
 
   it("names the repair command when the runtime is not installed", async () => {
     vi.mocked(ensurePythonRuntime).mockResolvedValueOnce(false);
+    vi.mocked(findPython).mockResolvedValueOnce(null);
     const res = await POST(req({ kind: "line", series: [{ name: "s", data: [1] }] }));
     expect(res.status).toBe(503);
     const body = await res.json();
     expect(body.error).toContain("setup:python");
     expect(body.detail.code).toBe("RUNTIME_UNAVAILABLE");
+    expect(runtimeFetch).not.toHaveBeenCalled();
+  });
+
+  // The runtime is INSTALLED and booting. A page request has a short budget, so
+  // it answers "starting" — a retryable state the chart surface waits out. It
+  // must never tell the user to install something that already exists.
+  it("answers a booting runtime as retryable, never as a missing install", async () => {
+    vi.mocked(ensurePythonRuntime).mockResolvedValueOnce(false);
+    vi.mocked(findPython).mockResolvedValueOnce({ cmd: "python" });
+    const res = await POST(req({ kind: "line", series: [{ name: "s", data: [1] }] }));
+    expect(res.status).toBe(503);
+    expect(res.headers.get("Retry-After")).toBe("2");
+    const body = await res.json();
+    expect(body.status).toBe("STARTING");
+    expect(body.detail.code).toBe("RUNTIME_STARTING");
+    expect(body.error).not.toContain("setup:python");
     expect(runtimeFetch).not.toHaveBeenCalled();
   });
 

@@ -87,6 +87,28 @@ def test_a_stacked_bar_stacks():
     assert render_chart(spec)[:8] == b"\x89PNG\r\n\x1a\n"
 
 
+def test_labels_on_a_scene_mark_are_a_category_axis():
+    # A person writes a bar chart as labels, not indices. A scene mark whose
+    # `x` is "Q1"/"Q2"/"Q3" used to raise
+    # `could not convert string to float: 'Q1'` and lose the whole picture.
+    spec = _scene(
+        panel={
+            "marks": [
+                {"type": "bar", "name": "Revenue", "x": ["Q1", "Q2", "Q3"], "y": [10, 14, 9]},
+                {"type": "line", "name": "Trend", "x": ["Q1", "Q2", "Q3"], "y": [10, 14, 9]},
+            ],
+        }
+    )
+    assert render_chart(spec)[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_a_non_numeric_value_is_a_gap_not_a_crash():
+    # A stray label in a numeric series is a missing reading: the mark is still
+    # drawn, the point is a gap, and the picture is not lost.
+    spec = _scene(panel={"marks": [{"type": "line", "x": ["A", "B"], "y": [1, "n/a"]}]})
+    assert render_chart(spec)[:8] == b"\x89PNG\r\n\x1a\n"
+
+
 def test_a_panel_can_have_its_own_format_and_scale():
     spec = _scene(
         panel={

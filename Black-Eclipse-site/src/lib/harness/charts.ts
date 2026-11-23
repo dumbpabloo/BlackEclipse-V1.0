@@ -298,15 +298,42 @@ export class ChartRenderError extends Error {
 }
 
 /**
+ * A chart failure that fixes itself: the Python runtime is booting (or
+ * restarting after a source change) and will answer once it is up. The chart
+ * surface RETRIES these with a calm "starting" state; it never shows them as an
+ * error box asking the user to run an install command for something that is
+ * already installed.
+ */
+export const RETRYABLE_CHART_ERROR_CODES: ReadonlySet<string> = new Set([
+  "RUNTIME_STARTING",
+  "RUNTIME_UNAVAILABLE",
+]);
+
+export function isRetryableChartError(err: unknown): boolean {
+  return (
+    err instanceof ChartRenderError &&
+    typeof err.code === "string" &&
+    RETRYABLE_CHART_ERROR_CODES.has(err.code)
+  );
+}
+
+/**
  * Draw a chart. The request is a SPEC — the runtime validates it and refuses
  * a malformed one with the missing part named.
  */
 export async function renderChart(spec: ChartSpec): Promise<RenderedChart> {
-  const res = await fetch("/api/harness/charts", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(spec),
-  });
+  let res: Response;
+  try {
+    res = await fetch("/api/harness/charts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(spec),
+    });
+  } catch {
+    // The connection itself dropped — exactly what a runtime restart looks
+    // like from the page. Retryable, not a broken chart.
+    throw new ChartRenderError("the chart engine did not answer — retrying", "RUNTIME_UNAVAILABLE");
+  }
   const body = (await res.json().catch(() => ({}))) as Partial<RenderedChart> & {
     chart?: ChartFigureData;
     image?: RenderedChartImage;
@@ -319,8 +346,10 @@ export async function renderChart(spec: ChartSpec): Promise<RenderedChart> {
     const code =
       typeof detail === "object" && detail && "code" in detail
         ? String(detail.code)
-        : body.status === "UNAVAILABLE"
-          ? "CHART_RENDER_UNAVAILABLE"
+        : body.status === "STARTING" || res.status === 503 || res.status >= 500
+          ? // A 503/5xx without a named code is infrastructure (a booting or
+            // restarting runtime), not a verdict about this chart.
+            "RUNTIME_UNAVAILABLE"
           : undefined;
     const message =
       typeof detail === "object" && detail && "message" in detail

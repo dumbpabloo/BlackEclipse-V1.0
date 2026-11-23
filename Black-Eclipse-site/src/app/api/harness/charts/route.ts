@@ -4,7 +4,9 @@ import {
   ensurePythonRuntime,
   probeChartEngine,
 } from "@/lib/harness/python-runtime";
+import { PYTHON_RUNTIME_DEPS } from "@/lib/harness/runtime-config";
 import { runtimeCallbackToken } from "@/lib/harness/runtime-auth";
+import { findPython } from "@/lib/scraper/fetchers/python";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +21,9 @@ export const dynamic = "force-dynamic";
 // unchanged (the runtime owns the spec contract) and turns a runtime refusal
 // into an honest error the UI can show. It never draws anything itself.
 //
-// TWO different unavailabilities, two different messages:
+// THREE different unavailabilities, three different messages:
+//   * the runtime is installed and still booting (or restarting after a code
+//     change) — retryable; the UI waits it out, never a repair instruction;
 //   * the runtime cannot boot at all (no interpreter / broken stack) — the
 //     operator must repair the runtime;
 //   * the runtime is healthy but the drawing library is missing — the runtime
@@ -45,18 +49,39 @@ export async function POST(request: Request) {
   try {
     const ready = await ensurePythonRuntime();
     if (!ready) {
+      // The runtime did not answer within ONE page request's short budget —
+      // usually because it is still importing after a launch or a restart.
+      // That is a "wait a moment", NOT a broken install: telling the user to
+      // run `npm run setup:python` for a runtime that is booting is the exact
+      // misleading error they should never see. Only a genuinely missing
+      // interpreter is a repair instruction.
+      const installed = Boolean(await findPython(PYTHON_RUNTIME_DEPS));
+      if (!installed) {
+        return NextResponse.json(
+          {
+            status: "UNAVAILABLE",
+            error:
+              "the Python runtime is not installed, so the chart engine cannot start. Run `npm run setup:python`, then restart Eclipse.",
+            detail: {
+              code: "RUNTIME_UNAVAILABLE",
+              message:
+                "the Python runtime is not installed, so the chart engine cannot start. Run `npm run setup:python`.",
+            },
+          },
+          { status: 503 },
+        );
+      }
       return NextResponse.json(
         {
-          status: "UNAVAILABLE",
-          error:
-            "the Python runtime is unavailable — it is installed but not running (or its agent stack is incomplete). Run `npm run setup:python`, then restart the app.",
+          status: "STARTING",
+          error: "Eclipse is starting its chart engine — the chart appears as soon as it is ready.",
           detail: {
-            code: "RUNTIME_UNAVAILABLE",
+            code: "RUNTIME_STARTING",
             message:
-              "the Python runtime is not available, so the chart engine cannot start. Run `npm run setup:python`.",
+              "Eclipse is starting its Python runtime. A first launch can take a minute; the chart appears automatically.",
           },
         },
-        { status: 503 },
+        { status: 503, headers: { "Retry-After": "2" } },
       );
     }
 

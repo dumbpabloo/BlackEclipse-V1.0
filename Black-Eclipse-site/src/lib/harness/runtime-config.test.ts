@@ -9,10 +9,26 @@ import {
   PYTHON_RUNTIME_DEPS,
   PYTHON_RUNTIME_PACKAGES,
   chartEngineReadiness,
+  chartEngineReadinessFromHealth,
 } from "@/lib/harness/runtime-config";
 import { findProjectRoot, findPython } from "@/lib/scraper/fetchers/python";
 
 const execFileAsync = promisify(execFile);
+
+// ── The runtime marker contract ─────────────────────────────────────────────
+//
+// Regression: a partially installed system Python could import `langgraph` but
+// had no provider package. The launcher selected it over the complete vendored
+// interpreter, and every model call failed with
+// "No module named 'langchain_openai'". The marker must therefore name a
+// provider integration alongside the graph engine.
+describe("runtime install marker", () => {
+  it("requires a provider package, not just langgraph", () => {
+    const markers = PYTHON_RUNTIME_DEPS.split(",").map((m) => m.trim());
+    expect(markers).toContain("langgraph");
+    expect(markers).toContain("langchain_openai");
+  });
+});
 
 // ── The chart engine's dependency contract ──────────────────────────────────
 //
@@ -105,6 +121,36 @@ describe("chart engine dependency contract", () => {
     expect(partial.ready).toBe(false);
     expect(partial.missing).toContain("matplotlib");
     expect(chartEngineReadiness(null, [...PYTHON_CHART_PACKAGES]).ready).toBe(false);
+  });
+
+  // The runtime that draws is the authority on drawing. This decision used to
+  // be made by probing a SEPARATELY resolved interpreter, which disagreed with
+  // the running runtime and refused every chart with
+  // `CHART_RENDER_UNAVAILABLE` while the runtime could draw perfectly.
+  it("reads the runtime's own /charts/health document", () => {
+    const healthy = chartEngineReadinessFromHealth({
+      status: "OK",
+      python: "C:/venv/python.exe",
+      matplotlib: true,
+      plotly: true,
+      numpy: true,
+      canDraw: true,
+    });
+    expect(healthy).toEqual({ ready: true, python: "C:/venv/python.exe", missing: [] });
+
+    const shortOfPlotly = chartEngineReadinessFromHealth({
+      status: "OK",
+      python: "C:/venv/python.exe",
+      matplotlib: true,
+      plotly: false,
+      numpy: true,
+    });
+    expect(shortOfPlotly?.ready).toBe(false);
+    expect(shortOfPlotly?.missing).toEqual(["plotly"]);
+
+    expect(chartEngineReadinessFromHealth({ status: "STARTING" })).toBeNull();
+    expect(chartEngineReadinessFromHealth(null)).toBeNull();
+    expect(chartEngineReadinessFromHealth([1, 2, 3])).toBeNull();
   });
 
   // The environment assertion. It probes the interpreter that can actually

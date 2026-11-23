@@ -25,7 +25,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChartRenderError, chartImageSrc, renderChart, type ChartFigureData, type RenderedChart } from '@/lib/harness/charts';
+import { ChartRenderError, chartImageSrc, isRetryableChartError, renderChart, type ChartFigureData, type RenderedChart } from '@/lib/harness/charts';
 import { PlotlyChart } from '@/components/charts/plotly-chart';
 import { chartBlockToSpec, type ChartPlan } from '@/lib/response/chart-spec';
 import { chartSpecWarning } from '@/lib/response/chart-capabilities';
@@ -47,6 +47,7 @@ export interface ResponseChartProps {
 
 type State =
   | { status: 'loading' }
+  | { status: 'starting'; message: string }
   | { status: 'ready'; src: string; chart?: ChartFigureData; plan: ChartPlan }
   | { status: 'empty'; message: string }
   | { status: 'error'; message: string; code?: string };
@@ -81,6 +82,8 @@ export function ResponseChart({ block, height = 260, className, focusable = true
   const [focused, setFocused] = useState(false);
   const [editingCode, setEditingCode] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
+  /** Bumped by "Try again"; re-runs the render effect. */
+  const [retryNonce, setRetryNonce] = useState(0);
   const notebook = useNotebook();
 
   // The block is a fresh object on every render in most callers, so the work is
@@ -96,54 +99,75 @@ export function ResponseChart({ block, height = 260, className, focusable = true
     let cancelled = false;
     setState({ status: 'loading' });
     void (async () => {
-      try {
-        let plan: ChartPlan | null;
-        if (block.quant) {
-          const spec = await fetchQuantFigure(block.quant);
+      // A chart asked for while the Python runtime is booting (or restarting
+      // after a code change) is not a failure: the runtime is installed and on
+      // its way. Keep the surface in a calm "starting" state and retry, so the
+      // user never sees "install the runtime" for a runtime that already
+      // exists. Only a genuine, persistent failure becomes an error box.
+      const MAX_RETRIES = 36;
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          let plan: ChartPlan | null;
+          if (block.quant) {
+            const spec = await fetchQuantFigure(block.quant);
+            if (cancelled) return;
+            plan = { spec, kind: spec.kind, notes: [] };
+          } else {
+            const hydrated = await hydrateChartBlock(block);
+            if (cancelled) return;
+            plan = chartBlockToSpec(hydrated, { theme: 'eclipse-dark', width: 1000, height: 560 });
+          }
+          if (!plan) {
+            setState({ status: 'empty', message: 'No data series available to chart.' });
+            return;
+          }
+          const warning = chartSpecWarning(plan.spec);
+          if (warning) {
+            setState({ status: 'error', message: warning });
+            return;
+          }
+          const specKey = JSON.stringify(plan.spec);
+          const rendered = await cachedRender(specKey, plan.spec);
           if (cancelled) return;
-          plan = { spec, kind: spec.kind, notes: [] };
-        } else {
-          const hydrated = await hydrateChartBlock(block);
+          // A chart whose artifact could not be recorded still has bytes: show
+          // them inline. Only a render that produced no picture is an error.
+          const src = chartImageSrc(rendered);
+          if (!src) {
+            setState({ status: 'error', message: 'the chart engine returned no picture' });
+            return;
+          }
+          const artifactId = rendered.artifact.id;
+          // The export helpers fetch the picture by artifact id.
+          if (chartId && artifactId) registerChartArtifact(chartId, artifactId);
+          setState({ status: 'ready', src, chart: rendered.chart, plan });
+          return;
+        } catch (err) {
           if (cancelled) return;
-          plan = chartBlockToSpec(hydrated, { theme: 'eclipse-dark', width: 1000, height: 560 });
-        }
-        if (!plan) {
-          setState({ status: 'empty', message: 'No data series available to chart.' });
+          if (isRetryableChartError(err) && attempt < MAX_RETRIES) {
+            setState({
+              status: 'starting',
+              message: 'Starting the chart engine — a first launch can take a minute.',
+            });
+            await new Promise((resolve) =>
+              setTimeout(resolve, Math.min(1500 + attempt * 600, 6000)),
+            );
+            if (cancelled) return;
+            continue;
+          }
+          setState({
+            status: 'error',
+            message: err instanceof Error ? err.message : 'the chart could not be drawn',
+            code: err instanceof ChartRenderError ? err.code : undefined,
+          });
           return;
         }
-        const warning = chartSpecWarning(plan.spec);
-        if (warning) {
-          setState({ status: 'error', message: warning });
-          return;
-        }
-        const specKey = JSON.stringify(plan.spec);
-        const rendered = await cachedRender(specKey, plan.spec);
-        if (cancelled) return;
-        // A chart whose artifact could not be recorded still has bytes: show
-        // them inline. Only a render that produced no picture is an error.
-        const src = chartImageSrc(rendered);
-        if (!src) {
-          setState({ status: 'error', message: 'the chart engine returned no picture' });
-          return;
-        }
-        const artifactId = rendered.artifact.id;
-        // The export helpers fetch the picture by artifact id.
-        if (chartId && artifactId) registerChartArtifact(chartId, artifactId);
-        setState({ status: 'ready', src, chart: rendered.chart, plan });
-      } catch (err) {
-        if (cancelled) return;
-        setState({
-          status: 'error',
-          message: err instanceof Error ? err.message : 'the chart could not be drawn',
-          code: err instanceof ChartRenderError ? err.code : undefined,
-        });
       }
     })();
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [blockKey]);
+  }, [blockKey, retryNonce]);
 
   useEffect(() => {
     if (!chartId) return;
@@ -202,18 +226,24 @@ export function ResponseChart({ block, height = 260, className, focusable = true
         </div>
       );
     }
-    if (state.status === 'loading') {
+    if (state.status === 'loading' || state.status === 'starting') {
+      const starting = state.status === 'starting';
       return (
         <div
-          className="flex w-full items-center justify-center rounded-xl border border-border/10"
+          className="flex w-full flex-col items-center justify-center gap-1 rounded-xl border border-border/10"
           style={{ height }}
           aria-busy="true"
-          data-testid="response-chart-loading"
+          data-testid={starting ? 'response-chart-starting' : 'response-chart-loading'}
         >
           <span className="flex items-center gap-2 text-xs text-muted-foreground/70">
             <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-primary" />
-            Drawing the chart…
+            {starting ? 'Starting the chart engine…' : 'Drawing the chart…'}
           </span>
+          {starting && (
+            <span className="text-[10px] text-muted-foreground/50">
+              A first launch can take a minute — the chart appears on its own.
+            </span>
+          )}
         </div>
       );
     }
@@ -241,11 +271,29 @@ export function ResponseChart({ block, height = 260, className, focusable = true
               Run <code className="rounded bg-foreground/10 px-1 py-0.5">npm run setup:python</code> to install the
               missing drawing libraries, then restart Eclipse.
             </p>
+            <button
+              type="button"
+              onClick={() => setRetryNonce((n) => n + 1)}
+              className="text-[11px] text-primary/80 underline-offset-2 hover:underline"
+            >
+              Try again
+            </button>
           </div>
         ) : (
-          <p className={cn('text-xs italic', state.status === 'error' ? 'text-amber-500/80' : 'text-muted-foreground/70')}>
-            {state.message}
-          </p>
+          <div className="flex flex-col items-center gap-1">
+            <p className={cn('text-xs italic', state.status === 'error' ? 'text-amber-500/80' : 'text-muted-foreground/70')}>
+              {state.message}
+            </p>
+            {state.status === 'error' && (
+              <button
+                type="button"
+                onClick={() => setRetryNonce((n) => n + 1)}
+                className="text-[11px] text-primary/80 underline-offset-2 hover:underline"
+              >
+                Try again
+              </button>
+            )}
+          </div>
         )}
       </div>
     );

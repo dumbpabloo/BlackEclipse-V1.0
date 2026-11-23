@@ -94,6 +94,13 @@ one named like a y is the y, and when the names say nothing the first two
 numeric fields are the point, in order). A model writes points; a chart that
 refuses a point over its FORMAT is a chart the reader never sees.
 
+**A mark's `x` may be labels, not just numbers.** `"Q1"` / `"Jan"` / a product
+name is drawn at its index on the panel's shared category axis (every mark in
+the panel uses the same first-seen order, so a bar and a line line up), and the
+axis is ticked with the labels. A value that is neither a number nor a label is
+a **gap**, never a crash: the renderer used to fail the whole picture with
+`could not convert string to float`.
+
 A mark may set: `name` (the legend), `y` / `x` / `z` / `values` / `lower` /
 `upper` / `sizes` / `matrix` / `labels` / `rowLabels` / `colLabels`, `color`,
 `alpha`, `width`, `style` (`solid` / `dashed` / `dotted`), `fill`, `label`,
@@ -338,6 +345,13 @@ already had `langgraph`: the runtime marker used to skip the requirements file
 forever, so the chart stack was never completed. A missing stack is repaired with
 `npm run setup:python`.
 
+**`langgraph` alone is not "the runtime is installed".** A partially installed
+interpreter can import the graph engine while every provider package is absent.
+`PYTHON_RUNTIME_DEPS` in `runtime-config.ts` (and the equivalent probes in
+`setup-python.js` / `doctor.js`) therefore requires `langchain_openai` as well —
+otherwise the launcher selected that interpreter over the complete vendored one
+and every model call failed with `No module named 'langchain_openai'`.
+
 **"Installed" is not "can draw".** The agent stack (`langgraph`) can be healthy
 while `matplotlib`/`plotly` are absent — those imports are lazy, inside the
 renderer, so a boot probe never touches them. The contract that makes this
@@ -347,15 +361,33 @@ visible:
   third-party module `python/harness/charts/*.py` imports (`matplotlib`,
   `numpy`, `plotly`, `pydantic`), and `PYTHON_RUNTIME_PACKAGES` installs each
   one. `chartEngineReadiness()` is the single "can draw" decision, shared by the
-  front door, the doctor and the tests.
-* `probeChartEngine()` in `src/lib/harness/python-runtime.ts` asks the SAME
-  interpreter `findPython()` selects which modules it can find, and reports the
-  interpreter path plus the missing ones.
-* The front door's `POST /api/harness/charts` therefore returns **two different
-  503s**: `RUNTIME_UNAVAILABLE` (the runtime cannot boot) and
-  `CHART_RENDER_UNAVAILABLE` (the runtime is up but a drawing library is
+  front door, the doctor and the tests. `chartEngineReadinessFromHealth()` turns
+  the runtime's own `/charts/health` document into that decision.
+* `probeChartEngine()` in `src/lib/harness/python-runtime.ts` asks the **running
+  runtime** first (`GET /charts/health`, the same process that will draw, so
+  `python` is its own `sys.executable`). Only when the runtime does not answer
+  does it fall back to probing a local interpreter. This distinction matters:
+  a separately resolved interpreter can disagree with the running runtime — a
+  pinned release whose build resolved a path the runtime never used reported
+  "missing matplotlib, numpy, plotly, pydantic" and refused every chart while
+  the live runtime could draw. The drawing process is the authority on drawing.
+* `findPython()` only prefers the vendored embedded interpreter when that file
+  actually exists; a path computed at build/load time is never reported as a
+  usable interpreter it is not.
+* The front door's `POST /api/harness/charts` returns **three different
+  503s**: `RUNTIME_STARTING` (the runtime is installed and still booting or
+  restarting — retryable, `Retry-After: 2`, never a repair instruction),
+  `RUNTIME_UNAVAILABLE` (no interpreter is installed — a repair instruction),
+  and `CHART_RENDER_UNAVAILABLE` (the runtime is up but a drawing library is
   missing — with the interpreter path and module names). The UI shows that
   cause instead of generic italic text.
+* **A booting runtime is waited out, never reported as an error.** One page
+  request may wait only a few seconds on a cold start (long waits starve the
+  browser's per-origin sockets), so the chart surface keeps a calm
+  "Starting the chart engine…" state and retries the render with backoff for
+  several minutes (`isRetryableChartError`). "Run `npm run setup:python`" can
+  only appear when the interpreter is genuinely absent, and "Try again" is
+  offered as a manual fallback.
 * The runtime's `GET /charts/health` reports `{ matplotlib, plotly, numpy,
   python }` from inside the drawing process.
 * **Never again:** `src/lib/harness/runtime-config.test.ts` scans the charts
