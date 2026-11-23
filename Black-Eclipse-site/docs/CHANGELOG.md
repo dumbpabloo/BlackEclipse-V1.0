@@ -10,8 +10,10 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
   `python/harness/__init__.py`. Ships the broker order-execution surface for all 19 adapters, the
   computer-use state-of-the-art pass, the graph-studio port/broker parity, and the CI repair above
   (lint config, size budget, SBOM). The `v0.4.27` tag drives `desktop-release.yml`; the offline-signed
-  `stable.json` is signed and uploaded to the draft before publishing.
-  docs updated: `docs/UPDATES.md` (release state), `docs/CHANGELOG.md`.
+  `stable.json` is signed and uploaded to the draft before publishing. The tag was re-pointed to the
+  follow-up commit that regenerates `sbom.cdx.json` / `THIRD-PARTY-NOTICES.md` for the new version (the
+  public-release preflight failed on the bump commit) and updates the README's current-version line.
+  docs updated: `docs/UPDATES.md` (release state), `docs/CHANGELOG.md`, `README.md`.
 
 - **fix(sdk): cleared the test-page backlog out of the main sidebar.**
   The live `agent-memory.db` held 66 agent-generated test blueprints that rendered as
