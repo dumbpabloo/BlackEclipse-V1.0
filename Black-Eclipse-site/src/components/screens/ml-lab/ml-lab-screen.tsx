@@ -5,6 +5,7 @@
 // experiment run, evaluation or registered model returned by /api/ml.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { saveBlob } from '@/lib/desktop/download';
 import { alertDialog } from '@/lib/ui/confirm-dialog';
 import { cn } from '@/lib/utils';
 import { DesktopOnlyNotice } from '@/components/ui/desktop-only-notice';
@@ -249,12 +250,7 @@ export function MlLabScreen() {
     try {
       const out = await mlClient.exportDataset(lastBuild.datasetId, lastBuild.version, format);
       const blob = new Blob([out.content], { type: out.contentType });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = out.filename;
-      anchor.click();
-      URL.revokeObjectURL(url);
+      saveBlob(out.filename, blob);
       if (out.truncated) setPlanNote(`exported ${out.rows} of ${out.totalRows} rows (limit reached)`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'export failed');

@@ -16,6 +16,7 @@ import { PageSizeInput } from '@/components/ui/pagination';
 import { DataAttribution } from '@/components/screens/data-attribution';
 import { adoptLegacySaves, loadSaved, saveSaved, saveLegacyIds } from '@/lib/news/saved';
 import { relativeTime } from '@/lib/news/relative-time';
+import { openExternal } from '@/lib/desktop/external';
 import {
   clearCardSettings,
   DEFAULT_CARD_SETTINGS,
@@ -478,9 +479,10 @@ export function MarketNews({ onDiscussNews, fullPage = false, onNewsSentiment, s
   };
 
   const openNews = (item: NewsItem) => {
-    // No popup — open the source article directly in a new tab.
+    // No popup — open the source article in the real browser (the desktop
+    // shell owns external links; a new-window request is not hosted there).
     if (item.url) {
-      window.open(item.url, '_blank', 'noopener,noreferrer');
+      if (!openExternal(item.url)) window.open(item.url, '_blank', 'noopener,noreferrer');
       return;
     }
     // Fallback: no URL on this item — show the in-app briefing modal.

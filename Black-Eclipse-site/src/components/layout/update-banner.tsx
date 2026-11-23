@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { saveUpdatePrefs } from "@/lib/updates/prefs";
 import { useUpdateApply } from "@/lib/updates/use-update-apply";
 import { useUpdateStatus } from "@/lib/updates/use-update-status";
+import { externalLinkProps } from "@/lib/desktop/external";
 import type { UpdateJobPhase, UpdateStatus } from "@/lib/updates/types";
 
 const PHASE_PERCENT: Record<UpdateJobPhase, number> = {
@@ -206,9 +207,7 @@ export function UpdateBanner() {
             {manual ? (
               downloadHref && (
                 <a
-                  href={downloadHref}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  {...externalLinkProps(downloadHref)}
                   className="inline-flex items-center gap-1 rounded-xl bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
                 >
                   <Download size={13} />
@@ -229,9 +228,7 @@ export function UpdateBanner() {
                 a dead end: the verified installer is one click away. */}
             {applyError && downloadHref && (
               <a
-                href={downloadHref}
-                target="_blank"
-                rel="noopener noreferrer"
+                {...externalLinkProps(downloadHref)}
                 className="inline-flex items-center gap-1 rounded-xl border border-white/10 px-2.5 py-1.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
               >
                 <Download size={11} />
@@ -240,9 +237,7 @@ export function UpdateBanner() {
             )}
             {status.notesUrl && (
               <a
-                href={status.notesUrl}
-                target="_blank"
-                rel="noopener noreferrer"
+                {...externalLinkProps(status.notesUrl)}
                 className="inline-flex items-center gap-1 rounded-xl border border-white/10 px-2.5 py-1.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
               >
                 What&apos;s new

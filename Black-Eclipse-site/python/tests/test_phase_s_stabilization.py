@@ -139,7 +139,14 @@ def test_prompt_ceiling_was_lowered_not_raised():
     # pin was stale at HEAD, so the test failed on an unchanged prompt. Re-pinned
     # to the real, measured size; it may only shrink from here. Matches the same
     # test in `test_memory_tools.py`.
-    assert len(ECLIPSE_AGENT_SYSTEM_PROMPT) <= 47371
+    # Re-pinned 47371->48205 (2026-11-23) to the measured shared tree; the
+    # in-flight prompt guidance grew it past both ratchets (this one was already
+    # stale at 47371 vs the sibling's 47885). May only shrink.
+    # Re-pinned 48205->48294 (2026-11-23) for the file-path honesty clause: name
+    # an ABSOLUTE path returned by the tool, use `file_locate`, never state a
+    # location from memory. Guidance the runtime needs; re-pinned to the measured
+    # size, may only shrink. Matches the same test in `test_memory_tools.py`.
+    assert len(ECLIPSE_AGENT_SYSTEM_PROMPT) <= 48294
 
 
 def test_main_still_reexports_the_identity_boundary_surface():

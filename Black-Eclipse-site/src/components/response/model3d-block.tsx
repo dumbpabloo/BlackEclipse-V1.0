@@ -19,6 +19,7 @@ import { compileModel3dCached, model3dStats, type CompiledModel3d } from '@/lib/
 import { buildGlb } from '@/lib/model3d/glb';
 import { model3dToObj, model3dToStl } from '@/lib/model3d/exporters';
 import { figureUrl } from '@/lib/response/share';
+import { saveDownloadViaShell } from '@/lib/desktop/download';
 import { Model3dFallback } from './model3d-fallback';
 
 const Model3dCanvas = dynamic(() => import('./model3d-canvas').then((m) => m.Model3dCanvas), {
@@ -85,6 +86,8 @@ function safeName(name: string): string {
 }
 
 function downloadBlob(blob: Blob, filename: string): void {
+  // Same rule as every other download: the desktop shell writes the file.
+  if (saveDownloadViaShell(filename, blob)) return;
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;

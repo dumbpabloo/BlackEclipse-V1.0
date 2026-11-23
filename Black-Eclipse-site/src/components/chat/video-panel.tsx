@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Loader2, Play, RotateCcw, X } from '@/lib/icons';
 import { cn } from '@/lib/utils';
 import { downloadUrl, inlineUrl } from '@/lib/harness/clients/artifacts-browser';
+import { downloadFromUrlInShell } from '@/lib/desktop/download';
 import { VideoApiError, cancelVideoJob, getVideoJob, renderVideoProject } from '@/lib/harness/clients/video-client';
 import {
   coerceVideoBlob,
@@ -243,6 +244,7 @@ function VideoJobRow({
           <a
             href={downloadUrl(status.artifactId)}
             download
+            onClick={(event) => downloadFromUrlInShell(event, downloadUrl(status.artifactId!), 'eclipse-video.mp4')}
             className="inline-flex items-center gap-1 rounded-full border border-border/40 bg-accent/40 px-2 py-0.5 text-[10.5px] text-foreground/85 transition-colors hover:bg-accent/60"
           >
             <Download size={10} /> Download

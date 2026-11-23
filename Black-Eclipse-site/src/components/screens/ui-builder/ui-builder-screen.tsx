@@ -9,6 +9,7 @@
 // here invents data: every value comes from `/api/ui/**` (the Python runtime).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { saveBlob } from '@/lib/desktop/download';
 import { cn } from '@/lib/utils';
 import { DesktopOnlyNotice } from '@/components/ui/desktop-only-notice';
 import { Plus, Trash2, ArrowUp, ArrowDown, Sparkles, Search, Layers, History } from '@/lib/icons';
@@ -243,12 +244,7 @@ export function UiBuilderScreen({ embedded = false }: { embedded?: boolean } = {
     try {
       const res = await exportBlueprint(selectedId);
       const blob = new Blob([JSON.stringify(res, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${blueprint?.title ?? 'blueprint'}.eclipse-ui.json`;
-      a.click();
-      URL.revokeObjectURL(url);
+      saveBlob(`${blueprint?.title ?? 'blueprint'}.eclipse-ui.json`, blob);
       note('Exported blueprint', true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'export failed');

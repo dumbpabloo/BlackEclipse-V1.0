@@ -90,12 +90,21 @@ in the **Artifact Center** (`artifacts/`, ADR-H160) for preview and download.
 backend (`documents/reporting.py`), using the same block vocabulary. See
 `docs/harness/reports.md`.
 
+Every produced document also gets a **readable copy** in a real folder —
+`Documents/Eclipse` by default, or the `saveTo` the user named (`downloads`,
+`desktop`, an absolute folder) — and the result carries its absolute path, so an
+answer can point at the file instead of describing it. `documents/outputs.py`
+owns that write plus `locate()`, and the `file_locate` tool searches the person's
+own folders (export folder, Downloads, Documents, Desktop, the bound workspace)
+by name, extension and age, newest first. A miss names the folders it searched.
+
 - Writers are `python-docx`, `openpyxl`, `python-pptx` (pure-Python OOXML; see
   `python/requirements.txt`). They are imported lazily, so a partial install makes
   ONE format report `DOCUMENT_LIBRARY_MISSING` instead of emitting a broken file.
-- It writes no arbitrary filesystem path and runs no macro: bytes go straight into
-  the confined artifact store through the ONE `ArtifactService`; a missing store
-  reports `ARTIFACT_UNAVAILABLE`.
+- Bytes go straight into the confined artifact store through the ONE
+  `ArtifactService`; a missing store reports `ARTIFACT_UNAVAILABLE`. The only
+  other write is the export copy above — the export folder, or an absolute folder
+  the user explicitly named; a relative path is refused.
 - It is the answer to "Word/Excel/PowerPoint cannot be created" — the read path
   stays stdlib-only.
 - Editing an EXISTING file is a separate, preservation-first subsystem:

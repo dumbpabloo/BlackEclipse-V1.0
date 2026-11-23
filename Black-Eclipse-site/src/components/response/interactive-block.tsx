@@ -38,6 +38,7 @@ import {
 } from '@/lib/interactive/dataset';
 import type { InteractiveBlock as InteractiveBlockData } from '@/lib/response/blocks/interactive';
 import { appUrl } from '@/lib/response/share';
+import { saveDownloadViaShell } from '@/lib/desktop/download';
 import { InteractiveFrame } from './interactive-frame';
 
 const MIN_HEIGHT = 240;
@@ -404,10 +405,12 @@ export function InteractiveBlock({
   const download = useCallback(() => {
     if (typeof document === 'undefined') return;
     const blob = new Blob([doc], { type: 'text/html;charset=utf-8' });
+    const filename = `${title.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'interactive-app'}.html`;
+    if (saveDownloadViaShell(filename, blob)) return;
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `${title.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'interactive-app'}.html`;
+    anchor.download = filename;
     anchor.click();
     setTimeout(() => URL.revokeObjectURL(url), 1500);
   }, [doc, title]);

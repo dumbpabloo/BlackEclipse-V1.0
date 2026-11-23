@@ -178,7 +178,7 @@ DOCUMENT_TOOLS = [
     "document_analyze", "document_query", "document_compare", "document_render",
     "document_capabilities",
     "document_create",
-    "eclipse_report",
+    "eclipse_report", "file_locate",
 ]
 
 #: Alternative-intelligence signals (`intel_*`). Read-only: each tool measures a

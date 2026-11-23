@@ -26,6 +26,7 @@ import {
   X,
 } from '@/lib/icons';
 import { cn } from '@/lib/utils';
+import { openExternal } from '@/lib/desktop/external';
 import {
   totalUnread,
   useHydrateNotifications,
@@ -96,7 +97,8 @@ function openNotification(item: AppNotification) {
   const store = useNotificationsStore.getState();
   store.markRead(item.id);
   if (item.url) {
-    window.open(item.url, '_blank', 'noopener,noreferrer');
+    // The desktop shell owns external links (a new-window request is not hosted).
+    if (!openExternal(item.url)) window.open(item.url, '_blank', 'noopener,noreferrer');
     return;
   }
   store.markTabRead(item.tab);

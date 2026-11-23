@@ -27,6 +27,7 @@ from .authoring import (
     report_authored_document,
     slug_filename,
 )
+from .outputs import publish_copy
 
 _SUPPORTED_FORMATS = ["docx", "xlsx", "pptx", "markdown", "md", "csv", "json", "txt", "text"]
 
@@ -111,15 +112,18 @@ async def _create(args: dict[str, Any], ctx: ToolContext) -> Any:
         artifact_uri=f"artifact://{getattr(artifact, 'id', '')}" if getattr(artifact, "id", "") else "",
     )
 
+    path, note = publish_copy(data, filename, args.get("saveTo"))
     return _ok(
         f"Created {canonical} document {artifact.name!r} "
-        f"({artifact.size_bytes or len(data)} bytes) as artifact {artifact.id}.",
-        {"artifact": artifact.model_dump(by_alias=True), "bytes": len(data)},
+        f"({artifact.size_bytes or len(data)} bytes) as artifact {artifact.id}.{note}",
+        {"artifact": artifact.model_dump(by_alias=True), "bytes": len(data), "path": path},
     )
 
 
 def register_document_authoring_tools(registry: ToolRegistry) -> list[str]:
     """Register the authoring tool on the shared registry. Returns the names."""
+    from .locate_tools import register_file_locate_tool  # noqa: PLC0415
+
     if registry.get("document_create") is not None:
         from .report_tools import register_report_tools  # noqa: PLC0415
         from .edit.tools import register_document_edit_tools  # noqa: PLC0415
@@ -127,19 +131,21 @@ def register_document_authoring_tools(registry: ToolRegistry) -> list[str]:
         return [
             *register_report_tools(registry),
             *register_document_edit_tools(registry),
+            *register_file_locate_tool(registry),
         ]
     registry.register(ToolDefinition(
         name="document_create",
         description=(
-            "Create a downloadable document the user asked for and save it to the "
-            "Eclipse Artifact Center. Builds REAL files: Word (.docx), Excel (.xlsx), "
-            "PowerPoint (.pptx), and also Markdown, CSV, JSON or plain text. Provide a "
-            "`format` and a `title`, plus the content for that format: `blocks` "
-            "(heading/paragraph/bullets/numbers/table/page_break) for docx/markdown/txt; "
-            "`sheets` [{name, rows}] for xlsx; `slides` [{title, bullets, notes}] for "
-            "pptx; `rows` for csv/json. Never claim a document was created unless this "
-            "tool returns success — a missing writer library or artifact store is "
-            "reported as an error, not faked."
+            "Create a downloadable document the user asked for, save it to the "
+            "Eclipse Artifact Center AND write a readable copy to Documents/Eclipse "
+            "(or `saveTo`); the result names its ABSOLUTE path. Builds REAL files: "
+            "Word (.docx), Excel (.xlsx), PowerPoint (.pptx), and also Markdown, CSV, "
+            "JSON or plain text. Provide a `format` and a `title`, plus the content "
+            "for that format: `blocks` (heading/paragraph/bullets/numbers/table/"
+            "page_break) for docx/markdown/txt; `sheets` [{name, rows}] for xlsx; "
+            "`slides` [{title, bullets, notes}] for pptx; `rows` for csv/json. Never "
+            "claim a document was created unless this tool returns success — a "
+            "missing writer library or artifact store is reported as an error, not faked."
         ),
         input_schema={
             "type": "object",
@@ -147,6 +153,10 @@ def register_document_authoring_tools(registry: ToolRegistry) -> list[str]:
                 "format": {"type": "string", "enum": _SUPPORTED_FORMATS},
                 "title": {"type": "string"},
                 "filename": {"type": "string", "description": "Optional file name; an extension is added if omitted."},
+                "saveTo": {
+                    "type": "string",
+                    "description": "Where the readable copy goes: 'documents' (default), 'downloads', 'desktop', or an absolute folder path.",
+                },
                 "description": {"type": "string"},
                 "tags": {"type": "array", "items": {"type": "string"}},
                 "blocks": {
@@ -202,7 +212,7 @@ def register_document_authoring_tools(registry: ToolRegistry) -> list[str]:
             "required": ["format"],
         },
         handler=_create,
-        permission="read",  # writes only into the confined artifact store
+        permission="read",  # writes only into the artifact store + the export folder
         risk="low",
         timeout_ms=30_000,
     ))
@@ -213,6 +223,7 @@ def register_document_authoring_tools(registry: ToolRegistry) -> list[str]:
         "document_create",
         *register_report_tools(registry),
         *register_document_edit_tools(registry),
+        *register_file_locate_tool(registry),
     ]
 
 

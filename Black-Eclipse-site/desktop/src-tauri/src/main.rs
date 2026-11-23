@@ -1102,6 +1102,127 @@ fn reveal_path(raw: &str) {
     }
 }
 
+/// Open an http(s) URL in the person's real browser.
+///
+/// The desktop window is a single WebView2 instance: a `target="_blank"` link
+/// (the update download, a release page) is a new-window request the shell does
+/// not host, so without this the click does nothing. Only http(s) is accepted —
+/// a forged payload can open a web page, never run a local program.
+fn open_external(raw: &str) {
+    let url = raw.trim();
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        log_line(&format!("[external] refused (http/https only): {raw}"));
+        return;
+    }
+    let opened = {
+        #[cfg(windows)]
+        {
+            Command::new("cmd").args(["/C", "start", "", url]).spawn()
+        }
+        #[cfg(target_os = "macos")]
+        {
+            Command::new("open").arg(url).spawn()
+        }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            Command::new("xdg-open").arg(url).spawn()
+        }
+    };
+    match opened {
+        Ok(_) => log_line(&format!("[external] opened {url}")),
+        Err(err) => log_line(&format!("[external] failed: {err}")),
+    }
+}
+
+/// Save a file the page produced into the user's Downloads folder.
+///
+/// Why this exists: the desktop window is WebView2, which has no download shelf
+/// of its own — an `<a download>` click or a blob download can silently do
+/// nothing. Every download button in the app therefore sends its bytes here
+/// through the `be-save-download` event, and Rust writes a real file, reveals
+/// it and reports the absolute path back over `be-download-saved`. The browser
+/// lane keeps using the ordinary anchor download.
+fn sanitise_file_name(raw: &str) -> String {
+    let name: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '\\' | '/' | ':' | '<' | '>' | '"' | '|' | '?' | '*') {
+                '-'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let name = name.trim_matches(|c: char| c == ' ' || c == '.').replace("..", "-");
+    let name = if name.is_empty() { "eclipse-download".to_string() } else { name };
+    name.chars().take(180).collect()
+}
+
+fn unique_path_in(dir: &std::path::Path, name: &str) -> PathBuf {
+    let mut target = dir.join(name);
+    if !target.exists() {
+        return target;
+    }
+    let base = std::path::Path::new(name);
+    let stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("eclipse-download");
+    let suffix = base.extension().and_then(|s| s.to_str()).map(|s| format!(".{s}")).unwrap_or_default();
+    for index in 2..1000 {
+        target = dir.join(format!("{stem} ({index}){suffix}"));
+        if !target.exists() {
+            break;
+        }
+    }
+    target
+}
+
+/// Minimal standard-alphabet base64 decoder (no new dependency for one call).
+fn decode_base64(text: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    let mut buffer: u32 = 0;
+    let mut bits: u32 = 0;
+    for byte in text.bytes() {
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => break,
+            b'\r' | b'\n' | b' ' | b'\t' => continue,
+            _ => return None,
+        };
+        buffer = (buffer << 6) | u32::from(value);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buffer >> bits) as u8);
+            buffer &= (1u32 << bits) - 1;
+        }
+    }
+    Some(out)
+}
+
+fn write_download(dir: &std::path::Path, raw_name: &str, data: &[u8]) -> Result<PathBuf, String> {
+    if data.is_empty() {
+        return Err("the download was empty".into());
+    }
+    if data.len() > 512 * 1024 * 1024 {
+        return Err("the download is larger than 512 MB".into());
+    }
+    std::fs::create_dir_all(dir).map_err(|err| format!("could not create {}: {err}", dir.display()))?;
+    let target = unique_path_in(dir, &sanitise_file_name(raw_name));
+    std::fs::write(&target, data).map_err(|err| format!("could not write {}: {err}", target.display()))?;
+    Ok(target)
+}
+
+fn save_download(app: &AppHandle, raw_name: &str, data: &[u8]) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .download_dir()
+        .map_err(|err| format!("no Downloads folder: {err}"))?;
+    write_download(&dir, raw_name, data)
+}
+
 /// Window chrome actions. The app is served from a remote (loopback) origin,
 /// where app-defined commands are denied, so the webview reaches this through
 /// the `be-window` event; the bundled splash can invoke the command directly.
@@ -1916,6 +2037,63 @@ fn main() {
                 }
             });
 
+            // --- open an external page in the real browser ------------------------
+            // A `target="_blank"` download/release link is a new-window request the
+            // single-window shell does not host, so it used to do nothing.
+            handle.listen("be-open-external", move |event| {
+                let value = match serde_json::from_str::<serde_json::Value>(event.payload()) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        log_line(&format!("[external] bad payload: {err}"));
+                        return;
+                    }
+                };
+                if let Some(url) = value.get("url").and_then(|v| v.as_str()) {
+                    open_external(url);
+                }
+            });
+
+            // --- save a produced file to Downloads -------------------------------
+            // WebView2 in the shell has no download shelf, so a blob/anchor
+            // download can silently fail. The page sends the bytes; Rust writes
+            // a real file, reveals it and reports its absolute path.
+            let save_app = handle.clone();
+            handle.listen("be-save-download", move |event| {
+                let value = match serde_json::from_str::<serde_json::Value>(event.payload()) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        log_line(&format!("[download] bad payload: {err}"));
+                        return;
+                    }
+                };
+                let name = value.get("name").and_then(|v| v.as_str()).unwrap_or("eclipse-download");
+                let Some(encoded) = value.get("dataBase64").and_then(|v| v.as_str()) else {
+                    log_line("[download] refused: no dataBase64");
+                    return;
+                };
+                let Some(bytes) = decode_base64(encoded) else {
+                    log_line("[download] refused: dataBase64 is not base64");
+                    return;
+                };
+                match save_download(&save_app, name, &bytes) {
+                    Ok(path) => {
+                        log_line(&format!("[download] saved {}", path.to_string_lossy()));
+                        let _ = save_app.emit(
+                            "be-download-saved",
+                            serde_json::json!({ "path": path.to_string_lossy(), "name": name }),
+                        );
+                        reveal_path(&path.to_string_lossy());
+                    }
+                    Err(err) => {
+                        log_line(&format!("[download] failed: {err}"));
+                        let _ = save_app.emit(
+                            "be-download-saved",
+                            serde_json::json!({ "error": err, "name": name }),
+                        );
+                    }
+                }
+            });
+
             // --- taskbar badge / attention ---------------------------------------
             // One channel, two OS affordances. The page decides; Rust renders.
             let taskbar_app = handle.clone();
@@ -2075,6 +2253,59 @@ fn main() {
             kill_tree(&state);
         }
     });
+}
+
+/// The download bridge is pure stdlib work (base64 + a safe file name), so it
+/// can be checked without a window: a regression here is the "download button
+/// does nothing" bug coming back.
+#[cfg(test)]
+mod download_tests {
+    use super::{decode_base64, sanitise_file_name, unique_path_in};
+
+    #[test]
+    fn base64_round_trips_the_shapes_the_page_sends() {
+        assert_eq!(decode_base64("aGVsbG8=").unwrap(), b"hello");
+        assert_eq!(decode_base64("JVBERi0xLjQ=").unwrap(), b"%PDF-1.4");
+        assert_eq!(decode_base64("aGVs\nbG8=").unwrap(), b"hello");
+        assert!(decode_base64("not base64!!").is_none());
+    }
+
+    #[test]
+    fn a_download_lands_on_disk_with_its_real_bytes() {
+        // The write path the window uses, into a throwaway "Downloads" folder.
+        let dir = std::env::temp_dir().join(format!("be-dl-write-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let first = super::write_download(&dir, "Q3 report.pdf", b"%PDF-1.4 hello").unwrap();
+        assert!(first.is_absolute());
+        assert_eq!(first.file_name().unwrap(), "Q3 report.pdf");
+        assert_eq!(std::fs::read(&first).unwrap(), b"%PDF-1.4 hello");
+        let second = super::write_download(&dir, "Q3 report.pdf", b"second").unwrap();
+        assert_eq!(second.file_name().unwrap(), "Q3 report (2).pdf");
+        assert!(super::write_download(&dir, "empty.bin", b"").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_download_name_can_never_escape_downloads() {
+        let sanitised = sanitise_file_name("../../evil.pdf");
+        assert!(!sanitised.contains(".."));
+        assert!(!sanitised.contains('/') && !sanitised.contains('\\'));
+        assert!(sanitised.ends_with("evil.pdf"));
+        assert_eq!(sanitise_file_name("Q3: review?.pdf"), "Q3- review-.pdf");
+        assert_eq!(sanitise_file_name("   "), "eclipse-download");
+    }
+
+    #[test]
+    fn a_second_download_never_overwrites_the_first() {
+        let dir = std::env::temp_dir().join(format!("be-download-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let first = unique_path_in(&dir, "report.pdf");
+        assert_eq!(first.file_name().unwrap(), "report.pdf");
+        std::fs::write(&first, b"x").unwrap();
+        let second = unique_path_in(&dir, "report.pdf");
+        assert_eq!(second.file_name().unwrap(), "report (2).pdf");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 /// The badge is pure geometry, so it can be checked without a window or a

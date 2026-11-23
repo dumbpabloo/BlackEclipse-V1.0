@@ -22,6 +22,7 @@ are always refused with a recovery hint; multi-file changes are atomic.
 from __future__ import annotations
 
 import time
+import os
 from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -599,6 +600,14 @@ async def _dispatch(
         "durationMs": int((time.monotonic() - started) * 1000),
         **({"previews": previews} if previews else {}),
     })
+    # Always report the ABSOLUTE path a write landed on (Hermes does the same):
+    # "where is the file?" must be answerable, and a wrong-root write must be
+    # visible instead of silently landing in another folder.
+    if kind == "write" and isinstance(data, dict) and data.get("path") and not data.get("dryRun"):
+        root = str(getattr(getattr(service, "workspace", None), "root", "") or "")
+        if root:
+            land = str(data["path"])
+            data = {**data, "absolutePath": land if os.path.isabs(land) else os.path.join(root, land)}
     return _ok(verb, data.get("path", path) or path, data)
 
 

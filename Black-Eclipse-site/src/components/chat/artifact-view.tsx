@@ -5,6 +5,7 @@ import { Download } from '@/lib/icons';
 import { useT } from '@/lib/i18n/use-t';
 import { listArtifacts, downloadUrl, type Artifact } from '@/lib/harness/clients/artifacts-browser';
 import type { ComputedArtifact } from '@/lib/harness/analysis-types';
+import { downloadFromUrlInShell } from '@/lib/desktop/download';
 
 // ─── Phase 15/18 artifact view ──────────────────────────────────────────────
 // A produced file the run handed over: an IMAGE renders inline through the
@@ -80,9 +81,14 @@ export function ArtifactView({
   }
 
   if (entry) {
+    const href = downloadUrl(entry.id);
     return (
       <a
-        href={downloadUrl(entry.id)}
+        href={href}
+        onClick={(event) => {
+          // The desktop window has no download shelf; ask the shell to save it.
+          downloadFromUrlInShell(event, href, artifact.name);
+        }}
         className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
       >
         <Download size={11} />

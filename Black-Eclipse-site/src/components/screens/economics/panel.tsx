@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { saveBlob } from '@/lib/desktop/download';
 import * as echarts from 'echarts';
 import { Download, Loader2, Search, KeyRound, Sparkles, X } from '@/lib/icons';
 import type { EconSource } from '@/lib/economics/sources';
@@ -325,12 +326,7 @@ export function EconPanel({ source }: PanelProps) {
       }).join(',')
     )];
     const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${source.id}_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    saveBlob(`${source.id}_${new Date().toISOString().slice(0, 10)}.csv`, blob);
   };
 
   // ─── PNG export ─────────────────────────────────────────────────────────

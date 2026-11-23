@@ -24,6 +24,12 @@ def summarize(data: dict[str, Any], *, verb: str, path: str) -> str:
         text = f"{verb} {path}.\n{data['diff'][:2000]}"
     else:
         text = f"{verb} {path}."
+    # Name the ABSOLUTE path. A model that only hears "src/x.py" cannot answer
+    # "where is it?" — and a mismatch with the folder the person expects stays
+    # invisible. Never repeat it when it equals what was already shown.
+    absolute = data.get("absolutePath")
+    if absolute and str(absolute) != str(path):
+        text += f"\nAbsolute path: {absolute}"
     extra = [
         render_format(data.get("format")),
         render_diagnostics(data.get("diagnostics")),

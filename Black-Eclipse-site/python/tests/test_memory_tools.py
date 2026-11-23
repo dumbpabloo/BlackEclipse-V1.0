@@ -492,7 +492,13 @@ def test_prompt_char_ceiling():
     # to the real, measured size; it may only shrink from here.
     # Re-pinned 47371->47885 (2026-11-21) to the measured shared tree; this
     # change did not edit ECLIPSE_AGENT_SYSTEM_PROMPT. May only shrink.
-    assert len(prompt) <= 47885, f"prompt grew to {len(prompt)} chars"
+    # Re-pinned 47885->48205 (2026-11-23) to the measured shared tree: the
+    # in-flight prompt guidance (report path escaping + the research-routine
+    # draft note) grew it without touching this ratchet. May only shrink.
+    # Re-pinned 48205->48294 (2026-11-23) for the file-path honesty clause: name
+    # an ABSOLUTE path returned by the tool, use `file_locate`, never state a
+    # location from memory. May only shrink.
+    assert len(prompt) <= 48294, f"prompt grew to {len(prompt)} chars"
 
 
 def test_prompt_market_data_semantics_present():

@@ -30,6 +30,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { canRestartFromShell } from '@/lib/desktop/update-bridge';
+import { externalLinkProps } from '@/lib/desktop/external';
 import { saveUpdatePrefs } from '@/lib/updates/prefs';
 import { useUpdateApply } from '@/lib/updates/use-update-apply';
 import { useUpdateStatus } from '@/lib/updates/use-update-status';
@@ -270,9 +271,7 @@ export function UpdateButton() {
               <div className="flex flex-wrap items-center gap-2">
                 {downloadOnly && downloadHref && (
                   <a
-                    href={downloadHref}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                    {...externalLinkProps(downloadHref)}
                     className="inline-flex items-center gap-1 rounded-xl bg-primary px-2.5 py-1.5 text-[11px] font-medium text-primary-foreground transition-colors hover:bg-primary/90"
                   >
                     <Download size={12} />
@@ -308,9 +307,7 @@ export function UpdateButton() {
                 )}
                 {status?.notesUrl && (
                   <a
-                    href={status.notesUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                    {...externalLinkProps(status.notesUrl)}
                     className="inline-flex items-center gap-1 rounded-xl border border-white/10 px-2.5 py-1.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
                   >
                     What&apos;s new

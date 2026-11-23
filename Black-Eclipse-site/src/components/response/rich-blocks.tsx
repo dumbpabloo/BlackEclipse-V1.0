@@ -23,6 +23,7 @@ import { cn } from '@/lib/utils';
 import { Markdown } from '@/components/chat/markdown';
 import { resolveResponseIcon } from '@/lib/response/icons';
 import { downloadUrl } from '@/lib/harness/clients/artifacts-browser';
+import { downloadFromUrlInShell } from '@/lib/desktop/download';
 import type {
   ActionGroupBlock as ActionGroupBlockType,
   ArtifactBlock as ArtifactBlockType,
@@ -476,6 +477,11 @@ export function ArtifactBlock({ block }: { block: ArtifactBlockType }) {
                   <a
                     href={href}
                     {...(artifact.artifactId ? { download: true } : { target: '_blank', rel: 'noopener noreferrer' })}
+                    onClick={
+                      artifact.artifactId
+                        ? (event) => downloadFromUrlInShell(event, href, artifact.name)
+                        : undefined
+                    }
                     className="mt-1 inline-flex items-center gap-1 text-[11px] text-primary underline underline-offset-2 hover:opacity-80"
                   >
                     {artifact.artifactId ? <Download size={11} /> : <ExternalLink size={11} />}

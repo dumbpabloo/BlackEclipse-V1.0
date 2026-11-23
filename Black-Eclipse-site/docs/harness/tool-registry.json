@@ -1,7 +1,7 @@
 {
-  "digest": "2f95165df746631c",
+  "digest": "8d5189419fdb304a",
   "manifestVersion": "1",
-  "toolCount": 1115,
+  "toolCount": 1116,
   "tools": [
     {
       "deprecated": false,
@@ -11410,7 +11410,7 @@
     },
     {
       "deprecated": false,
-      "description": "Create a downloadable document the user asked for and save it to the Eclipse Artifact Center. Builds REAL files: Word (.docx), Excel (.xlsx), PowerPoint (.pptx), and also Markdown, CSV, JSON or plain text. Provide a `format` and a `title`, plus the content for that format: `blocks` (heading/paragraph/bullets/numbers/table/page_break) for docx/markdown/txt; `sheets` [{name, rows}] for xlsx; `slides` [{title, bullets, notes}] for pptx; `rows` for csv/json. Never claim a document was created unless this tool returns success — a missing writer library or artifact store is reported as an error, not faked.",
+      "description": "Create a downloadable document the user asked for, save it to the Eclipse Artifact Center AND write a readable copy to Documents/Eclipse (or `saveTo`); the result names its ABSOLUTE path. Builds REAL files: Word (.docx), Excel (.xlsx), PowerPoint (.pptx), and also Markdown, CSV, JSON or plain text. Provide a `format` and a `title`, plus the content for that format: `blocks` (heading/paragraph/bullets/numbers/table/page_break) for docx/markdown/txt; `sheets` [{name, rows}] for xlsx; `slides` [{title, bullets, notes}] for pptx; `rows` for csv/json. Never claim a document was created unless this tool returns success — a missing writer library or artifact store is reported as an error, not faked.",
       "effect": null,
       "inputSchema": {
         "properties": {
@@ -11498,6 +11498,10 @@
               ]
             },
             "type": "array"
+          },
+          "saveTo": {
+            "description": "Where the readable copy goes: 'documents' (default), 'downloads', 'desktop', or an absolute folder path.",
+            "type": "string"
           },
           "sheets": {
             "description": "Worksheets for xlsx; the first row is a bolded header.",
@@ -11878,7 +11882,7 @@
     },
     {
       "deprecated": false,
-      "description": "Assemble and save a real report the user asked for: PDF, Word, Excel, PowerPoint, Markdown or plain text. Give a title and `blocks` (heading/paragraph/bullets/numbers/table/page_break) or `sheets` for Excel. Computed values must be labelled as computed, with their inputs and method. The file is registered in the Artifact Center; a missing writer or storage layer is reported honestly, never replaced by a fake file.",
+      "description": "Assemble and save a real report the user asked for: PDF, Word, Excel, PowerPoint, Markdown or plain text. Give a title and `blocks` (heading/paragraph/bullets/numbers/table/page_break) or `sheets` for Excel. Computed values must be labelled as computed, with their inputs and method. The file is registered in the Artifact Center AND written to a real folder (Documents/Eclipse by default, or `saveTo`); the result names its ABSOLUTE path — give that path to the user. A missing writer or storage layer is reported honestly, never replaced by a fake file.",
       "effect": null,
       "inputSchema": {
         "properties": {
@@ -11949,6 +11953,10 @@
               "txt",
               "text"
             ],
+            "type": "string"
+          },
+          "saveTo": {
+            "description": "Where the readable copy goes: 'documents' (default), 'downloads', 'desktop', or an absolute folder path.",
             "type": "string"
           },
           "sheets": {
@@ -12797,6 +12805,47 @@
         "type": "object"
       },
       "name": "file_hash",
+      "permission": "read",
+      "replacement": null,
+      "risk": "low",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
+      "description": "Find a file the person already has (or one you just produced) and return its ABSOLUTE path. Searches the Eclipse export folder, Downloads, Documents and Desktop, newest first. Use it whenever the answer needs a real path — never say 'it is in your home folder'. Filter by name fragment or glob, extension and age.",
+      "effect": null,
+      "inputSchema": {
+        "properties": {
+          "extensions": {
+            "description": "Optional extensions without the dot, e.g. ['pdf','xlsx'].",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "folders": {
+            "description": "Absolute folders to search instead of the default set.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "description": "Max results (1-200, default 25).",
+            "type": "integer"
+          },
+          "query": {
+            "description": "Name fragment or glob, e.g. 'ulcer', 'report', '*.pdf'. Default '*'.",
+            "type": "string"
+          },
+          "sinceDays": {
+            "description": "Only files modified in the last N days.",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "name": "file_locate",
       "permission": "read",
       "replacement": null,
       "risk": "low",

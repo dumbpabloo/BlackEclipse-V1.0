@@ -460,6 +460,21 @@ Decisions worth keeping:
     minimizing forever. `auto_start` defaults to `false` and is not migrated.
 - **Logs:** `.black-eclipse/desktop-native.log`, truncated at 8 MB. Read
   byte-wise (lossy), so non-UTF-8 output from Python/Next cannot end the stream.
+- **Downloads are written by the shell, not WebView2.** WebView2 has no download
+  shelf: an `<a download>` click or a `blob:` download could silently do nothing
+  ("the download button is broken"). Every download surface therefore hands its
+  bytes to the shell over the `be-save-download` core event (name + base64); Rust
+  writes a real file in the OS **Downloads** folder with a collision-safe name,
+  reveals it in Explorer and reports the absolute path back on
+  `be-download-saved`. Client helpers: `src/lib/desktop/download.ts`
+  (`saveDownloadViaShell`, `downloadFromUrlInShell`), used by the response
+  JSON/MD/PDF actions, the Artifact Center, chart PNG, 3D/CAD exports and
+  interactive-app HTML. A browser (no bridge) keeps the anchor download.
+- **External links open in the real browser.** A `target="_blank"` anchor is a
+  new-window request this single-window shell does not host, so the update panel's
+  installer link and "What's new" used to do nothing. They now go through
+  `be-open-external` (`src/lib/desktop/external.ts`); Rust accepts `http(s)` only
+  and hands the URL to the OS.
 
 ## Known limits (documented, not hidden)
 
@@ -471,5 +486,6 @@ Decisions worth keeping:
   scheduler and any in-flight run; the shell does not call
   `SetThreadExecutionState`. Sign-in autostart is Windows-only today — a
   macOS/Linux shell must replace the one `set_login_item` function.
-- Playwright/PDF features that expect a browser download are untested inside
-  WebView2.
+- Playwright features that expect a browser download are untested inside
+  WebView2; the app's own download buttons no longer depend on it (see the
+  shell-owned download bridge above).

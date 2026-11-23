@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 from ..tools import ToolContext, ToolDefinition, ToolRegistry
 from .authoring import DocumentError, block_headings, report_authored_document
+from .outputs import publish_copy
 from .reporting import REPORT_FORMATS, build_report, report_extension, report_mime
 from .tools import _owner, _service, _with_extension
 
@@ -79,14 +80,19 @@ async def _report(args: dict[str, Any], ctx: ToolContext) -> tuple[str, Any]:
     )
 
     mime = report_mime(raw_format)
+    # A copy the person can actually open: the Artifact Center is the catalog,
+    # this is the address. The absolute path goes back in the tool result so the
+    # answer can name it instead of saying "it's somewhere in Documents".
+    published, note = publish_copy(data, filename, args.get("saveTo"))
     return _ok(
         f"Created {raw_format.upper()} report {artifact.name!r} "
-        f"({artifact.size_bytes or len(data)} bytes) as artifact {artifact.id}.",
+        f"({artifact.size_bytes or len(data)} bytes) as artifact {artifact.id}.{note}",
         {
             "artifact": artifact.model_dump(by_alias=True),
             "bytes": len(data),
             "format": raw_format,
             "mimeType": mime,
+            "path": published,
         },
     )
 
@@ -101,7 +107,9 @@ def register_report_tools(registry: ToolRegistry) -> list[str]:
             "PowerPoint, Markdown or plain text. Give a title and `blocks` "
             "(heading/paragraph/bullets/numbers/table/page_break) or `sheets` for "
             "Excel. Computed values must be labelled as computed, with their inputs "
-            "and method. The file is registered in the Artifact Center; a missing "
+            "and method. The file is registered in the Artifact Center AND written "
+            "to a real folder (Documents/Eclipse by default, or `saveTo`); the "
+            "result names its ABSOLUTE path — give that path to the user. A missing "
             "writer or storage layer is reported honestly, never replaced by a fake file."
         ),
         input_schema={
@@ -111,6 +119,10 @@ def register_report_tools(registry: ToolRegistry) -> list[str]:
                 "subtitle": {"type": "string"},
                 "format": {"type": "string", "enum": ["pdf", "docx", "xlsx", "pptx", "markdown", "md", "txt", "text"]},
                 "filename": {"type": "string"},
+                "saveTo": {
+                    "type": "string",
+                    "description": "Where the readable copy goes: 'documents' (default), 'downloads', 'desktop', or an absolute folder path.",
+                },
                 "description": {"type": "string"},
                 "footer": {"type": "string"},
                 "tags": {"type": "array", "items": {"type": "string"}},

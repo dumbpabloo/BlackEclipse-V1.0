@@ -27,6 +27,7 @@ import {
   type Artifact, type ArtifactCategory, type ArtifactPreview,
   type ArtifactVersion, type ListParams,
 } from '@/lib/harness/clients/artifacts-browser';
+import { downloadFromUrlInShell } from '@/lib/desktop/download';
 
 type ViewMode = 'grid' | 'list';
 
@@ -380,7 +381,7 @@ function DetailDrawer({
         <PreviewBody artifact={detail} preview={preview} />
 
         <div className="flex flex-wrap gap-2">
-          <a href={downloadUrl(detail.id)} className="glass-card-subtle rounded-lg px-3 py-1.5 text-xs text-foreground flex items-center gap-1.5 hover:bg-white/5">
+          <a href={downloadUrl(detail.id)} onClick={(event) => downloadFromUrlInShell(event, downloadUrl(detail.id), detail.name)} className="glass-card-subtle rounded-lg px-3 py-1.5 text-xs text-foreground flex items-center gap-1.5 hover:bg-white/5">
             <Download className="h-3.5 w-3.5" /> {t('artifacts.download')}
           </a>
           <button type="button" onClick={rename} className="glass-card-subtle rounded-lg px-3 py-1.5 text-xs text-foreground hover:bg-white/5">
@@ -458,7 +459,7 @@ function DetailDrawer({
                 </span>
                 <span className="flex items-center gap-2 text-muted-foreground/60">
                   {humanSize(v.sizeBytes)}
-                  <a href={downloadUrl(detail.id, v.versionNumber)} className="text-sky-400 hover:underline">
+                  <a href={downloadUrl(detail.id, v.versionNumber)} onClick={(event) => downloadFromUrlInShell(event, downloadUrl(detail.id, v.versionNumber), detail.name)} className="text-sky-400 hover:underline">
                     <Download className="h-3.5 w-3.5" />
                   </a>
                 </span>

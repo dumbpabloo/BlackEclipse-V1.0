@@ -5,6 +5,7 @@
 // the dashboard switcher, onboarding, widget library, and config panel.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { saveBlob } from '@/lib/desktop/download';
 import { confirmDialog, promptDialog } from '@/lib/ui/confirm-dialog';
 import { createPortal } from 'react-dom';
 import { usePageShortcuts } from '@/hooks/use-page-shortcuts';
@@ -634,12 +635,7 @@ export function DashboardScreen({ active = true }: { active?: boolean }) {
               const json = dashboards.exportLayout(dashboards.activeId!);
               if (!json) return;
               const blob = new Blob([json], { type: 'application/json' });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = `${dashboards.active?.name ?? 'dashboard'}.json`;
-              a.click();
-              URL.revokeObjectURL(url);
+              saveBlob(`${dashboards.active?.name ?? 'dashboard'}.json`, blob);
             }}
             className="glass-button hidden items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold text-muted-foreground hover:text-primary transition-all cursor-pointer sm:inline-flex"
             title="Export this dashboard layout"

@@ -7,6 +7,7 @@
 // language. All counts are real; no fabricated activity.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { saveBlob } from "@/lib/desktop/download";
 import { promptDialog } from "@/lib/ui/confirm-dialog";
 import {
   Activity, AlertCircle, Brain, Database, FileText, MessageSquare, Plus,
@@ -1179,10 +1180,7 @@ function Sessions({ isOperator }: { isOperator: boolean }) {
                           try {
                             const body = await exportChatSession(session.id);
                             const blob = new Blob([JSON.stringify(body, null, 2)], { type: "application/json" });
-                            const url = URL.createObjectURL(blob);
-                            const a = document.createElement("a");
-                            a.href = url; a.download = `${session.id}.json`; a.click();
-                            URL.revokeObjectURL(url);
+                            saveBlob(`${session.id}.json`, blob);
                           } catch (err) { notify(err instanceof Error ? err.message : "export failed"); }
                         }}>Export</Button>
                       <Button size="sm" variant="outline" className="rounded-xl cursor-pointer text-rose-300"
@@ -2080,12 +2078,7 @@ function Health({ isOperator }: { isOperator: boolean }) {
     try {
       const payload = await exportMemory();
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `eclipse-memory-export-${new Date().toISOString().slice(0, 10)}.json`;
-      anchor.click();
-      URL.revokeObjectURL(url);
+      saveBlob(`eclipse-memory-export-${new Date().toISOString().slice(0, 10)}.json`, blob);
       setToast(`Exported ${payload.counts.memories} memories`);
     } catch (err) { setToast(err instanceof Error ? err.message : "export failed"); }
     finally { setBusy(false); setTimeout(() => setToast(null), 5000); }

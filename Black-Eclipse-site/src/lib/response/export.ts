@@ -8,16 +8,12 @@ import { finalizeParsed } from './finalize';
 import { toMarkdownProjection } from './projection';
 import { fetchChartPng } from './chart-registry';
 import { inlineText, parseMarkdown } from '@/lib/chat/markdown';
+import { saveBlob } from '@/lib/desktop/download';
 
 export function downloadBlob(filename: string, blob: Blob): void {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  // One download path for the whole app: the desktop shell writes the file (and
+  // reveals it); a browser keeps the anchor download.
+  saveBlob(filename, blob);
 }
 
 export function toBase64Utf8(text: string): string {

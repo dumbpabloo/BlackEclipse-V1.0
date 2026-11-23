@@ -10,6 +10,7 @@ import {
   Briefcase, Car, Coins, Flame, Gem, GraduationCap, Heart, Home, Landmark,
   PiggyBank, Plane, Rocket, Shield, Sprout, Target, TrendingUp,
 } from '@/lib/icons';
+import { saveBlob } from '@/lib/desktop/download';
 import type { ComponentType } from 'react';
 import { newTxId, type Fund, type Transaction } from '@/lib/portfolio/types';
 
@@ -186,12 +187,7 @@ export function computeCash(transactions: Transaction[]): number {
 
 function triggerDownload(content: string, filename: string, mime: string) {
   const blob = new Blob([content], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
+  saveBlob(filename, blob);
 }
 
 const csvEscape = (v: unknown) => {

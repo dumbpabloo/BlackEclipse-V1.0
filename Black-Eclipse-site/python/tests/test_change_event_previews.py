@@ -79,6 +79,23 @@ def test_write_file_event_redacts_secret_shaped_values(tmp_path, monkeypatch):
     assert "«redacted»" in preview["diff"]
 
 
+def test_write_file_reports_the_absolute_path_it_wrote(tmp_path, monkeypatch):
+    """A write must be answerable with a real path — "where is it?" has no
+    future if the tool only says "src/config.py"."""
+    root = tree(tmp_path)
+    monkeypatch.setenv("BLACK_ECLIPSE_CODE_ROOT", str(root))
+    registry, ctx, _emitter = _ctx(root)
+    result = _call(registry, "write_file", {
+        "path": "src/config.py", "content": "VALUE = 1\n", "createIfMissing": True,
+    }, ctx)
+    assert result.ok
+    absolute = result.data["absolutePath"]
+    import os
+    assert os.path.isabs(absolute)
+    assert os.path.realpath(absolute) == os.path.realpath(root / "src" / "config.py")
+    assert absolute in result.text
+
+
 def test_dry_run_emits_no_preview(tmp_path, monkeypatch):
     root = tree(tmp_path)
     monkeypatch.setenv("BLACK_ECLIPSE_CODE_ROOT", str(root))

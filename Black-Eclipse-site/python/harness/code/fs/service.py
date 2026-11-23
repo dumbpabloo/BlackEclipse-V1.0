@@ -69,6 +69,11 @@ class FileSystemService:
         self._run_id = str(run_id or "")
         self._turn_key = str(turn_key or run_id or "")
 
+    @property
+    def workspace(self) -> Optional[ResolvedWorkspace]:
+        """The bound workspace, so a caller can name an ABSOLUTE path it wrote to."""
+        return self._ws
+
     def _before_mutation(self, reason: str = "before-write") -> None:
         """W7: one shadow snapshot per run before the first file mutation."""
         if self._ws is None:

@@ -26,6 +26,7 @@ import { cn } from '@/lib/utils';
 import { useChartPalette } from '@/lib/chart-palette-store';
 import type { ChartPalette } from '@/lib/chart-palette';
 import { applyChartPalette } from './apply-palette';
+import { hasDownloadBridge, saveDownloadViaShell } from '@/lib/desktop/download';
 
 export interface PlotlyFigure {
   data: Array<Record<string, unknown>>;
@@ -356,10 +357,15 @@ export function PlotlyChart({
     if (!host || !Plotly?.toImage) return;
     try {
       void Plotly.toImage(host, { format: 'png', scale: 2, height: height * 2, width: host.clientWidth * 2 })
-        .then((url: string) => {
+        .then(async (url: string) => {
+          const filename = `eclipse-chart-${Date.now()}.png`;
+          if (hasDownloadBridge()) {
+            const blob = await fetch(url).then((response) => response.blob());
+            if (saveDownloadViaShell(filename, blob)) return;
+          }
           const link = document.createElement('a');
           link.href = url;
-          link.download = `eclipse-chart-${Date.now()}.png`;
+          link.download = filename;
           link.click();
         })
         .catch(() => {

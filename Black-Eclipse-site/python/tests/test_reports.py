@@ -21,7 +21,8 @@ BLOCKS = [
 
 
 @pytest.fixture()
-def ctx(tmp_path):
+def ctx(tmp_path, monkeypatch):
+    monkeypatch.setenv("ECLIPSE_OUTPUT_DIR", str(tmp_path / "exports"))
     store = AgentMemoryStore(str(tmp_path / "agent-memory.db"))
     registry = ToolRegistry()
     register_document_authoring_tools(registry)

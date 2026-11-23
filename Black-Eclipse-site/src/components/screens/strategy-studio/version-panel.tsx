@@ -6,6 +6,7 @@
 // bundle as JSON. It adds no version logic of its own.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { saveBlob } from '@/lib/desktop/download';
 import {
   backtestClient,
   type StrategyDiff,
@@ -117,12 +118,7 @@ export function VersionPanel({
       const bundle = await backtestClient.exportBundle(strategy.id, b || strategy.version);
       if (typeof window === 'undefined') return;
       const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `${strategy.id}@${b || strategy.version}.bundle.json`;
-      anchor.click();
-      URL.revokeObjectURL(url);
+      saveBlob(`${strategy.id}@${b || strategy.version}.bundle.json`, blob);
     } catch (err) {
       onError(err instanceof Error ? err.message : 'could not export the bundle');
     } finally {

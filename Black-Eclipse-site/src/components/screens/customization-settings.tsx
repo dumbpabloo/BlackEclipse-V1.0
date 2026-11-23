@@ -17,6 +17,7 @@
 // Tabs: Theme Â· Glass & Surfaces Â· Aurora Â· Charts Â· ChatBot Page Â· Language & Access.
 
 import { useEffect, useRef, useState } from "react";
+import { saveBlob } from "@/lib/desktop/download";
 import {
   Accessibility, Languages, RotateCcw, Palette, Image as ImageIcon,
   Type, SlidersHorizontal, Sparkles, Check, Sun, AlertTriangle,
@@ -439,12 +440,7 @@ export function CustomizationSettingsPanel({ generalTab }: { generalTab?: React.
       // whole look. `background` is a partial snapshot of the live prefs.
       const payload = { ...draft, background: currentBackgroundSnapshot() };
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${(draft.appName || "eclipse").replace(/\s+/g, "-").toLowerCase()}-theme.json`;
-      a.click();
-      URL.revokeObjectURL(url);
+      saveBlob(`${(draft.appName || "eclipse").replace(/\s+/g, "-").toLowerCase()}-theme.json`, blob);
     } catch {
       /* download unavailable â€” no-op */
     }
