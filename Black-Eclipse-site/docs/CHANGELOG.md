@@ -6,6 +6,15 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-23
 
+- **release: v0.4.27 published — the signed update manifest is live.** `Desktop release` built the
+  Windows installer (`BlackEclipse-Setup-0.4.27.exe`, 195,084,048 bytes, sha256 `9c4acc15…`), the
+  `-full` installer, the prebuilt `BlackEclipse-Build-0.4.27.zip` (80,021,739 bytes, buildId
+  `qNUlhzNwPDc-CUqdH8B2l`) and the packs into a draft; `stable.json` was then signed offline with key id
+  `47e545f302249385` against tag commit `1140efa9`, uploaded to the release, and the release promoted to
+  latest. `node scripts/update.js --check` now reports *latest signed release: v0.4.27*, so installs on
+  0.4.26 see the update. Uses the documented order: sign -> upload -> publish.
+  docs updated: `docs/UPDATES.md` (release state), `docs/CHANGELOG.md`.
+
 - **chore(docs): rotate the oldest changelog section into `docs/changelog/2026-11.md`.**
   Adding today's section put the file at 8 dated sections, over the 7-section window that
   `src/lib/changelog-guard.test.ts` enforces (it failed CI's Vitest step). `npm run rotate:changelog --
