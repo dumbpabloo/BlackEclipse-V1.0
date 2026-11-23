@@ -192,6 +192,9 @@
     "postcss": "8.5.33",
     "effect": "3.22.5",
     "minimatch": "11.0.9",
+    "@eslint/eslintrc": {
+      "minimatch": "^3.1.5"
+    },
     "mermaid": {
       "katex": "0.19.1"
     }

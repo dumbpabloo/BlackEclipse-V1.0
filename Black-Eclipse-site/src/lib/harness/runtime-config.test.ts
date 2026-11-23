@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import fs from "fs";
+import os from "os";
 import path from "path";
 import {
   PYTHON_CHART_PACKAGES,
@@ -127,7 +128,7 @@ describe("chart engine dependency contract", () => {
 
 describe("project-root discovery", () => {
   it("finds the checkout from a nested pinned-release cwd", () => {
-    const root = fs.mkdtempSync(path.join(require("os").tmpdir(), "be-root-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "be-root-"));
     fs.mkdirSync(path.join(root, "python", "harness"), { recursive: true });
     fs.writeFileSync(path.join(root, "python", "harness", "main.py"), "");
     const nested = path.join(root, "releases", "stable", "build", ".next", "server");

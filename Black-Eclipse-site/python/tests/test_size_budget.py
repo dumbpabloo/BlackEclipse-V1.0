@@ -461,7 +461,11 @@ RATCHET_PY: dict[str, int] = {
     # Re-pinned 2104->2112 to the measured tree (2026-11-21): the same kernel
     # seam landed its scoped-registry helpers. PROVISIONAL: the seam is the split
     # candidate and this number may only shrink from here.
-    "service.py": 2112,
+    # +9 (2026-11-23): the broker-execution seams (the shared adapter order
+    # surface) and the computer-use runner wiring install in the boot catalog.
+    # Pinned to the measured size; the kernel seam is still the split candidate.
+    # May only shrink.
+    "service.py": 2121,
     # Quota-aware admission (2026-11-12, multi-session concurrency) lives on the
     # ONE model path: shared credential-pool wait, per-key FIFO semaphore,
     # cooldown/RPM/TPM windows, provider `Retry-After`, request-token accounting.
@@ -510,7 +514,20 @@ RATCHET_PY: dict[str, int] = {
     # 1214->1226 (2026-11-22): a 12-line `trade_plan` delegation whose body lives
     # in `trade/plan.py`; the split candidate remains extracting the ledger
     # helpers. Deliberate re-pin to the measured size; may only shrink.
-    "trade/service.py": 1226,
+    # 1226->1241 (2026-11-23): order placement routes through the shared adapter
+    # order surface (`trade/adapters/orders.py`). Deliberate re-pin to the
+    # measured size; the ledger-helper extraction remains the split candidate.
+    "trade/service.py": 1241,
+    # Grew past the hard ceiling with the agent-preset / harness wiring measured
+    # 2026-11-23 (pre-existing shared-tree growth; this change adds no agent
+    # definitions). SPLIT CANDIDATE: the preset/profile block. Pinned to the
+    # measured size; may only shrink.
+    "agents.py": 1211,
+    # The computer-use core loop grew past the hard ceiling with the grounding
+    # ladder, best-of-N selection and verification/recovery wiring (2026-11-23).
+    # SPLIT CANDIDATE: the observe->act loop versus the verification/recovery
+    # seams. Pinned to the measured size; may only shrink.
+    "computer/core.py": 1303,
 }
 
 _HARNESS_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "harness")

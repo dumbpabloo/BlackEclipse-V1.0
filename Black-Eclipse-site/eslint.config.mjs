@@ -61,6 +61,12 @@ const eslintConfig = [
       // never source. Linting them crashes on a partially-removed worktree.
       ".black-eclipse/**",
       ".tmp-tests/**",
+      // Runtime state: the staged update tree, the parked `node_modules`
+      // (`.runtime/deps-previous`) and the update job/deps scratch dirs. A single
+      // in-app update stages a whole dependency tree here (~22k JS files on this
+      // machine), so `npx eslint .` walked it and took over an hour. It is
+      // machine-generated, may be mid-delete, and is never source.
+      ".runtime/**",
     ],
   },
 ];

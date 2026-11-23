@@ -496,7 +496,7 @@ export function TradingSettingsPanel() {
           <div>
             <p className="text-xs font-semibold text-foreground">Add a broker connection</p>
             <p className="text-[10px] text-muted-foreground">
-              Pick any registered kind. The fields follow that broker's auth style; a credential is
+              Pick any registered kind. The fields follow that broker&apos;s auth style; a credential is
               a NAME (env var or secret:// ref), never a value.
             </p>
           </div>
