@@ -228,6 +228,24 @@ def ensure_authority(
     if mode == "shadow" or not str(trial.get("connectionId") or ""):
         return {"renewed": False, "reason": "shadow" if mode == "shadow" else "no connection"}
 
+    # An edit to the bot BUMPS its version and must invalidate the grant. The
+    # runner refuses the order with BOT_VERSION_STALE; renewal must refuse too,
+    # instead of minting a mandate pinned to the new version behind the
+    # operator's back. The operator re-grants through the normal prepare form.
+    pinned_version = trial.get("botVersion")
+    if (
+        str(trial.get("botId") or "")
+        and bot_version is not None
+        and pinned_version is not None
+        and int(pinned_version) != int(bot_version)
+    ):
+        raise TradeRefused(
+            "BOT_VERSION_STALE",
+            "this bot changed since its trading authority was granted; "
+            "re-grant trading authority",
+            status_code=409,
+        )
+
     connection_id = str(trial["connectionId"])
     arm: Optional[dict[str, Any]] = None
     if mode == "live":

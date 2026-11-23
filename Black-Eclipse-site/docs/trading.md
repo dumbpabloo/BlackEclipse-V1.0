@@ -515,7 +515,10 @@ re-arming). Neither route places an order.
 
 Renewal is a **bot** behaviour: `run_once` calls it only when an `automation_id`
 is present. A manual trial or a graph-run order (no automation id) keeps the old
-exact path and is never renewed behind the operator's back.
+exact path and is never renewed behind the operator's back. An **edit** to the
+bot bumps its version and invalidates the grant: renewal refuses
+`BOT_VERSION_STALE` before creating anything, exactly like the run path, so the
+operator must re-grant through the normal prepare form.
 
 ### Visual teaching (P8)
 

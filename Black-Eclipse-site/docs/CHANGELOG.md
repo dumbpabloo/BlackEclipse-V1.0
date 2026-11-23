@@ -205,6 +205,15 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
   `gitignore-guard` line-ending test rejects. Rewrote the file with LF only.
   no doc change — formatting repair in an unrelated test file (CHANGELOG entry).
 
+- **fix(trading): renewal refuses after an edit instead of silently re-arming.**
+  Verifying the live UI on a real demo bot showed `Renew now` minting a mandate
+  pinned to the bot's NEW version while the trial was still pinned to the old
+  one — the documented rule is that an edit invalidates the grant.
+  `ensure_authority` now raises `BOT_VERSION_STALE` before creating anything when
+  the trial's pinned version differs from the bot's current version, matching the
+  run path. Tests: `test_trade_renewal` (10).
+  Docs updated: `docs/trading.md` (renewal boundary), `docs/CHANGELOG.md`.
+
 - **release: v0.4.27 published — the signed update manifest is live.** `Desktop release` built the
   Windows installer (`BlackEclipse-Setup-0.4.27.exe`, 195,084,048 bytes, sha256 `9c4acc15…`), the
   `-full` installer, the prebuilt `BlackEclipse-Build-0.4.27.zip` (80,021,739 bytes, buildId

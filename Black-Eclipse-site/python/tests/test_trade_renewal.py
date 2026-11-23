@@ -240,6 +240,35 @@ def test_a_live_entry_renews_the_arm_before_it_expires(tmp_path):
     assert live.trial["mandateId"] == mandate["id"]
 
 
+def test_renewal_refuses_after_the_bot_changed(tmp_path):
+    service = _service(tmp_path)
+    connection = _connection(service, mode="demo")
+    old = service.create_mandate(
+        connection["id"],
+        {
+            "mode": "demo", "symbols": ["EURUSD"], "maxOrders": 4,
+            "maxMargin": 100, "ttlSeconds": 86400,
+            "confirmation": f"MANDATE DEMO {connection['label']}",
+        },
+    )
+    live = _FakeLive({
+        "mode": "demo", "connectionId": connection["id"],
+        "mandateId": old["id"], "symbols": ["EURUSD"],
+        "maxOrders": 4, "maxMargin": 100,
+        "botId": "aut_test", "botVersion": 1, "pin": "strategy:x:1",
+    })
+
+    with pytest.raises(TradeRefused) as caught:
+        renewal.ensure_authority(
+            service, live, "trial_1",
+            automation_id="aut_test", bot_version=2, force=True,
+        )
+    assert caught.value.code == "BOT_VERSION_STALE"
+    # Nothing was minted and the old grant is untouched.
+    assert live.trial["mandateId"] == old["id"]
+    assert len(service.list_mandates(connection["id"])) == 1
+
+
 def test_a_forced_renewal_of_an_expired_arm_is_a_clear_refusal(tmp_path):
     service = _service(tmp_path)
     connection = _connection(service, mode="live")
