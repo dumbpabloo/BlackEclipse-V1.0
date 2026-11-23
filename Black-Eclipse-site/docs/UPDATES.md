@@ -1,7 +1,7 @@
 ---
 title: Updates & Release Signing
 status: Current
-last-verified: 2026-11-21
+last-verified: 2026-11-22
 ---
 
 # Updates & Release Signing
@@ -100,7 +100,7 @@ key-order/whitespace ambiguity: change one byte and verification fails.
 | Title-bar update button + panel | `src/components/layout/update-button.tsx` (mounted by `desktop-tab-bar.tsx`) |
 | Update status hook (shared) | `src/lib/updates/use-update-status.ts` |
 | Stage an update in-app | `scripts/update-apply.js` (git checkout+build for a source tree; signed-installer download for a packaged install) (spawned by the shell via `be-update`, or by `src/app/api/updates/apply/route.ts` as a fallback) |
-| Native-module lock probe (node_modules safety) | `scripts/lib/update-locks.js` |
+| Dependency install (staged + atomic swap, never empties the live tree) | `scripts/lib/deps-install.js` (tests in `src/lib/updates/deps-install.test.ts`) |
 | Staged-job reader (spent-job filtering) | `src/lib/updates/job.ts` (tests in `job.test.ts`) |
 | Restart into the staged build | `src/lib/desktop/update-bridge.ts` (Tauri event `be-update`) → `main.rs` listener |
 | Dismiss/skip/enable prefs | `src/lib/updates/prefs.ts` (`be_update_prefs_v1`) |
@@ -338,13 +338,20 @@ every platform, not only Windows.
   (Settings › Check now, and the panel's refresh) bypasses the cache; the client
   interval plus focus checks make a short TTL timely without hammering GitHub.
 - The banner appears only when the manifest verifies and the version is newer.
-  It offers **How to update** (copy `black update`), **What's new**, **Skip this
-  version**, and dismiss.
+  It **acts**, it does not just announce: **Update now** runs the same staged
+  update as the title-bar panel (one shared hook, `use-update-apply.ts`), shows
+  the job's phase/message, and offers **Restart Eclipse** once the build is
+  staged. **What's new**, **Skip this version**, dismiss, and a "Use a terminal"
+  fallback for `black update` remain. A packaged install with no shell bridge
+  gets **Download vX** instead.
+- A staged-but-not-restarted build is recognised, not re-downloaded: if the
+  promoted release is already newer than the running one, the runner answers
+  "Restart Eclipse to switch to it" instead of staging the same release again —
+  the "it keeps telling me to update" loop.
 - Settings › General › Updates has the on/off toggle, a manual **Check now**,
   and honest result text (up to date / available / could not check).
-- The title-bar download button shows the same answer with a dot, and is the
-  surface that can actually stage the release — see
-  [In-app updates](#in-app-updates-title-bar-download-button).
+- The title-bar download button shows the same answer with a dot, and stages the
+  release — see [In-app updates](#in-app-updates-title-bar-download-button).
 - Prefs are local only (`be_update_prefs_v1`). There is no install ID, no
   account, no analytics. Turning the check off means the banner never calls the
   route. The upstream request is an anonymous GET for a public file.
@@ -382,19 +389,27 @@ branch:
    it takes the git fallback: signature + allowlisted URLs, clean tree,
    tag == signed commit, `jdds.db` backup, checkout, `npm ci`, `npm run build`. Either
    way it then **stops**; promotion is the next step.
-   - **Windows file locks.** A loaded `.node` binary cannot be replaced, and
-     `npm ci` empties `node_modules` before it installs — so installing over a
-     running app would destroy the tree and then fail. Before touching anything
-     the runner probes `node_modules` by rename (`scripts/lib/update-locks.js`).
-     If a native module is held and the runner is not inside the server's own
-     process tree (the shell-spawned path), it stops the server it owns, waits
-     for the lock to clear, and continues — the panel shows the `stopping` phase.
-     Otherwise it fails with the install intact and says to quit Eclipse and run
-     `black update`. It also waits 2.5 s before stopping so the window can read
-     the job it is about to lose.
+   - **Dependencies are staged, never installed into the live tree.** `npm ci`
+     deletes `node_modules` before it writes, and a running app maps native
+     modules that Windows will not let it delete — so an in-place install over a
+     live app emptied the tree and then failed (`EPERM: unlink next-swc...` on
+     2026-11-22). `scripts/lib/deps-install.js` fetches into `.runtime/deps-stage`
+     with `--include=dev` and `NODE_ENV` cleared (the app runs with
+     `NODE_ENV=production`, which would otherwise drop the dev tree a checkout
+     needs for `npm run build`, `tsc` and the tests), validates the result, then
+     moves the live tree to `.runtime/deps-previous` and renames the staged tree
+     into place. A failed install — or a failed `postinstall` — puts the previous
+     tree back, so the app keeps a complete `node_modules` whatever npm does, no
+     process has to be closed, and the running window is unaffected until its
+     normal restart. A replaced tree that the app still maps is parked under a
+     timestamped name and removed by the next install. See ADR-083.
 2. **Promote.** The runner continues with
-   `desktop-refresh.js --no-build`, which stages the new build under
-   `releases/stable/<buildId>` and moves the pointer. When the runner stopped the
+   `desktop-refresh.js --no-build --version <signed version>`, which stages the
+   new build under `releases/stable/<buildId>` and moves the pointer. The version
+   comes from the SIGNED manifest, not from the checkout on disk: a prebuilt
+   artifact carries no `package.json`, and recording the checkout's version made
+   release metadata describe a build that did not exist ("up to date" for a
+   version the window was not running). When the runner stopped the
    app itself it passes the restart through (nothing is left to serve), so the
    window reopens on the new build; otherwise `--no-restart` keeps the running
    window on the build it already loaded and the old release is kept as
@@ -439,15 +454,30 @@ the flag still uses `package.json`.
 
 Deliberate limits:
 
+- **A build can only look where it was told to look.** `config/updates.json`
+  (repository slug + manifest URL) is compiled into each release. A build whose
+  baked slug has since been deleted or renamed cannot discover the new home: the
+  check 404s and, by design, stays quiet in the banner. This already happened —
+  builds released while the repo was `dumbpabloo/black-eclipse` (now 404) can
+  never self-check, and no later release can reach them. The remedy for those
+  installs is the signed installer / Download link, once. Never delete or rename
+  the release repository again: a GitHub rename redirects old paths, a delete and
+  recreate does not.
+- **A release cannot be staged twice.** When the promoted build is already newer
+  than the running one, the runner reports "Restart Eclipse to switch to it"
+  instead of downloading the same release again. The banner and the panel show a
+  Restart action for that state, so the "update again and again" loop is closed
+  from both ends.
 - The panel never claims to have applied anything the running window has not
   loaded. A staged job stays "ready" only while the running `version` is still
   the one it started from; after the restart it is treated as spent.
-- In-app **git-fallback** staging needs the running app to close eventually,
-  because `npm ci` cannot replace `next-swc`/`skia` while they are loaded. The
-  shell-spawned runner does that itself; the HTTP fallback (an older shell)
-  refuses instead of emptying `node_modules`, and the CLI path does the same.
-  The prebuilt path touches no native module unless the release's `lockHash`
-  differs, so the window usually stays up through the download.
+- In-app staging never empties the tree the running app serves from. The
+  git-fallback path used to require the app to close so `npm ci` could replace
+  `next-swc`/`skia`; with the staged install (`scripts/lib/deps-install.js`)
+  dependencies are fetched elsewhere and swapped by rename, so neither path
+  needs a shutdown and a failed install leaves the app bootable. The prebuilt
+  path still touches no dependency at all unless the release's `lockHash`
+  differs.
 - Only the **stable desktop channel** can stage in-app, because `npm run build`
   always produces `.next` (the Stable channel's build dir). The Dev channel keeps
   using the CLI. Running it from an old shell that lacks the `be-update` listener
@@ -577,8 +607,9 @@ does:
    `BUILD_ID` (equal to the signed `buildId` when present), `routes-manifest`,
    `server/`, `static/<buildId>/`.
 4. If the release's `lockHash` differs from this checkout's
-   `package-lock.json`, run `npm ci` first — the build was compiled against
-   those modules. Otherwise node_modules is not touched.
+   `package-lock.json`, install dependencies first (`scripts/lib/deps-install.js`
+   — staged, then swapped by rename) — the build was compiled against those
+   modules. Otherwise `node_modules` is not touched.
 5. Promote exactly that directory (`desktop-promote.js --from …`): copy into
    `releases/stable/<buildId>/`, validate the copy, move the pointer, keep the
    previous release as the rollback target.
@@ -597,17 +628,18 @@ maintainer's own machine could not take an update.
    A moved or mismatched tag aborts the update.
 4. Back up `jdds.db` through `scripts/db-guard.js backup` (unless
    `--no-backup`, which is discouraged).
-5. Check out the tag (detached), confirm `node_modules` can be replaced (stop
-   the app this install owns, or wait), `npm ci`, `npm run build`. A failed
-   install is retried once after the lock clears.
+5. Check out the tag (detached), install dependencies into a staging directory
+   and swap them in by rename (`scripts/lib/deps-install.js`), then
+   `npm run build`. A failed install changes nothing, so there is nothing to
+   retry and nothing to lose.
 6. **Desktop first:** re-pin the native app's immutable build and restart its
    own server/reopen the window through `scripts/desktop-refresh.js`. It no-ops
    with an explanation if the desktop is not installed or is a packaged
    (non-bridged) install; `--no-desktop` skips it.
-7. Any failure → check out the previous commit. Reinstall and rebuild only if
-   `node_modules` was actually replaced; if the install never ran, the previous
-   build is still intact and re-running `npm ci` could only do damage. The DB
-   backup is left untouched and reported.
+7. Any failure → check out the previous commit. If dependencies were replaced,
+   restore the parked tree (`.runtime/deps-previous`) by rename and rebuild; if
+   the install never ran, the previous build is still intact and reinstalling
+   could only do damage. The DB backup is left untouched and reported.
 
 **Desktop-first is a product rule, not a preference.** The native window is the
 primary front door; the browser build is secondary. An update that leaves the

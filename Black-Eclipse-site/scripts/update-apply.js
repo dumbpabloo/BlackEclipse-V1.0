@@ -3,8 +3,14 @@
 //
 // Spawned detached by `POST /api/updates/apply`. It runs the SAME verified
 // updater the CLI uses (`scripts/update.js`), but with `--no-desktop`: verify the
-// signed manifest, back up jdds.db, check out the tag, `npm ci`, `npm run
-// build` — and then STOP.
+// signed manifest, back up jdds.db, check out the tag, install dependencies,
+// `npm run build` — and then STOP.
+//
+// Dependency installs are staged and swapped by rename
+// (`scripts/lib/deps-install.js`), so this runner never empties the tree the
+// running app serves from. It therefore does not need to close Eclipse to
+// replace its native modules: the app keeps a complete `node_modules` even when
+// npm fails, and the window only changes when it is restarted.
 //
 // Why stop before promoting: promotion restarts the desktop window and kills the
 // server tree (`taskkill /T`). A runner spawned by that server would be killed
@@ -74,9 +80,6 @@ let flushTimer = null;
 // True once the updater has actually moved to the signed tag. Distinguishes a
 // real stage from "nothing to do" exits (already current, not published).
 let applied = false;
-// True when this runner closed the app to free its native modules. The app must
-// then be reopened, whether the update succeeded or failed.
-let stoppedServer = false;
 
 function readVersion() {
   try {
@@ -132,8 +135,8 @@ const PHASES = [
   [/^\[update\] this release changed dependencies/, "installing", "Installing dependencies…"],
   [/^\[update\] promoting the verified build/, "promoting", "Publishing the new build…"],
   [/^\[update\] checking out /, "checkout", "Checking out the signed release…"],
-  [/^\[update\] waiting for the native modules/, "installing", "Waiting for Eclipse to release its files…"],
   [/^\[update\] installing dependencies/, "installing", "Installing dependencies (slow)…"],
+  [/^\[update\] fetching dependencies into a staging/, "installing", "Installing dependencies…"],
   [/^\[update\] building production bundle/, "building", "Building the new version (slow)…"],
   [/^\[update\] rolling back/, "building", "Update failed — rolling back…"],
   [/^\[desktop:refresh\]/, "building", "Preparing the new build…"],
@@ -144,7 +147,6 @@ const PHASES = [
 // move forward, so a late "installed: v" line cannot undo "building".
 const PHASE_ORDER = [
   "starting",
-  "stopping",
   "verifying",
   "backing-up",
   "downloading",
@@ -158,10 +160,16 @@ const PHASE_ORDER = [
 function onLine(line) {
   pushLog(line);
   if (
-    /^\[update\] (checking out|installing dependencies|building production bundle|build staged:)/.test(line)
+    /^\[update\] (checking out|installing dependencies|fetching dependencies|building production bundle|build staged:)/.test(
+      line,
+    )
   ) {
     applied = true;
   }
+  // The prebuilt path announces its mode before it downloads. Recording it here
+  // (not only at "build staged") keeps the job honest while a long download is
+  // in flight — and after a failure, where it used to still say "git".
+  if (/^\[update\] mode: signed prebuilt build/.test(line)) job.mode = "build";
   // The prebuilt path reports where it staged the verified build; the runner
   // promotes from exactly that directory (never from `.next`, which the user's
   // tree may have rebuilt since).
@@ -197,72 +205,23 @@ function finish(status, phase, message, error) {
 
 function fail(message) {
   finish("failed", "failed", message, message);
-  reviveIfStopped();
   process.exit(1);
 }
 
-/**
- * Reopen the window this runner closed. Without this a failed update would
- * leave the user with a window whose server is gone and no way back.
- */
-function reviveIfStopped() {
-  if (!stoppedServer) return;
-  stoppedServer = false;
-  try {
-    const { channelFor } = require("./lib/channels");
-    const { launchShell } = require("./lib/desktop-process");
-    const launched = launchShell(channelFor(desktopChannel));
-    if (launched && launched.launched) pushLog("[apply] reopened Eclipse on the current build");
-  } catch (err) {
-    pushLog(`[apply] could not reopen Eclipse: ${err && err.message ? err.message : err}`);
-  }
-}
-
-/**
- * The running server holds `next-swc`/`skia`, so npm cannot replace them. Stop
- * the server this install owns, but only when it is not our own ancestor: the
- * HTTP fallback is spawned FROM that server, and killing it would kill us.
- */
-function closeRunningApp() {
-  try {
-    const { channelFor } = require("./lib/channels");
-    const { readOwner, stopOwnedServer } = require("./lib/desktop-process");
-    const { lockedNativeModules, waitForNativeUnlock, isAncestorOf } = require("./lib/update-locks");
-    if (!lockedNativeModules(ROOT).length) return false;
-
-    const target = channelFor(desktopChannel);
-    const owner = readOwner(target);
-    if (!owner) {
-      pushLog("[apply] dependencies are held by a process this install does not own");
-      return false;
-    }
-    if (isAncestorOf(owner.pid, process.pid)) {
-      pushLog("[apply] the running server started this updater; it must be closed by hand");
-      return false;
-    }
-
-    setPhase("stopping", "Closing Eclipse so its files can be replaced…");
-    pushLog("[apply] closing the running server so npm can replace its native modules");
-    stopOwnedServer(target);
-    if (!waitForNativeUnlock(ROOT, 60000)) {
-      pushLog("[apply] the native modules are still locked");
-      return false;
-    }
-    return true;
-  } catch (err) {
-    pushLog(`[apply] could not close the running server: ${err && err.message ? err.message : err}`);
-    return false;
-  }
-}
-
-/** Promote the staged build, restarting the window when this runner closed it. */
-function promote(restart, from) {
+/** Promote the staged build. The running window keeps serving until it restarts. */
+function promote(from, version) {
   setPhase("promoting", "Publishing the new build…");
   const args = ["--no-build", "--channel", desktopChannel];
   // `--from` promotes the build the updater just verified, not `.next` (which
   // belongs to the user's working tree and may be anything).
   if (from) args.push("--from", from);
-  if (!restart) args.push("--no-restart");
+  // The version from the signed manifest. The release must report the version it
+  // actually is, or the next check either misses a real update or offers this one
+  // again forever.
+  if (version) args.push("--version", version);
+  // The runner must never restart: it may be a child of the server it would
+  // kill, and the restart is the shell's job (`be-update`).
+  args.push("--no-restart");
   const result = spawnSync(
     process.execPath,
     [path.join(ROOT, "scripts", "desktop-refresh.js"), ...args],
@@ -279,10 +238,6 @@ function promote(restart, from) {
     return false;
   }
   return true;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ── Packaged installs ────────────────────────────────────────────────────────
@@ -527,6 +482,41 @@ async function installFromInstaller() {
   );
 }
 
+/**
+ * The build that is already promoted and newer than the one being served, if
+ * any. That state means "restart", not "download it again".
+ */
+function pendingPromotion() {
+  try {
+    const path = require("path");
+    const fs = require("fs");
+    const { channelFor } = require("./lib/channels");
+    const { readPointer } = require("./lib/desktop-release");
+    const { isNewerVersion } = require("./lib/update-verify");
+    const current = readPointer(channelFor(desktopChannel), "current");
+    if (!current || !current.valid) return null;
+    // Older pointers predate `version`; the release manifest beside the build
+    // carries the same fact.
+    let version = typeof current.version === "string" ? current.version : null;
+    if (!version) {
+      try {
+        const manifest = JSON.parse(
+          fs.readFileSync(path.join(path.dirname(current.dist), "manifest.json"), "utf8"),
+        );
+        version = typeof manifest.version === "string" ? manifest.version : null;
+      } catch {
+        version = null;
+      }
+    }
+    if (!version || !fromVersion) return null;
+    version = version.replace(/^v/, "");
+    if (!isNewerVersion(version, fromVersion)) return null;
+    return { version, distDir: current.dist };
+  } catch {
+    return null;
+  }
+}
+
 async function main() {
   flush();
   pushLog(`[apply] staging ${channel} update (job ${JOB_ID})`);
@@ -539,22 +529,24 @@ async function main() {
     return;
   }
 
-  // If the app is holding its own native modules, it has to close before npm
-  // can replace them. Give the window a moment to pick up this job first, so
-  // the UI can say what is happening instead of silently losing its server.
-  const { lockedNativeModules } = require("./lib/update-locks");
-  if (lockedNativeModules(ROOT).length) {
-    await sleep(2500);
-    stoppedServer = closeRunningApp();
-    if (!stoppedServer && lockedNativeModules(ROOT).length) {
-      fail(
-        "Eclipse is running and is using its own dependencies, so they cannot be replaced. " +
-          "Quit Eclipse, then run `black update` in a terminal. Nothing was changed.",
-      );
-      return;
-    }
+  // A newer build may ALREADY be promoted and waiting for a restart. Clicking
+  // "Update now" again then re-downloaded the same release and re-promoted it,
+  // so the notice never went away — the "update again and again" report. When
+  // the promoted build is newer than the one being served, the only missing step
+  // is the restart, and saying so is the whole job.
+  const pending = pendingPromotion();
+  if (pending) {
+    job.mode = "build";
+    job.stagedDir = pending.distDir;
+    job.toVersion = pending.version;
+    pushLog(`[apply] v${pending.version} is already promoted — only a restart is missing`);
+    finish("ready", "ready", `v${pending.version} is ready. Restart Eclipse to switch to it.`, null);
+    return;
   }
 
+  // Dependencies are installed into a staging directory and swapped in by
+  // rename (`scripts/lib/deps-install.js`), so the running app no longer has to
+  // be closed before npm runs: its tree stays complete whatever npm does.
   const child = spawn(
     process.execPath,
     [
@@ -602,12 +594,9 @@ async function main() {
           `Nothing to install — this window is already on v${fromVersion}.`,
           null,
         );
-        reviveIfStopped();
         return;
       }
-      if (!promote(stoppedServer, job.stagedDir || undefined)) return;
-      // The promote relaunched the window on the new build.
-      stoppedServer = false;
+      if (!promote(job.stagedDir || undefined, version)) return;
       finish(
         "ready",
         "ready",

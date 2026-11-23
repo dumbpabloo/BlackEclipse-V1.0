@@ -16,7 +16,7 @@
 // No step is silent: every failure is shown verbatim from the updater, and a
 // check that cannot run never renders as "up to date".
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Check,
@@ -29,14 +29,11 @@ import {
 } from '@/lib/icons';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import {
-  canRestartFromShell,
-  requestUpdateApply,
-  requestUpdateRestart,
-} from '@/lib/desktop/update-bridge';
+import { canRestartFromShell } from '@/lib/desktop/update-bridge';
 import { saveUpdatePrefs } from '@/lib/updates/prefs';
+import { useUpdateApply } from '@/lib/updates/use-update-apply';
 import { useUpdateStatus } from '@/lib/updates/use-update-status';
-import type { UpdateJob, UpdateJobPhase } from '@/lib/updates/types';
+import type { UpdateJobPhase } from '@/lib/updates/types';
 
 const PHASE_PERCENT: Record<UpdateJobPhase, number> = {
   starting: 6,
@@ -64,22 +61,14 @@ function copyText(text: string) {
 
 export function UpdateButton() {
   const { status, checking, prefs, refresh } = useUpdateStatus();
+  // One staging implementation for the banner and this panel; see
+  // `use-update-apply.ts`. It polls the job file, falls back to the HTTP route
+  // when the shell has no listener, and never claims a restart happened.
+  const { job, starting, error, running, apply, restart, reload } = useUpdateApply();
   const [open, setOpen] = useState(false);
-  const [job, setJob] = useState<UpdateJob | null>(null);
-  const [starting, setStarting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [misses, setMisses] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
-  const restartTimer = useRef<number | null>(null);
   const shell = typeof window !== 'undefined' && canRestartFromShell();
-
-  useEffect(
-    () => () => {
-      if (restartTimer.current) window.clearTimeout(restartTimer.current);
-    },
-    [],
-  );
 
   const latest = status?.latestVersion ?? null;
   const available = Boolean(
@@ -91,7 +80,6 @@ export function UpdateButton() {
   const inAppUpdate = Boolean(available && status && (status.canSelfUpdate || shell));
   const downloadOnly = Boolean(available && status && !inAppUpdate);
   const downloadHref = status?.installer?.url ?? status?.notesUrl ?? status?.downloadUrl ?? null;
-  const running = job?.status === 'running';
   // A finished stage is only worth showing while it is still the *next* version.
   // After the restart, the running build already equals it and the job is spent.
   const ready =
@@ -100,52 +88,6 @@ export function UpdateButton() {
   const stagedVersion = ready ? job?.toVersion ?? latest : null;
   const installerMode = job?.mode === 'installer';
   const buildMode = job?.mode === 'build';
-
-  const fetchJob = useCallback(async (): Promise<UpdateJob | null> => {
-    try {
-      const res = await fetch('/api/updates/apply', { cache: 'no-store' });
-      if (!res.ok) return null;
-      const data = (await res.json()) as { job?: UpdateJob | null };
-      return data.job ?? null;
-    } catch {
-      return null;
-    }
-  }, []);
-
-  const loadJob = useCallback(async () => {
-    setJob(await fetchJob());
-  }, [fetchJob]);
-
-  // A previous run may have finished while the app was closed.
-  useEffect(() => {
-    void loadJob();
-  }, [loadJob]);
-
-  // Poll while a run is in flight. Installing dependencies rewrites
-  // node_modules under the running server, so a burst of failed polls is
-  // expected — keep retrying and say so instead of showing a stuck spinner.
-  useEffect(() => {
-    if (!running && !starting) return;
-    let alive = true;
-    const tick = async () => {
-      try {
-        const res = await fetch('/api/updates/apply', { cache: 'no-store' });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = (await res.json()) as { job?: UpdateJob | null };
-        if (!alive) return;
-        setJob(data.job ?? null);
-        setMisses(0);
-        if (data.job && data.job.status !== 'running') setStarting(false);
-      } catch {
-        if (alive) setMisses((m) => m + 1);
-      }
-    };
-    const timer = window.setInterval(() => void tick(), 1800);
-    return () => {
-      alive = false;
-      window.clearInterval(timer);
-    };
-  }, [running, starting]);
 
   useEffect(() => {
     if (!open) return;
@@ -162,75 +104,6 @@ export function UpdateButton() {
       document.removeEventListener('keydown', onKey);
     };
   }, [open]);
-
-  const apply = async () => {
-    setError(null);
-    setStarting(true);
-    setMisses(0);
-    const channel = status?.channel ?? 'stable';
-    const baseline = job?.id ?? null;
-
-    const waitForNewJob = async (attempts: number): Promise<UpdateJob | null> => {
-      for (let i = 0; i < attempts; i++) {
-        await new Promise((resolve) => setTimeout(resolve, 250));
-        const next = await fetchJob();
-        if (next && next.id !== baseline) return next;
-      }
-      return null;
-    };
-
-    // Preferred: the shell spawns the runner, keeping it outside the server
-    // tree (the app's supervisor kills that tree when it restarts the server).
-    if (requestUpdateApply(channel, status?.currentVersion)) {
-      const staged = await waitForNewJob(16);
-      if (staged) {
-        setJob(staged);
-        return;
-      }
-      // No new job appeared — an older shell without the `be-update` listener.
-      // Fall through to the HTTP route instead of stranding the user.
-    }
-
-    try {
-      const res = await fetch(`/api/updates/apply?channel=${encodeURIComponent(channel)}`, {
-        method: 'POST',
-      });
-      const data = (await res.json().catch(() => ({}))) as { job?: UpdateJob | null; error?: string };
-      if (!res.ok) {
-        if (data.job) setJob(data.job);
-        else setError(data.error || 'Could not start the update.');
-        setStarting(false);
-        return;
-      }
-      setJob(data.job ?? null);
-      if (!data.job) {
-        const started = await waitForNewJob(12);
-        if (started) {
-          setJob(started);
-        } else {
-          setError('The updater did not report back. Run `black update` in a terminal.');
-          setStarting(false);
-        }
-      }
-    } catch {
-      setError('Could not reach the updater. Is Eclipse still running?');
-      setStarting(false);
-    }
-  };
-
-  const restart = () => {
-    setError(null);
-    if (!requestUpdateRestart(status?.channel ?? 'stable')) {
-      setError('This window cannot restart itself. Quit Eclipse and open it again to use the new build.');
-      return;
-    }
-    // Repair the honest failure mode: an older shell has no `be-update`
-    // listener, so nothing happens. Say so instead of leaving a dead button.
-    if (restartTimer.current) window.clearTimeout(restartTimer.current);
-    restartTimer.current = window.setTimeout(() => {
-      setError('The window did not restart. Quit Eclipse and open it again to use the new build.');
-    }, 6000);
-  };
 
   const skip = () => {
     if (!latest) return;
@@ -251,7 +124,7 @@ export function UpdateButton() {
         aria-expanded={open}
         onClick={() => {
           setOpen((v) => !v);
-          if (!open) void loadJob();
+          if (!open) void reload();
         }}
         className={cn(
           'relative grid w-11 place-items-center transition-colors hover:bg-white/[0.08] hover:text-foreground',
@@ -337,11 +210,11 @@ export function UpdateButton() {
                   style={{ width: `${percent}%` }}
                 />
               </div>
-              {misses > 2 && (
+              {job?.status === 'running' && (
                 <p className="text-[10px] text-amber-200/80">
                   {buildMode
                     ? 'Verifying the build — the window may go quiet for a moment.'
-                    : 'Eclipse is rebuilding — the window may go quiet for a minute.'}
+                    : 'Eclipse is preparing the update — this can take a few minutes.'}
                 </p>
               )}
               <p className="text-[10px] text-muted-foreground/70">
@@ -364,7 +237,7 @@ export function UpdateButton() {
                 </p>
               ) : (
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button size="sm" className="cursor-pointer rounded-xl" onClick={restart}>
+                  <Button size="sm" className="cursor-pointer rounded-xl" onClick={() => restart(status?.channel ?? 'stable')}>
                     <RefreshCw size={12} className="mr-1" />
                     Restart Eclipse
                   </Button>
@@ -411,7 +284,7 @@ export function UpdateButton() {
                     size="sm"
                     className="cursor-pointer rounded-xl"
                     disabled={checking || starting}
-                    onClick={() => void apply()}
+                    onClick={() => void apply(status?.channel ?? 'stable', status?.currentVersion)}
                   >
                     {starting ? (
                       <Loader2 size={12} className="mr-1 animate-spin" />

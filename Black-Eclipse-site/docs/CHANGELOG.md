@@ -423,6 +423,34 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
   Default-composition readiness now has no baseline blocker; only field `shadow` telemetry and the explicit rollout
   decision remain.
   docs updated: `docs/harness/plugin-kernel-plan.md`.
+
+- **fix(update): the bottom-right notice now updates, and a staged release stops asking again.** Three user-facing
+  defects, one cause each. (1) The banner's only action was "copy `black update`" — the most visible update control in
+  the product did nothing when clicked; it now runs the same staged update as the title-bar panel (shared
+  `src/lib/updates/use-update-apply.ts`), shows the job's phase/message, and offers **Restart Eclipse** when the build
+  is staged. (2) Clicking *Update now* again re-downloaded and re-promoted an already-promoted release, so the notice
+  never cleared: `update-apply.js` now detects that the promoted build is newer than the served one and answers
+  "Restart Eclipse to switch to it" instead of staging it again. (3) Release metadata recorded the CHECKOUT's version
+  for a prebuilt artifact, which describes a build that does not exist; `desktop-promote.js --version` now takes the
+  signed manifest's version (plumbed through `update.js`, `update-apply.js`, `desktop-refresh.js`) and repairs stale
+  metadata on the next promote. Documented the one thing no release can fix: a build whose baked repo slug is deleted
+  or renamed can never self-check again — the repo slug must never be deleted (`docs/UPDATES.md`, deliberate limits).
+  docs updated: `docs/UPDATES.md`, `docs/CHANGELOG.md`.
+
+- **fix(update): a failed dependency install no longer destroys the install.** The v0.4.24 -> v0.4.25 in-app update
+  emptied `node_modules` and then died with `EPERM: unlink ...\@next\swc-win32-x64-msvc\next-swc.win32-x64-msvc.node`,
+  leaving 67 of 600+ packages, no `react`, no Prisma client (the window only stayed alive on modules already in memory).
+  The guard was a rename probe, but Windows *allows* renaming a loaded `.node` file and only refuses deletion, so it
+  reported "free" and `npm ci` deleted the tree first. No non-destructive lock test exists, so the fix removes the need
+  for one: `scripts/lib/deps-install.js` installs into `.runtime/deps-stage` and swaps the tree in by rename (verified to
+  work while the app is running), restoring the parked tree if the swap fails; the root lifecycle scripts run against
+  the real tree afterwards. `update.js` (both paths) uses it, `update-apply.js` no longer closes the app or reports the
+  wrong `mode` while downloading, and `scripts/lib/update-locks.js` is deleted. The first real in-app run of the new
+  path (v0.4.24 -> v0.4.25 at 23:39) staged 500 packages, swapped them under the live window, regenerated Prisma,
+  promoted and restarted cleanly; that run also exposed the app's `NODE_ENV=production` leaking into npm and dropping
+  the dev tree, so the installer now clears `NODE_ENV` and passes `--include=dev`. A failed `postinstall` now restores
+  the previous tree instead of leaving one without a Prisma client. ADR-083.
+  docs updated: `docs/UPDATES.md`, `docs/DECISIONS.md`, `skills/ARCHITECT.md`, `docs/CHANGELOG.md`.
 ## 2026-11-21
 
 

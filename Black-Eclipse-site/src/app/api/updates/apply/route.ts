@@ -60,8 +60,9 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const currentVersion = packageJson.version;
   const status = await getUpdateStatus({
-    currentVersion: packageJson.version,
+    currentVersion,
     channel,
     refresh: true,
   });
@@ -94,11 +95,12 @@ export async function POST(request: NextRequest) {
       env: {
         ...process.env,
         BE_UPDATE_JOB_FILE: updateJobFile(),
-        // The route is bundled with the running build, so `packageJson.version`
-        // is the version this window serves — not necessarily the checkout on
-        // disk. The runner must compare against that, or a checkout that is
-        // ahead of the pinned UI makes it report "nothing to install" forever.
-        BE_UPDATE_RUNNING_VERSION: packageJson.version,
+        // The version this window actually serves (from the signed release it
+        // was installed from), not the checkout on disk. The runner must compare
+        // against that, or a checkout ahead of the pinned UI makes it report
+        // "nothing to install" forever — and a stale baked version makes it
+        // offer the same update repeatedly.
+        BE_UPDATE_RUNNING_VERSION: currentVersion,
       },
     });
     child.unref();

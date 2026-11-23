@@ -6,29 +6,47 @@
 // release exists and shows a single glass notice when there is one.
 //
 // Deliberate choices:
-//   * This banner only notifies. The acting surface is the title-bar download
-//     button (update-button.tsx), which can stage a signed release after an
-//     explicit click. Auto-applying code against a local financial DB without
-//     consent is still not a trade worth making.
+//   * The banner ACTS, not just notifies. It used to offer only "copy this
+//     command", which made the most visible update affordance in the product the
+//     least useful one: users clicked it and nothing happened. It now runs the
+//     same staged update as the title-bar panel (one shared hook,
+//     `use-update-apply.ts`) and offers the restart when the build is ready.
 //   * Dismiss / skip are per-version and local-only.
-//   * A failed check is silent here. "Couldn't check" belongs in Settings,
-//     where the user asked; a banner that cries wolf on every offline launch
-//     gets ignored.
+//   * A failed check is silent here. "Couldn't check" belongs in Settings, where
+//     the user asked; a banner that cries wolf on every offline launch gets
+//     ignored.
 //   * It renders through a portal so the frosted glass samples the real page.
 
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Download, ExternalLink, RefreshCw, ShieldCheck, X } from "@/lib/icons";
+import { Download, ExternalLink, Loader2, RefreshCw, ShieldCheck, X } from "@/lib/icons";
 import { Button } from "@/components/ui/button";
 import { saveUpdatePrefs } from "@/lib/updates/prefs";
+import { useUpdateApply } from "@/lib/updates/use-update-apply";
 import { useUpdateStatus } from "@/lib/updates/use-update-status";
-import type { UpdateStatus } from "@/lib/updates/types";
+import type { UpdateJobPhase, UpdateStatus } from "@/lib/updates/types";
+
+const PHASE_PERCENT: Record<UpdateJobPhase, number> = {
+  starting: 6,
+  verifying: 15,
+  "backing-up": 25,
+  checkout: 38,
+  installing: 52,
+  building: 74,
+  downloading: 60,
+  unpacking: 68,
+  promoting: 90,
+  stopping: 60,
+  ready: 100,
+  failed: 100,
+};
 
 export function UpdateBanner() {
   const [mounted, setMounted] = useState(false);
-  // The title-bar button uses the same hook; the route's 6h manifest cache keeps
-  // two consumers at one upstream fetch.
+  // The title-bar button uses the same hook; the route's 5 min manifest cache
+  // keeps two consumers at one upstream fetch.
   const { status: checked, prefs } = useUpdateStatus();
+  const { job, error: applyError, running, canApplyFromShell, apply, restart } = useUpdateApply();
   const [showCommand, setShowCommand] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -45,10 +63,14 @@ export function UpdateBanner() {
   if (!mounted || hidden || !checked) return null;
 
   const status: UpdateStatus = checked;
-  // A packaged install updates by running the new release's installer, not by
-  // checking out a tag (there is no repository in its install directory).
-  const manual = !status.canSelfUpdate;
+  // A packaged install has no repository, but the shell can still run the
+  // verified installer runner; only a window with no shell bridge is limited to
+  // a download link.
+  const manual = !status.canSelfUpdate && !canApplyFromShell;
   const downloadHref = status.notesUrl ?? status.downloadUrl;
+  const ready = job?.status === "ready" && Boolean(job.toVersion) && job.toVersion !== status.currentVersion;
+  const failed = job?.status === "failed" && !ready;
+  const percent = job ? PHASE_PERCENT[job.phase] ?? 50 : 0;
 
   const dismiss = () => {
     saveUpdatePrefs({ ...prefs, dismissedVersion: status.latestVersion });
@@ -77,15 +99,28 @@ export function UpdateBanner() {
       <div className="glass-card-strong rounded-2xl border border-primary/25 p-4 shadow-2xl space-y-3">
         <div className="flex items-start gap-3">
           <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary">
-            <Download size={16} />
+            {running ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
           </span>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold tracking-tight">
-              Eclipse v{status.latestVersion} is available
+              {running
+                ? `Updating to v${status.latestVersion}`
+                : ready
+                  ? `v${job?.toVersion} is ready`
+                  : failed
+                    ? "Update did not finish"
+                    : `Eclipse v${status.latestVersion} is available`}
             </p>
             <p className="mt-0.5 text-[11px] text-muted-foreground">
-              You&apos;re on v{status.currentVersion}. The release manifest is
-              signature-checked before this notice appears.
+              {running
+                ? job?.message ?? "Working…"
+                : ready
+                  ? "The signed build is staged. Restart Eclipse to switch to it."
+                  : failed
+                    ? job?.error ?? "The updater stopped. Your current build is untouched."
+                    : manual
+                      ? `You're on v${status.currentVersion}. Download the signed installer below.`
+                      : `You're on v${status.currentVersion}. The release manifest is signature-checked before this notice appears.`}
             </p>
           </div>
           <button
@@ -98,24 +133,59 @@ export function UpdateBanner() {
           </button>
         </div>
 
-        {status.mandatory && (
+        {running && (
+          <div className="h-1 overflow-hidden rounded-full bg-white/10">
+            <div
+              className="h-full rounded-full bg-primary transition-[width] duration-500"
+              style={{ width: `${percent}%` }}
+            />
+          </div>
+        )}
+
+        {status.mandatory && !ready && (
           <p className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-2.5 py-1.5 text-[10px] text-amber-200/90">
             This release is required to keep receiving data updates.
           </p>
         )}
 
-        {manual && (
-          <p className="text-[10px] text-muted-foreground/80">
-            This installed build updates by downloading the release and running
-            its installer.
-          </p>
-        )}
+        {(() => {
+          const message = applyError;
+          return message ? <p className="text-[10px] text-red-300">{message}</p> : null;
+        })()}
+        {failed && job?.log?.length ? (
+          <pre className="max-h-20 overflow-auto rounded-lg border border-white/10 bg-black/30 p-2 font-mono text-[10px] leading-relaxed text-muted-foreground">
+            {job.log.slice(-4).join("\n")}
+          </pre>
+        ) : null}
 
-        {showCommand ? (
+        {ready ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              className="cursor-pointer rounded-xl"
+              onClick={() => restart(status.channel)}
+            >
+              <RefreshCw size={13} className="mr-1" />
+              Restart Eclipse
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="cursor-pointer rounded-xl"
+              onClick={() => window.location.reload()}
+            >
+              Reload now
+            </Button>
+          </div>
+        ) : running ? (
+          <p className="flex items-center gap-1.5 text-[10px] text-muted-foreground/80">
+            <ShieldCheck size={11} className="shrink-0" />
+            Signed checksum verified before anything is installed. Keep Eclipse open.
+          </p>
+        ) : showCommand ? (
           <div className="space-y-2">
             <p className="text-[11px] text-muted-foreground">
-              Click the download icon in the title bar and choose Update now, or
-              stop Eclipse and run this in the project folder:
+              Prefer a terminal? Stop Eclipse and run this in the project folder:
             </p>
             <div className="flex items-center gap-2">
               <code className="flex-1 rounded-lg border border-white/10 bg-black/30 px-2.5 py-1.5 font-mono text-[11px]">
@@ -130,11 +200,6 @@ export function UpdateBanner() {
                 {copied ? "Copied" : "Copy"}
               </Button>
             </div>
-            <p className="flex items-center gap-1.5 text-[10px] text-muted-foreground/80">
-              <ShieldCheck size={11} className="shrink-0" />
-              It backs up your database, verifies the release tag, and rolls
-              back if the build fails.
-            </p>
           </div>
         ) : (
           <div className="flex flex-wrap items-center gap-2">
@@ -154,14 +219,24 @@ export function UpdateBanner() {
               <Button
                 size="sm"
                 className="cursor-pointer rounded-xl"
-                onClick={() => {
-                  setShowCommand(true);
-                  void copyCommand();
-                }}
+                onClick={() => void apply(status.channel, status.currentVersion)}
               >
-                <RefreshCw size={13} className="mr-1" />
-                How to update
+                <Download size={13} className="mr-1" />
+                {failed ? "Try again" : "Update now"}
               </Button>
+            )}
+            {/* A refused in-app update (older shell, packaged install) must not be
+                a dead end: the verified installer is one click away. */}
+            {applyError && downloadHref && (
+              <a
+                href={downloadHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 rounded-xl border border-white/10 px-2.5 py-1.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <Download size={11} />
+                Download v{status.latestVersion}
+              </a>
             )}
             {status.notesUrl && (
               <a
@@ -174,6 +249,13 @@ export function UpdateBanner() {
                 <ExternalLink size={11} />
               </a>
             )}
+            <button
+              type="button"
+              onClick={() => setShowCommand((v) => !v)}
+              className="text-[10px] text-muted-foreground/70 underline-offset-2 hover:text-muted-foreground hover:underline cursor-pointer"
+            >
+              {showCommand ? "Hide command" : "Use a terminal"}
+            </button>
             <button
               type="button"
               onClick={skip}

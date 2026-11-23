@@ -32,6 +32,12 @@
 //   3. For the git path: working tree clean, tag commit == signed commit,
 //      jdds.db backed up BEFORE checkout, build failure rolls back.
 //
+// Dependencies are NEVER installed into the live tree. `npm ci` deletes
+// `node_modules` before it writes, and a running app holds native modules that
+// Windows will not let it delete — so the install happens in
+// `.runtime/deps-stage` and is swapped in by rename (`scripts/lib/deps-install.js`).
+// A failed install is therefore a no-op for the running app: see that file.
+//
 // This never downloads an executable and never runs remote code. The packaged
 // installer path lives in scripts/update-apply.js.
 
@@ -50,6 +56,7 @@ const {
   parseVersion,
 } = require("./lib/update-verify");
 const { assetForPlatform, downloadVerified, unpackBuild, lockHash } = require("./lib/build-artifact");
+const { installDependencies } = require("./lib/deps-install");
 
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
 const args = process.argv.slice(2);
@@ -159,47 +166,21 @@ function ask(question) {
 }
 
 // ── Dependency safety ───────────────────────────────────────────────────────
-// `npm ci` deletes node_modules before it installs. If the running app holds a
-// native module, that delete fails halfway and the install is destroyed. Check
-// first, wait or close the app we own, and only then let npm touch the tree.
-function releaseDependencies() {
-  const { lockedNativeModules, waitForNativeUnlock, isAncestorOf } = require("./lib/update-locks");
-  const locked = lockedNativeModules(ROOT);
-  if (!locked.length) return;
-
-  log(`${locked.length} native module(s) are in use by a running process`);
-  if (!noDesktop) {
-    const { channelFor } = require("./lib/channels");
-    const { readOwner, stopOwnedServer } = require("./lib/desktop-process");
-    const target = channelFor(channel);
-    const owner = readOwner(target);
-    // Only stop a server we did not launch ourselves: kill-tree follows parent
-    // links, so an updater spawned by that server would die with it.
-    if (owner && !isAncestorOf(owner.pid, process.pid)) {
-      log("closing the running app so its dependencies can be replaced (it reopens after the build)");
-      stopOwnedServer(target);
-    }
-  }
-
-  log("waiting for the native modules to be released…");
-  if (!waitForNativeUnlock(ROOT, 30000)) {
-    throw new Error(
-      "Eclipse is still holding its native dependencies. Quit Eclipse and run `black update` " +
-        "again — nothing was installed or deleted, and your current build is intact.",
-    );
-  }
-}
-
-function installDependencies() {
+// `npm ci` deletes node_modules before it installs. Installing over a running
+// app used to empty the tree and then fail on the native modules the app had
+// mapped (Windows cannot delete a loaded `.node` file), leaving the install
+// broken. The staged install in `scripts/lib/deps-install.js` fixes the class of
+// failure rather than the symptom: dependencies are fetched into
+// `.runtime/deps-stage` and swapped in by rename, which works while the app
+// runs and leaves the live tree untouched if anything goes wrong.
+function ensureDependencies() {
   try {
-    runShell("npm ci --no-audit --no-fund");
+    installDependencies(ROOT, { log });
   } catch (err) {
-    // A lock can appear between the probe and the write (an antivirus scan, a
-    // just-started build). npm ci has already emptied node_modules by then, so
-    // a retry is the difference between a recovered update and a broken app.
-    log("dependency install failed — waiting for file locks, then retrying once…");
-    releaseDependencies();
-    runShell("npm ci --no-audit --no-fund");
+    fail(
+      `${err && err.message ? err.message : err} — nothing was changed: the app still has its ` +
+        "current dependencies and build.",
+    );
   }
 }
 
@@ -258,7 +239,7 @@ function updatesDir() {
   return path.join(ROOT, ".runtime", "updates");
 }
 
-function promotePrebuilt(buildDir) {
+function promotePrebuilt(buildDir, version) {
   log("promoting the verified build…");
   run(process.execPath, [
     path.join(ROOT, "scripts", "desktop-promote.js"),
@@ -266,6 +247,10 @@ function promotePrebuilt(buildDir) {
     channel,
     "--from",
     buildDir,
+    // The artifact's own version is the signed one; the checkout on disk may be
+    // ahead or behind, and the window must report what it actually runs.
+    "--version",
+    version,
   ]);
 }
 
@@ -307,13 +292,14 @@ async function applyPrebuilt(manifest, { key, asset }, current) {
 
   // The artifact was compiled against the release's lockfile. If dependencies
   // moved, install them first — otherwise `next start` runs a build whose
-  // modules are absent. Rare, and the only time this path touches node_modules.
+  // modules are absent. Rare, and the only time this path touches node_modules,
+  // which is why it goes through the staged install: the running app keeps a
+  // complete tree even if this step fails.
   if (asset.lockHash) {
     const local = lockHash(ROOT);
     if (local && local !== asset.lockHash) {
       log("this release changed dependencies — installing them first…");
-      releaseDependencies();
-      installDependencies();
+      ensureDependencies();
     }
   }
 
@@ -325,7 +311,7 @@ async function applyPrebuilt(manifest, { key, asset }, current) {
     return;
   }
 
-  promotePrebuilt(build.buildDir);
+  promotePrebuilt(build.buildDir, manifest.version);
   log(`updated v${current} -> v${manifest.version}`);
 }
 
@@ -423,19 +409,17 @@ async function main() {
   const backupDir = backupDatabase();
 
   let applied = false;
-  // True once node_modules has actually been replaced. Rollback uses it: if the
-  // install never ran, the old dependencies and the old build are still intact
-  // and re-running `npm ci` could only do damage.
+  // True once node_modules has actually been replaced, and whether the tree the
+  // rollback must return to is still on disk beside it.
   let reinstalled = false;
+  let rollbackDeps = null;
   try {
     log(`checking out ${tag}…`);
     run("git", ["-c", "advice.detachedHead=false", "checkout", "--detach", tag]);
     applied = true;
 
-    releaseDependencies();
-
-    log("installing dependencies (npm ci)…");
-    installDependencies();
+    log("installing dependencies (staged)…");
+    rollbackDeps = installDependencies(ROOT, { log });
     reinstalled = true;
 
     log("building production bundle…");
@@ -459,7 +443,16 @@ async function main() {
         if (!reinstalled) {
           console.error("[update] dependencies were never replaced; the previous build is still intact");
         } else {
-          runShell("npm ci --no-audit --no-fund");
+          // The tree the previous release built against is still on disk as
+          // `.runtime/deps-previous` (the staged install left it there), so no
+          // second download is needed to get back to a bootable install.
+          if (rollbackDeps && rollbackDeps.previous && fs.existsSync(rollbackDeps.previous)) {
+            fs.rmSync(path.join(ROOT, "node_modules"), { recursive: true, force: true });
+            fs.renameSync(rollbackDeps.previous, path.join(ROOT, "node_modules"));
+            console.error("[update] restored the previous dependency tree");
+          } else {
+            installDependencies(ROOT, { log });
+          }
           runShell("npm run build");
           console.error("[update] rollback complete — you are back on the previous build");
         }

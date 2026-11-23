@@ -47,6 +47,21 @@ const channel = channelFor(argValue("--channel") || "stable");
 // build serve Stable without a second identical compile. Omitted: the channel's
 // own build dir.
 const fromArg = argValue("--from");
+// The version of the build being promoted. A signed release artifact carries no
+// `package.json`, so the promoter cannot read it from the build — the updater
+// passes the version from the signed manifest. Without this the release metadata
+// claimed the CHECKOUT's version, which is how a window ended up reporting
+// "up to date" for a version it was not running. Omitted: the checkout's own
+// version (a local build, where that is the truth).
+const versionArg = (() => {
+  const value = argValue("--version");
+  if (!value) return null;
+  if (!/^v?\d+\.\d+\.\d+/.test(value.trim())) {
+    console.error(`[desktop:promote] ignoring invalid --version "${value}"`);
+    return null;
+  }
+  return value.trim().replace(/^v/, "");
+})();
 
 function log(message) {
   console.log(`[desktop:promote:${channel.id}] ${message}`);
@@ -61,10 +76,11 @@ function relative(from) {
   return path.relative(ROOT, from).split(path.sep).join("/");
 }
 
-function pointerInfo(dist) {
+function pointerInfo(dist, version) {
   return {
     dir: relative(dist),
     buildId: readBuildId(dist),
+    version: version || readVersion(),
     channel: channel.id,
     promotedAt: new Date().toISOString(),
   };
@@ -158,7 +174,7 @@ function promoteRelease() {
           {
             channel: channel.id,
             buildId,
-            version: readVersion(),
+            version: versionArg || readVersion(),
             createdAt: new Date().toISOString(),
             source: relative(source),
           },
@@ -185,12 +201,30 @@ function promoteRelease() {
     writePointer(channel, "previous", {
       dir: current.dir,
       buildId: current.buildId,
+      version: current.version || readVersion(),
       channel: channel.id,
       promotedAt: current.promotedAt || null,
     });
     log(`previous release kept: ${current.buildId}`);
   }
-  writePointer(channel, "current", pointerInfo(distDir));
+
+  // An already-staged release directory carries the version it was FIRST
+  // promoted with — which, before `--version` existed, was the checkout's
+  // version. A signed manifest is authority, so it repairs the metadata too:
+  // the release the window reports must be the release it runs.
+  const manifestFile = path.join(releaseDir, "manifest.json");
+  const staged = readJson(manifestFile);
+  const effectiveVersion =
+    versionArg || (staged && typeof staged.version === "string" ? staged.version : readVersion());
+  if (versionArg && staged && staged.version !== versionArg) {
+    try {
+      fs.writeFileSync(manifestFile, JSON.stringify({ ...staged, version: versionArg }, null, 2));
+      log(`release metadata version corrected to ${versionArg}`);
+    } catch {
+      /* read-only release dir: the pointer below still carries the truth */
+    }
+  }
+  writePointer(channel, "current", pointerInfo(distDir, effectiveVersion));
   log(`current is now ${buildId}`);
 }
 
@@ -220,6 +254,15 @@ function pruneReleases() {
 function readVersion() {
   try {
     return JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version || null;
+  } catch {
+    return null;
+  }
+}
+
+function readJson(file) {
+  try {
+    const value = JSON.parse(fs.readFileSync(file, "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
   } catch {
     return null;
   }

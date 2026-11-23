@@ -28,6 +28,10 @@ const channel = channelFor(argv.indexOf("--channel") >= 0 ? argv[argv.indexOf("-
 // Promote an explicit build (e.g. a verified `.next-desktop-dev`) without a
 // second identical compile. The source is still validated by the promoter.
 const from = argv.indexOf("--from") >= 0 ? argv[argv.indexOf("--from") + 1] : null;
+// The version of the build being promoted, when the caller knows it (the
+// updater reads it from the signed manifest). Forwarded so the release metadata
+// records the release that was installed, not the checkout on disk.
+const version = argv.indexOf("--version") >= 0 ? argv[argv.indexOf("--version") + 1] : null;
 
 function log(message) {
   console.log(`[desktop:refresh] ${message}`);
@@ -124,6 +128,7 @@ function main() {
   log(`promoting ${channel.id} build ${readBuildId(source)}…`);
   const promoteArgs = ["--channel", channel.id];
   if (from) promoteArgs.push("--from", from);
+  if (version) promoteArgs.push("--version", version);
   if (noRestart) promoteArgs.push("--no-restart");
   if (!run("desktop-promote.js", promoteArgs)) {
     console.error("[desktop:refresh] promotion failed — the running app was not touched");
