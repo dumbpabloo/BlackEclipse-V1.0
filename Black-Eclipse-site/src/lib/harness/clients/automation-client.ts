@@ -417,6 +417,22 @@ export interface TradingTrialView {
   warnings?: string[];
 }
 
+export interface BotTradingAuthorityView {
+  available: boolean;
+  mode: string;
+  connectionId?: string;
+  armedUntil: string | null;
+  armSecondsLeft: number | null;
+  mandateId?: string | null;
+  mandateExpiresAt: string | null;
+  mandateSecondsLeft: number | null;
+  ordersRemaining: number | null;
+  maxOrders: number | null;
+  needsArmRenewal: boolean;
+  needsMandateRenewal: boolean;
+  reason?: string;
+}
+
 export interface BotTradingStatusView {
   botId: string;
   version: number;
@@ -426,6 +442,7 @@ export interface BotTradingStatusView {
   consent: Record<string, unknown> | null;
   trial: TradingTrialView | null;
   trialError: string | null;
+  authority?: BotTradingAuthorityView | null;
   account: Record<string, unknown> | null;
   positions: Record<string, unknown> | null;
   orders: Record<string, unknown> | null;
@@ -446,6 +463,18 @@ export async function prepareBotTrading(
 
 export async function getBotTrading(id: string, limit = 20): Promise<BotTradingStatusView> {
   return request(`/automations/${encodeURIComponent(id)}/trading?limit=${limit}`);
+}
+
+export async function renewBotTradingAuthority(id: string): Promise<{
+  renewed: boolean;
+  arm: Record<string, unknown> | null;
+  mandate: Record<string, unknown> | null;
+  authority: BotTradingAuthorityView | null;
+}> {
+  return request(`/automations/${encodeURIComponent(id)}/trading/renew`, {
+    method: "POST",
+    timeoutMs: 60_000,
+  });
 }
 
 export interface TradingScanResult {

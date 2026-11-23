@@ -211,6 +211,15 @@ async def _boot() -> None:
             await start_supervisor_loop(brokers)
         except Exception:  # noqa: BLE001 - never block boot
             log.warning("trading supervisor did not start", exc_info=True)
+        # Stop management: OPT-IN (TRADING_MANAGEMENT_SECONDS, default 0).
+        # Break-even / ATR trail / giveback / time stops are applied only when a
+        # connection carries `config.management`; every action reduces risk.
+        try:
+            from .trade.management_api import start_management_loop
+
+            await start_management_loop(brokers)
+        except Exception:  # noqa: BLE001 - never block boot
+            log.warning("trading management did not start", exc_info=True)
     # Advisory outcome scoring: a bounded interval that records how past
     # recommendations turned out. It never issues advice and never touches an
     # approval gate. Disabled with HARNESS_ADVISORY_AUTO_EVALUATE=0.

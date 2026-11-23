@@ -25,6 +25,13 @@ class RiskLimits:
     max_margin_pct: float = 50.0
     min_margin_level_pct: float = 150.0
     max_spread_pct_of_risk: float = 25.0
+    #: Portfolio heat / concentration / drawdown / volatility (0 = off).
+    max_heat_pct: float = 6.0
+    max_cluster_risk_pct: float = 3.0
+    max_cluster_positions: int = 3
+    max_drawdown_pct: float = 10.0
+    min_risk_scale: float = 0.25
+    target_stop_vol_pct: float = 0.0
 
 
 def limits_from_connection(config: Optional[Mapping[str, Any]]) -> RiskLimits:
@@ -44,6 +51,14 @@ def limits_from_connection(config: Optional[Mapping[str, Any]]) -> RiskLimits:
             return default
         return value if value > 0 else default
 
+    def _float0(key: str, default: float) -> float:
+        """Like `_float` but 0 is meaningful (0 disables the rule)."""
+        try:
+            value = float(raw.get(key, default))
+        except (TypeError, ValueError):
+            return default
+        return value if value >= 0 else default
+
     return RiskLimits(
         max_open_positions=_int("maxOpenPositions", 10),
         max_symbol_positions=_int("maxSymbolPositions", 3),
@@ -51,6 +66,12 @@ def limits_from_connection(config: Optional[Mapping[str, Any]]) -> RiskLimits:
         max_margin_pct=_float("maxMarginPct", 50.0),
         min_margin_level_pct=_float("minMarginLevelPct", 150.0),
         max_spread_pct_of_risk=_float("maxSpreadPctOfRisk", 25.0),
+        max_heat_pct=_float0("maxHeatPct", 6.0),
+        max_cluster_risk_pct=_float0("maxClusterRiskPct", 3.0),
+        max_cluster_positions=_int("maxClusterPositions", 3),
+        max_drawdown_pct=_float0("maxDrawdownPct", 10.0),
+        min_risk_scale=_float("minRiskScale", 0.25),
+        target_stop_vol_pct=_float0("targetStopVolPct", 0.0),
     )
 
 

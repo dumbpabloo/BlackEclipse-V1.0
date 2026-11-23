@@ -65,8 +65,12 @@ for (const cmd of candidates) {
   }
 
   // 2. Harness agent runtime (FastAPI + LangChain + LangGraph).
-  //    langgraph is the marker: if it imports, the runtime stack is present.
-  if (hasModule(cmd, "langgraph")) {
+  //    `langgraph` ALONE is not the marker: a partial install can import it
+  //    while every provider package is missing, which selected that interpreter
+  //    and made every model call fail with "No module named 'langchain_openai'".
+  //    Require the graph engine AND a provider integration before calling it
+  //    installed.
+  if (hasModule(cmd, "langgraph") && hasModule(cmd, "langchain_openai")) {
     console.log("[setup] Python agent runtime already installed.");
   } else {
     console.log("[setup] Installing Python agent runtime (LangChain + LangGraph)...");

@@ -45,6 +45,7 @@ import {
   rememberVenue,
 } from "@/lib/bots/trading/venue-memory";
 import { StrategyPicker } from "@/components/bots/trading/strategy-picker";
+import { AuthorityStrip } from "@/components/bots/trading/authority-strip";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -363,6 +364,16 @@ export function BotTradingSection({ bot, onChanged }: Props) {
         </p>
       ) : null}
 
+      {/* What keeps the bot authorized, and when it renews itself */}
+      {status?.authority?.available && draft.mode !== "shadow" && (
+        <AuthorityStrip
+          botId={bot.id}
+          authority={status.authority}
+          disabled={busy !== null}
+          onRenewed={refresh}
+        />
+      )}
+
       {/* Decisions */}
       <div>
         <div className="mb-1 text-[11px] font-semibold text-muted-foreground">
@@ -558,6 +569,10 @@ export function BotTradingSection({ bot, onChanged }: Props) {
     </div>
   );
 }
+
+// ── Authority strip ─────────────────────────────────────────────────────────
+// Extracted to `./trading/authority-strip` so this file stays under the size
+// ratchet; the component owns its own renewal call and countdown labels.
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (

@@ -21,8 +21,9 @@ from .guardrails import GUARDRAILS
 
 # The production Eclipse prompt is ~34k characters (finance-harness contract +
 # runtime awareness). The cap must admit the real baseline or no RSL surface
-# can ever be derived from it; 48k keeps a hard ceiling with room to grow.
-MAX_PROMPT_CHARS = 48_000
+# can ever be derived from it; 50k keeps a hard ceiling with room to grow (the
+# production prompt measured 48,205 chars on 2026-11-23).
+MAX_PROMPT_CHARS = 50_000
 MAX_TOOL_GUIDANCE_CHARS = 4_000
 MAX_STEPS = 32
 MAX_TOOL_CALLS = 200

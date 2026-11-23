@@ -108,7 +108,9 @@ def _validate_trading(
     version = str(config.get("strategyVersion") or "").strip()
     mode = str(config.get("mode") or "").strip().lower()
     connection_id = str(config.get("connectionId") or "").strip()
-    symbols = trading_policy.normalize_symbols(config.get("symbols") or [])
+    symbols = trading_policy.normalize_symbols(
+        config.get("symbols") or [], limit=config.get("maxSymbols"),
+    )
 
     if not strategy_id:
         error("STRATEGY_ID_REQUIRED", "action.config.strategyId",

@@ -110,6 +110,7 @@ export async function updateAutomation(id: string, patch: Record<string, unknown
 // ── Trading ──────────────────────────────────────────────────────────────────
 
 export type {
+  BotTradingAuthorityView,
   BotTradingStatusView,
   PrepareTradingInput,
   TradingScanResult,
@@ -138,6 +139,18 @@ export async function getBotTrading(
   limit = 20,
 ): Promise<import("./automation-client").BotTradingStatusView> {
   return api(`/api/automations/${encodeURIComponent(id)}/trading?limit=${limit}`);
+}
+
+export async function renewBotTradingAuthority(
+  id: string,
+): Promise<{
+  renewed: boolean;
+  arm: { renewed?: boolean; reason?: string; message?: string } | null;
+  authority: import("./automation-client").BotTradingAuthorityView | null;
+}> {
+  return api(`/api/automations/${encodeURIComponent(id)}/trading/renew`, {
+    method: "POST",
+  });
 }
 
 export async function scanBotTrading(

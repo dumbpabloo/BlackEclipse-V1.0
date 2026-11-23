@@ -32,7 +32,6 @@ CONSENT_TTL_SECONDS = 30 * 24 * 60 * 60
 class PrepareBody(BaseModel):
     strategyId: str = ""  # noqa: N815 - wire name
     strategyVersion: str = ""  # noqa: N815
-    strategyVersion: str
     mode: str = "shadow"  # noqa: N815 - wire name
     connectionId: str = ""  # noqa: N815
     symbols: list[str] = Field(default_factory=list)
@@ -63,6 +62,13 @@ def _required_phrase(body: PrepareBody, live: LiveStrategyService) -> str:
     except Exception:  # noqa: BLE001 - the exact phrase is returned by prepare anyway
         pass
     return f"MANDATE DEMO {label}"
+
+
+def _universe(items: Any) -> list[str]:
+    """Normalise a bot's symbol list against the process hard ceiling."""
+    return trading_policy.normalize_symbols(
+        items or [], limit=trading_policy.MAX_SYMBOLS_HARD,
+    )
 
 
 def _definition(automation_id: str):
@@ -147,7 +153,7 @@ def _prepare_agent(
     try:
         mandate = brokers.create_mandate(body.connectionId, {
             "mode": body.mode,
-            "symbols": [s.strip().upper() for s in body.symbols if s.strip()] or ["*"],
+            "symbols": _universe(body.symbols) or ["*"],
             "maxOrders": max(1, int(body.maxOrders or 1)),
             "maxMargin": float(body.maxMargin or 0),
             "ttlSeconds": int(body.ttlSeconds or 86_400),
@@ -198,7 +204,7 @@ def _consent(
         renewed["autoRenew"] = bool(getattr(authority, "auto_renew", True))
         renewed["revokedAt"] = None
         return renewed
-    symbols = [str(s).strip().upper() for s in body.symbols if str(s).strip()] or ["*"]
+    symbols = _universe(body.symbols) or ["*"]
     return {
         "version": 1,
         "kind": "standing",
@@ -238,7 +244,8 @@ def prepare_trading(
             trading_policy.consent_request_for(
                 {
                     "mode": body.mode,
-                    "symbols": body.symbols,
+                    "symbols": _universe(body.symbols),
+                    "maxSymbols": trading_policy.MAX_SYMBOLS_HARD,
                     "maxOrdersPerDay": body.maxOrders,
                 },
                 {
@@ -266,7 +273,7 @@ def prepare_trading(
             strategy_id=body.strategyId,
             version=body.strategyVersion,
             connection_id=body.connectionId,
-            symbols=body.symbols,
+            symbols=_universe(body.symbols),
             mode=body.mode,
             timeframe=body.timeframe,
             volume=body.volume,
@@ -299,7 +306,7 @@ def prepare_trading(
             config_patch={
                 "mode": body.mode,
                 "connectionId": body.connectionId,
-                "symbols": [s.strip().upper() for s in body.symbols if s.strip()],
+                "symbols": _universe(body.symbols),
                 "timeframe": body.timeframe,
                 "volume": body.volume,
                 "stopLossPoints": body.stopLossPoints,
@@ -372,6 +379,17 @@ def trading_status(
     except Exception:  # noqa: BLE001
         pass
 
+    # The arm + mandate countdown the bot panel shows. Read-only; it never
+    # renews. A trial without a readable authority is reported honestly.
+    authority_state: Optional[dict[str, Any]] = None
+    if trial is not None and brokers is not None and live is not None:
+        try:
+            from ..trade.renewal import authority_status  # noqa: PLC0415
+
+            authority_state = authority_status(brokers, live, trial)
+        except Exception as exc:  # noqa: BLE001
+            authority_state = {"available": False, "reason": str(exc)}
+
     return {
         "success": True,
         "botId": automation_id,
@@ -382,6 +400,7 @@ def trading_status(
         "consent": config.get("consent"),
         "trial": trial,
         "trialError": trial_error,
+        "authority": authority_state,
         "account": account,
         "positions": positions,
         "orders": orders,
@@ -414,6 +433,7 @@ async def scan_trading(
         )
     symbols = trading_policy.normalize_symbols(
         body.symbols or config.get("symbols") or [],
+        limit=config.get("maxSymbols"),
     )
     if not symbols:
         raise HTTPException(
@@ -452,6 +472,53 @@ async def scan_trading(
         "actionable": [row["symbol"] for row in ranked],
         "results": results,
         "note": "A scan is a condition on the last closed bar, not an order.",
+    }
+
+
+@router.post("/automations/{automation_id}/trading/renew")
+def renew_trading_authority(
+    automation_id: str, _: bool = Depends(require_operator),
+) -> dict[str, Any]:
+    """Extend the arm/mandate now instead of waiting for the next entry.
+
+    This is the manual equivalent of what auto mode does at order time: it only
+    extends an existing grant, clamped to the bot's current stage. Arming still
+    requires the operator's typed phrase; an expired arm is not resurrected.
+    """
+    definition = _definition(automation_id)
+    config = definition.action.config if isinstance(definition.action.config, dict) else {}
+    trial_id = str(config.get("trialId") or "")
+    if not trial_id:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "TRADING_NOT_PREPARED",
+                    "message": "prepare trading before renewing its authority"},
+        )
+    brokers = getattr(service, "brokers", None)
+    if brokers is None:
+        raise HTTPException(status_code=503, detail="the broker layer is not available")
+    from ..trade.renewal import ensure_authority  # noqa: PLC0415
+
+    try:
+        outcome = ensure_authority(
+            brokers,
+            _live(),
+            trial_id,
+            automation_id=automation_id,
+            bot_version=definition.version,
+            force=True,
+        )
+    except Exception as exc:  # noqa: BLE001 - every refusal is a 4xx with a code
+        code = str(getattr(exc, "code", "") or "AUTHORITY_RENEWAL_FAILED")
+        raise HTTPException(
+            status_code=400, detail={"code": code, "message": str(exc)}
+        ) from exc
+    return {
+        "success": True,
+        "renewed": bool(outcome.get("renewed")),
+        "arm": outcome.get("arm"),
+        "mandate": outcome.get("mandate"),
+        "authority": outcome.get("status"),
     }
 
 

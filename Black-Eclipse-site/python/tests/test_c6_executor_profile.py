@@ -90,7 +90,7 @@ def test_computer_use_refuses_an_unenforceable_profile(monkeypatch):
 
     monkeypatch.setenv("BLACK_ECLIPSE_SANDBOX_PROFILE", "read-only")
     monkeypatch.setattr(profiles, "get_sandbox", lambda: FakeSandbox(LOCAL_CAPS))
-    monkeypatch.setattr(computer_tools, "_session_of", lambda args: (object(), None))
+    monkeypatch.setattr(computer_tools, "_session_of", lambda args, ctx=None: (object(), None))
     monkeypatch.setattr(computer_tools, "_core", lambda session: object())
 
     ctx = ToolContext(run_id="r1", log=lambda *_: None)

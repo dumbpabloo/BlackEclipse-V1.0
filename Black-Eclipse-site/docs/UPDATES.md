@@ -421,6 +421,15 @@ branch:
    and relaunches the window. Closing and reopening Eclipse achieves the same
    thing, so an older shell that predates the `be-update` listener still ends up
    on the new build once it is reopened.
+   The relaunch deliberately **waits for the old window process to exit** before
+   starting the new one (`waitForShellExit`), then confirms the new process
+   survived and retries once. Without that wait, Tauri's single-instance plugin
+   handed the launch to the still-exiting old process: no window ran its
+   bootstrap and the app sat on a black splash with no server — the "update
+   blacks out my app" failure. A **bridged** install (see `environments.md`)
+   also needs `update-apply.js` and `desktop-refresh.js` shims next to the
+   `desktop-server.js` bridge, because the shell runs those scripts from its
+   packaged root; `desktop-dev-bridge.js` writes all three.
 
 **Why the restart lives in Rust.** Promotion itself is safe while the app runs
 (atomic pointer write, previous release kept). The restart is the destructive

@@ -266,7 +266,16 @@ async def test_a_demo_bot_places_exactly_one_order(tmp_path, monkeypatch):
     ledger = broker.ledger_orders(connection_id, automation_id="aut_e2e")
     assert len(ledger) == 1
     assert ledger[0]["automationId"] == "aut_e2e"
-    assert ledger[0]["mandateId"] == trial["mandateId"]
+    # Auto-renew may replace an expiring mandate before the order; the ledger
+    # must carry the trial's CURRENT mandate, not the one it was prepared with.
+    current = live.get(trial["id"])
+    assert ledger[0]["mandateId"] == current["mandateId"]
+    # The replacement is a real renewal: a new mandate exists and the old one
+    # was revoked only after the replacement was written.
+    mandates = {row["id"]: row for row in broker.list_mandates(connection_id)}
+    assert current["mandateId"] in mandates
+    if trial["mandateId"] != current["mandateId"]:
+        assert mandates[trial["mandateId"]]["revokedAt"] is not None
     assert len(FakeAdapter.POSITIONS) == 1
 
 

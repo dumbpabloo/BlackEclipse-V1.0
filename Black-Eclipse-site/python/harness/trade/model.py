@@ -73,7 +73,103 @@ ALLOWED_CONFIG_KEYS: frozenset[str] = frozenset({
     "symbolAllowlist",
     # Risk engine (all optional; 0 = off).
     "riskPerTradePct", "maxDailyLossPct", "maxSymbolNotional",
+    # Account-fit, portfolio-supervisor and stop-management blocks. `trade/risk.py`
+    # reads `config.risk`, `trade/supervisor.py` reads `config.supervisor`, and
+    # `trade/management.py` reads `config.management`; they must be persistable or
+    # the safety layer silently runs on its defaults.
+    "risk", "supervisor", "management",
 })
+
+#: Nested `config.risk` fields and their numeric kind. Unknown keys are ignored
+#: (never persisted) and a malformed value falls back to the code default, so a
+#: bad override can only ever *narrow* what the engine enforces.
+RISK_BLOCK_KEYS: dict[str, type] = {
+    "maxOpenPositions": int,
+    "maxSymbolPositions": int,
+    "maxRiskPct": float,
+    "maxMarginPct": float,
+    "minMarginLevelPct": float,
+    "maxSpreadPctOfRisk": float,
+    "maxHeatPct": float,
+    "maxClusterRiskPct": float,
+    "maxClusterPositions": int,
+    "maxDrawdownPct": float,
+    "minRiskScale": float,
+    "targetStopVolPct": float,
+}
+
+#: Nested `config.supervisor` fields and their numeric kind.
+SUPERVISOR_BLOCK_KEYS: dict[str, type] = {
+    "maxPortfolioMarginPct": float,
+    "maxPortfolioPositions": int,
+    "dailyLossPct": float,
+    "weeklyLossPct": float,
+    "warnAtPct": float,
+    "botMinTrades": int,
+    "botMaxConsecutiveLosses": int,
+    "botMinRealizedPnl": float,
+}
+
+
+#: Nested `config.management` numeric fields and their kind.
+MANAGEMENT_BLOCK_KEYS: dict[str, type] = {
+    "breakEvenAtR": float,
+    "breakEvenBufferR": float,
+    "atrPeriod": int,
+    "atrMultiple": float,
+    "percent": float,
+    "minStep": float,
+    "givebackCapR": float,
+    "timeStopMinutes": float,
+    "timeStopMinR": float,
+    "minStopDistance": float,
+}
+
+#: The stop-management modes `trade/management.py` accepts.
+MANAGEMENT_MODES: tuple[str, ...] = ("off", "break_even", "atr_trail", "percent_trail")
+
+
+def _clean_management_block(value: Any) -> dict[str, Any]:
+    """Keep the known scalar knobs and a bounded partial-take schedule."""
+    cleaned = _clean_limit_block("management", value, MANAGEMENT_BLOCK_KEYS)
+    mode = str(value.get("mode") or "off").strip().lower()
+    cleaned["mode"] = mode if mode in MANAGEMENT_MODES else "off"
+    partials = value.get("partials")
+    if isinstance(partials, list):
+        schedule: list[dict[str, float]] = []
+        for item in partials[:10]:
+            if not isinstance(item, dict):
+                continue
+            try:
+                at_r = float(item.get("atR"))
+                fraction = float(item.get("fraction"))
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(at_r) and math.isfinite(fraction) \
+                    and 0 < at_r <= 100 and 0 < fraction < 1:
+                schedule.append({"atR": at_r, "fraction": fraction})
+        if schedule:
+            cleaned["partials"] = sorted(schedule, key=lambda row: row["atR"])
+    return cleaned
+
+
+def _clean_limit_block(name: str, value: Any, schema: dict[str, type]) -> dict[str, Any]:
+    """Keep only known, finite, non-negative numbers from a nested limit block."""
+    if not isinstance(value, dict):
+        raise BrokerConfigError(f"{name} must be an object")
+    cleaned: dict[str, Any] = {}
+    for key, raw in value.items():
+        kind = schema.get(str(key))
+        if kind is None or raw is None:
+            continue
+        try:
+            number = kind(raw)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(float(number)) or number < 0:
+            continue
+        cleaned[str(key)] = number
+    return cleaned
 
 
 class BrokerConfigError(ValueError):
@@ -153,6 +249,12 @@ def validate_config(config: Optional[dict[str, Any]]) -> dict[str, Any]:
             if not isinstance(value, (list, tuple)):
                 raise BrokerConfigError("symbolAllowlist must be a list")
             cleaned[name] = [str(item).strip().upper() for item in value if str(item).strip()]
+        elif name == "risk":
+            cleaned[name] = _clean_limit_block(name, value, RISK_BLOCK_KEYS)
+        elif name == "supervisor":
+            cleaned[name] = _clean_limit_block(name, value, SUPERVISOR_BLOCK_KEYS)
+        elif name == "management":
+            cleaned[name] = _clean_management_block(value)
         elif name in ("maxMargin", "maxVolume", "maxSpreadPoints"):
             try:
                 cleaned[name] = float(value)

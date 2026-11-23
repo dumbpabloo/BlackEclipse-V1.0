@@ -33,6 +33,9 @@ const {
   stopShell,
   stopOwnedServer,
   launchShell,
+  waitForShellExit,
+  shellPids,
+  pidAlive,
 } = require("./lib/desktop-process");
 
 function argValue(flag) {
@@ -112,11 +115,35 @@ async function restart() {
   log("stopping this channel's window and server…");
   const pids = stopShell(channel);
   if (pids.length) log(`stopped window pid ${pids.join(", ")}`);
+  // WAIT for the window to actually exit before doing anything else. Tauri's
+  // single-instance plugin hands a new launch to the still-exiting old process,
+  // so relaunching too early starts nothing: the app sits on a black splash with
+  // no server. That was the "update leaves a dead window" failure.
+  if (pids.length && !waitForShellExit(channel)) {
+    log("the previous window is taking a while to exit — relaunching anyway");
+  }
   stopOwnedServer(channel);
   const free = await waitPortFree(channel.appPort, 15_000);
   if (!free) log(`port ${channel.appPort} is still busy — the next launch will report it`);
-  const launched = launchShell(channel);
-  if (launched.launched) log(`window relaunched (pid ${launched.pid})`);
+  let launched = launchShell(channel);
+  if (!launched.launched) {
+    log(`could not relaunch the window (${launched.reason || "unknown"}) — open it manually`);
+    return;
+  }
+  // A spawn handed off to a still-exiting instance exits immediately and leaves
+  // NO window at all. Confirm the process survives, and retry once after the old
+  // one is gone, so "Restart" can never end with an empty desktop.
+  await new Promise((r) => setTimeout(r, 2_500));
+  if (launched.pid && !pidAlive(launched.pid) && shellPids(exe).length === 0) {
+    log("the relaunched window exited immediately — retrying");
+    waitForShellExit(channel);
+    launched = launchShell(channel);
+  }
+  if (launched.launched) {
+    log(`window relaunched (pid ${launched.pid})`);
+  } else {
+    log("the window could not be relaunched — open Black Eclipse again");
+  }
 }
 
 function rollbackRelease() {

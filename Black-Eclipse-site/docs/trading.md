@@ -482,9 +482,40 @@ Rules:
   consent stays on the definition for audit but covers nothing while paused.
 
 Routes: `POST /automations/{id}/trading/prepare`, `GET /automations/{id}/trading`,
-`POST /automations/{id}/trading/scan`, `POST /automations/{id}/trading/panic`
+`POST /automations/{id}/trading/scan`, `POST /automations/{id}/trading/renew`,
+`POST /automations/{id}/trading/panic`
 (front door: `/api/automations/{id}/trading…`). `prepare` is the only route that
 creates market authority; none of them place an order.
+
+### Unattended renewal: what keeps a bot alive
+
+Auto mode used to stop at the consent. The arm and the mandate are the two
+expiring objects that actually authorize an order, and `trade/renewal.py` renews
+them at the moment an entry is about to be sent:
+
+- **Arm (live only)**: extended to at most 8 h, but only while it is still valid
+  and within its last hour. An arm that already expired is **never** resurrected;
+  that boundary needs the operator's typed phrase again. The renewal is an
+  `arm/renewed` connection event (`armedBy = auto-renew`).
+- **Mandate**: replaced when it has ≤ 2 h left, ≤ 1 order left, is revoked, or is
+  expired. The replacement keeps the same bot/workflow pin and is clamped **down**
+  to the live ramp stage (`ramp_limits`), never above the bot's ceiling. The old
+  mandate is revoked only after the replacement exists, so a failed renewal leaves
+  the bot with working authority. The trial's `mandateId` moves to the new row,
+  and submit reads the refreshed trial.
+- **Kill switch and panic still win.** `panic` revokes mandates and pauses the
+  bot; the kill switch cancels Eclipse's orders and clears the arm. A cleared arm
+  means renewal has nothing to extend. Positions are still never closed
+  automatically.
+
+`GET /automations/{id}/trading` includes an `authority` block (arm/mandate
+countdowns, orders left, `needsArmRenewal`, `needsMandateRenewal`), and
+`POST /automations/{id}/trading/renew` forces the same renewal now (useful after
+re-arming). Neither route places an order.
+
+Renewal is a **bot** behaviour: `run_once` calls it only when an `automation_id`
+is present. A manual trial or a graph-run order (no automation id) keeps the old
+exact path and is never renewed behind the operator's back.
 
 ### Visual teaching (P8)
 
@@ -502,6 +533,16 @@ symbols on the last closed bar and returns each symbol's signal plus the
 actionable ones. It is the same evaluation the runner acts on, so a candidate is
 never invented. The trading panel's **Find trades** button adopts the actionable
 symbols as the universe and re-prepares under the standing consent.
+
+The universe is `action.config.symbols`, bounded by `action.config.maxSymbols`
+(default **8**, hard ceiling **32**). The setting is enforced by the runner, the
+scan endpoint, validation and the standing-consent comparison (the grant is a
+set, so symbol order does not matter). A zero, negative or malformed value falls
+back to the default rather than silently shrinking the bot to one symbol.
+`dynamicSymbols` means "evaluate every configured symbol and take the best
+signal this bar"; without it the runner uses the first symbol, the predictable
+choice for a single-instrument strategy. Neither flag can invent a symbol the
+operator never configured or the broker does not offer.
 
 
 ### Strategy bots
@@ -574,6 +615,81 @@ Surfaces: `risk_supervisor` (read-only report, safe for any turn) and
 `risk_supervisor_apply` (write/high, pauses underperformers on request). The periodic
 sweep is opt-in with `TRADING_SUPERVISOR_SECONDS` (minimum 30, default **0** = off) and
 runs from `boot.py` beside the reconciler. It places no order.
+
+### Stop management (break-even, trail, giveback, time stop)
+
+`harness/trade/management.py` is the deterministic exit layer above the initial
+broker-side bracket. A connection opts in with `config.management` (Settings →
+Trading → **Stop management**):
+
+```jsonc
+{
+  "mode": "atr_trail",          // off | break_even | atr_trail | percent_trail
+  "breakEvenAtR": 1.0,          // move to entry after this many R
+  "breakEvenBufferR": 0.0,      // leave this fraction of R beyond entry
+  "atrPeriod": 14,
+  "atrMultiple": 2.5,
+  "percent": 0.0,               // percent trail (0.02 = 2%)
+  "minStep": 0.0,               // smallest stop improvement worth applying
+  "givebackCapR": 0.0,          // keep at least this many R of open profit
+  "timeStopMinutes": 0,         // close a trade that goes nowhere
+  "timeStopMinR": 0.0,
+  "partials": [{ "atR": 2, "fraction": 0.5 }]
+}
+```
+
+Rules, enforced in code rather than trusted to a caller:
+
+- **One-way ratchet.** A candidate stop must beat the stored stop by `minStep`;
+  a flat or adverse tick can never widen risk. The engine also refuses a stop
+  inside the broker's minimum stop distance (`STOP_TOO_CLOSE`).
+- **No invented numbers.** R comes from the position's own entry and stop; the
+  ATR comes from the broker's bars. Missing data is a named refusal
+  (`NO_STOP`, `ATR_UNAVAILABLE`, `PRICE_UNAVAILABLE`), never a guess.
+- **Risk-reducing only.** The manager modifies a stop, partially closes or
+  closes; it never opens, adds to or hedges exposure. Those are the existing
+  arm-free, approval-free paths.
+
+`PositionManager` applies one policy to a service. `management_api.py`'s
+`ManagementSweeper` reads each managed connection, fetches the broker's quote and
+(only for ATR mode) bars per position, and applies the actions. The periodic
+sweep is opt-in with `TRADING_MANAGEMENT_SECONDS` (minimum 30, default **0** =
+off) and runs from `boot.py` beside the supervisor. It is independent of the
+Graph Studio nodes (`trading.break_even` / `trading.trail_stop` /
+`trading.partial_close`), which remain available for composition.
+
+`config.risk` (account fit) and `config.supervisor` (portfolio stops) are
+persisted through the same validated connection store; only known, finite,
+non-negative fields are kept.
+
+### Portfolio heat, concentration and the drawdown governor
+
+`harness/trade/heat.py` answers the questions the per-order check cannot:
+
+- **Heat** — the money at risk if every open stop were hit, plus the planned
+  order, as a share of equity. `maxHeatPct` (default 6) refuses a plan that would
+  push the book over it.
+- **Concentration** — open risk grouped into deterministic clusters: FX pairs by
+  quote currency (`FX:USD` groups EURUSD/GBPUSD/AUDUSD), stable-quoted crypto by
+  the stable (`CRYPTO:USDT` groups BTC/ETH), metals as `METALS:<quote>`, and any
+  other instrument as its own cluster. `maxClusterRiskPct` (default 3) and
+  `maxClusterPositions` (default 3) cap one cluster.
+- **Drawdown governor** — new size is multiplied by `1 - drawdown% / maxDrawdownPct`,
+  floored at `minRiskScale` (default 0.25, so size falls to a quarter at the
+  limit). The baseline is the supervisor's first-write-wins day-open snapshot; a
+  restart cannot move it, and no snapshot means no governor.
+- **Volatility targeting** — `targetStopVolPct` scales risk so the stop distance
+  approximates a target % of price (`0.25`–`2.0` clamp), making 1R comparable
+  across instruments.
+- **Event blackout** — when a caller supplies a calendar (`events` on the plan
+  payload), a high-impact event inside `eventWindowMinutes` (default 30) pauses
+  new entries. Eclipse never invents an event and never widens a stop for one.
+
+`trade_plan` returns `heat` (verdict, reasons, measured/unmeasured positions,
+cluster risk), `riskScale`, `riskPctEffective` and `drawdownPct`, and a blocking
+heat/cluster/event verdict refuses the plan before an approval card exists. A
+position whose contract/tick facts cannot be read is reported `unmeasured`; the
+heat total is then a lower bound, never a zero-risk claim.
 
 ### The live proof gate (evidence before exposure)
 

@@ -383,7 +383,8 @@ class LiveStrategyService:
         }
 
     def _update(self, trial_id: str, **fields: Any) -> dict[str, Any]:
-        allowed = {"status", "lastSignalJson", "lastResultJson", "ordersUsed", "stoppedAt"}
+        allowed = {"status", "lastSignalJson", "lastResultJson", "ordersUsed",
+                   "stoppedAt", "mandateId"}
         sets, args = [], []
         for key, value in fields.items():
             if key not in allowed:
@@ -717,6 +718,32 @@ class LiveStrategyService:
                             else "Preview refused: " + "; ".join(order.get("reasons") or [])
                         )
                         self._runner.finish(run_id, state="done")
+                        self._update(trial_id, lastResultJson=_json(result))
+                        return result
+                    # Auto mode: renew the arm + mandate at the last moment
+                    # before a real send, and only while the operator's standing
+                    # consent is still valid (the runner checked it). A renewal
+                    # refusal is a decision, not a crash, and the bar stays
+                    # retryable. Dry runs never consume or renew authority.
+                    # Only a BOT (automation_id) renews: a manual/graph trial was
+                    # prepared by a human at the keyboard and must never renew
+                    # itself (and a broker double need not answer its calls).
+                    try:
+                        if automation_id:
+                            from ..trade.renewal import ensure_authority  # noqa: PLC0415
+
+                            ensure_authority(
+                                self.broker, self, trial_id,
+                                automation_id=automation_id, bot_version=bot_version,
+                            )
+                            # The renewal moved the trial to a new mandate; submit
+                            # must read the refreshed row, not the stale snapshot.
+                            trial = self.get(trial_id)
+                    except Exception as exc:  # noqa: BLE001 - typed refusal
+                        self._runner.release(run_id)
+                        result["message"] = f"No order: {exc}"
+                        result["code"] = str(
+                            getattr(exc, "code", "") or "AUTHORITY_RENEWAL_FAILED")
                         self._update(trial_id, lastResultJson=_json(result))
                         return result
                     oms = self._oms.create(payload, key=key)

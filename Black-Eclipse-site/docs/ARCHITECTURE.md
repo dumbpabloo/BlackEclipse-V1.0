@@ -487,7 +487,17 @@ Two mechanisms:
    branches on an outcome instead of a status string.
    P4 adds durable reconciliation (`trade/reconcile.py`) of broker deals, positions
    and order state; the background pass is opt-in and a failed sync is an error,
-   never a fabricated fill. Paper fills remain Graph Studio's `trading.paper_order`. The
+   never a fabricated fill. `trade/management.py` is the deterministic exit layer:
+   a pure policy engine (break-even + buffer, one-way ATR/percent trail, giveback
+   floor, time stop, partials) plus `PositionManager`, which applies only
+   risk-reducing actions. `trade/management_api.py` adds an opt-in sweep
+   (`TRADING_MANAGEMENT_SECONDS`, default off) beside the supervisor; both read
+   per-connection `config.management`, `config.risk` and `config.supervisor`
+   through the validated, allowlisted connection store. `trade/heat.py` adds the
+   portfolio layer: open risk at stops as heat, deterministic FX/crypto
+   concentration clusters, a drawdown governor, volatility-targeted stop distance
+   and a caller-supplied event blackout, all fed into `trade_plan` before an
+   approval card exists. Paper fills remain Graph Studio's `trading.paper_order`. The
    `trading`-category widgets (Quick Trade, Open Positions, Working Orders, Margin
    Usage, Today P&L) read the first saved connection and poll it every 15 s; a
    missing or logged-out connection renders the named reason, never a fabricated

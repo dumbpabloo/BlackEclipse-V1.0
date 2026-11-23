@@ -21,6 +21,7 @@ import {
   pauseAutomation,
   prepareBotTrading,
   resetAutomationBreaker,
+  renewBotTradingAuthority,
   scanBotTrading,
   resumeAutomation,
   resumeAutomationExecution,
@@ -146,6 +147,12 @@ async function handle(request: Request, path: string[], method: string): Promise
       }
       if (method === "POST" && sub === "panic") {
         return NextResponse.json({ success: true, ...(await panicBotTrading(id)) });
+      }
+      if (method === "POST" && sub === "renew") {
+        return NextResponse.json({
+          success: true,
+          ...(await renewBotTradingAuthority(id)),
+        });
       }
       if (method === "POST" && sub === "scan") {
         const body = (await request.json().catch(() => ({}))) as { symbols?: unknown };

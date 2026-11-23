@@ -16,8 +16,16 @@ risk or the too-tight stop), not a dead end.
 from __future__ import annotations
 
 import hashlib
+import time
 from typing import Any, Mapping, Optional
 
+from .heat import (
+    HeatLimits,
+    assess_heat,
+    drawdown_scale,
+    event_blackout,
+    volatility_scale,
+)
 from .risk import assess_trade_risk, limits_from_connection
 from .sizing import size_position
 
@@ -59,6 +67,15 @@ def build_trade_plan(
     risk_pct = _num(payload.get("riskPct"), _DEFAULT_RISK_PCT) or _DEFAULT_RISK_PCT
     stop = _num(payload.get("stop"))
     target = _num(payload.get("target")) or None
+    limits = limits_from_connection(getattr(connection, "config", None))
+    heat_limits = HeatLimits(
+        max_heat_pct=limits.max_heat_pct,
+        max_cluster_risk_pct=limits.max_cluster_risk_pct,
+        max_cluster_positions=limits.max_cluster_positions,
+        max_drawdown_pct=limits.max_drawdown_pct,
+        min_risk_scale=limits.min_risk_scale,
+        target_stop_vol_pct=limits.target_stop_vol_pct,
+    )
 
     facts_result = service.symbol_info(connection_id, symbol)
     if not facts_result.get("available"):
@@ -70,6 +87,21 @@ def build_trade_plan(
         return {**account_result, "status": "UNAVAILABLE", "allowed": False}
     account = dict(account_result.get("data") or {})
     equity = _num(account.get("equity")) or _num(account.get("balance"))
+
+    # Drawdown governor: size down as the book bleeds below the day-open
+    # baseline. The baseline is the supervisor's own first-write-wins snapshot,
+    # so a restart cannot move it to hide a loss. No snapshot = no governor.
+    risk_scale = 1.0
+    drawdown_pct: Optional[float] = None
+    try:
+        snapshot = service.connections.get_risk_snapshot("portfolio", "day")
+    except Exception:  # noqa: BLE001 - a snapshot read must not block a plan
+        snapshot = None
+    if snapshot and _num(snapshot.get("equity")) and equity > 0:
+        day_open = _num(snapshot.get("equity")) or 0.0
+        if day_open > 0:
+            drawdown_pct = max(0.0, (day_open - equity) / day_open * 100.0)
+            risk_scale = drawdown_scale(drawdown_pct, heat_limits)
 
     entry = _num(payload.get("entry"))
     entry_source = "operator"
@@ -90,9 +122,14 @@ def build_trade_plan(
                 "QUOTE_UNAVAILABLE",
             )
 
+    stop_distance = abs(entry - stop) if entry > 0 and stop > 0 else 0.0
+    stop_distance_pct = stop_distance / entry * 100.0 if entry > 0 else 0.0
+    risk_scale *= volatility_scale(stop_distance_pct, heat_limits)
+    effective_risk_pct = risk_pct * risk_scale
+
     sizing = size_position(
         equity=equity,
-        risk_pct=risk_pct,
+        risk_pct=effective_risk_pct,
         entry=entry,
         stop=stop,
         side=side,
@@ -124,6 +161,9 @@ def build_trade_plan(
         "stop": stop,
         "target": target,
         "riskPct": risk_pct,
+        "riskPctEffective": round(effective_risk_pct, 4),
+        "riskScale": round(risk_scale, 4),
+        "drawdownPct": round(drawdown_pct, 2) if drawdown_pct is not None else None,
         "equity": round(equity, 2) if equity else None,
         "currency": account.get("currency") or None,
         "volume": sizing.get("volume"),
@@ -155,7 +195,6 @@ def build_trade_plan(
         distance = _num(sizing.get("distance"))
         volume = _num(sizing.get("volume"))
         risk_amount = _num(sizing.get("riskAmount"))
-        limits = limits_from_connection(getattr(connection, "config", None))
         risk = assess_trade_risk(
             account=account,
             positions=positions,
@@ -171,12 +210,42 @@ def build_trade_plan(
             limits=limits,
         )
         plan["risk"] = risk
+        # Portfolio heat + concentration over the whole book, not just this order.
+        heat = assess_heat(
+            positions=_enrich_for_heat(service, connection.id, positions),
+            equity=equity,
+            planned_risk=risk_amount or 0.0,
+            planned_symbol=plan["symbol"],
+            limits=heat_limits,
+        )
+        plan["heat"] = heat
         if target and distance > 0:
             plan["riskReward"] = round(abs(target - entry) / distance, 2)
+
+        reasons: list[str] = []
         if risk.get("blocking"):
+            reasons.extend(risk.get("reasons") or [])
+        if heat.get("blocking"):
+            reasons.extend(heat.get("reasons") or [])
+
+        # Event blackout: only when the caller supplies a calendar, so nothing is
+        # invented. A blocked window pauses new entries; it never widens a stop.
+        events = payload.get("events")
+        if isinstance(events, list):
+            blackout = event_blackout(
+                events,
+                payload.get("now") or time.time(),
+                window_minutes=_num(payload.get("eventWindowMinutes"), 30.0) or 30.0,
+                min_impact=str(payload.get("minImpact") or "high"),
+            )
+            plan["eventBlackout"] = blackout
+            if blackout.get("blocking"):
+                reasons.append(blackout["reason"])
+
+        if reasons:
             plan["allowed"] = False
             plan["status"] = "REFUSED"
-            plan["reasons"] = list(risk.get("reasons") or [])
+            plan["reasons"] = reasons
         plan["planId"] = _plan_id(connection.id, plan)
     else:
         plan["risk"] = None
@@ -184,6 +253,38 @@ def build_trade_plan(
 
     plan["summary"] = _summary(plan)
     return plan
+
+
+def _enrich_for_heat(
+    service: Any, connection_id: str, positions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Attach the symbol facts heat needs (contract/tick) to each open position.
+
+    A broker position row carries entry, stop and volume but not the symbol's
+    contract size, so heat would be unmeasurable for every row. Facts are read
+    once per distinct symbol and only when missing; a failed read leaves the row
+    unmeasured rather than inventing a size.
+    """
+    cache: dict[str, dict[str, Any]] = {}
+    enriched: list[dict[str, Any]] = []
+    for row in positions:
+        item = dict(row)
+        symbol = str(row.get("symbol") or "").strip()
+        if symbol and item.get("contractSize") is None:
+            if symbol not in cache:
+                facts: dict[str, Any] = {}
+                try:
+                    result = service.symbol_info(connection_id, symbol)
+                    if result.get("available") and isinstance(result.get("data"), dict):
+                        facts = dict(result["data"])
+                except Exception:  # noqa: BLE001 - unmeasured is honest, not fatal
+                    facts = {}
+                cache[symbol] = facts
+            for key in ("contractSize", "tickSize", "tickValue"):
+                if item.get(key) is None and cache[symbol].get(key) is not None:
+                    item[key] = cache[symbol][key]
+        enriched.append(item)
+    return enriched
 
 
 def _plan_id(connection_id: str, plan: Mapping[str, Any]) -> str:

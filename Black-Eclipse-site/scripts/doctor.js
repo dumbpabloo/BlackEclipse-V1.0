@@ -247,7 +247,11 @@ if (py) {
   // 5b. Harness agent runtime (FastAPI + LangChain + LangGraph). The agentic
   //     harness delegates to this service, so a missing stack means runs are
   //     unavailable — install it, and report honestly if that fails.
-  if (run(`"${py}" -c "import langgraph"`, { timeout: 20000 }).status !== 0) {
+  //     `langgraph` alone is NOT a sufficient marker: an interpreter with a
+  //     partial install had langgraph but no provider packages, and every model
+  //     call failed with "No module named 'langchain_openai'". Probe a provider
+  //     too so the repair path actually fires.
+  if (run(`"${py}" -c "import langgraph, langchain_openai"`, { timeout: 20000 }).status !== 0) {
     const requirements = path.join(root, "python", "requirements.txt");
     if (fs.existsSync(requirements)) {
       fix("Python agent runtime", `"${py}" -m pip install -r "${requirements}"`);

@@ -449,7 +449,7 @@ export function TradingSetupPanel({
             <input
               type="number"
               min={1}
-              max={8}
+              max={32}
               value={draft.maxSymbols}
               onChange={(event) => onChange({ maxSymbols: Number(event.target.value) })}
               className="w-14 rounded border border-input bg-transparent px-1 py-0.5"

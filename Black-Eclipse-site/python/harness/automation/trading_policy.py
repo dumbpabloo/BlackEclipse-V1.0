@@ -18,14 +18,30 @@ from zoneinfo import ZoneInfo
 
 MODES = ("shadow", "demo", "live")
 TIERS = ("l0", "l1", "l2")
+#: Default universe size for a bot form that does not choose one.
 MAX_SYMBOLS = 8
+#: Hard ceiling for an operator-chosen universe (`config.maxSymbols`). The UI
+#: offers up to this; anything above it is clamped, never silently accepted.
+MAX_SYMBOLS_HARD = 32
 DEFAULT_THRESHOLD = 3
 
 
 # ── Symbols ──────────────────────────────────────────────────────────────────
 
-def normalize_symbols(items: Iterable[Any]) -> list[str]:
-    """Upper-case, de-duplicate and cap a symbol list. Never invents one."""
+def normalize_symbols(items: Iterable[Any], limit: Optional[int] = None) -> list[str]:
+    """Upper-case, de-duplicate and cap a symbol list. Never invents one.
+
+    `limit` is the bot's configured universe size (`config.maxSymbols`). It is
+    clamped to `MAX_SYMBOLS_HARD`, so the operator can widen the scan but not
+    past the process ceiling.
+    """
+    try:
+        cap = MAX_SYMBOLS if limit is None else int(limit)
+    except (TypeError, ValueError):
+        cap = MAX_SYMBOLS
+    if cap <= 0:  # a malformed setting falls back to the default, never to 1
+        cap = MAX_SYMBOLS
+    cap = min(cap, MAX_SYMBOLS_HARD)
     seen: set[str] = set()
     out: list[str] = []
     for raw in items or []:
@@ -36,7 +52,7 @@ def normalize_symbols(items: Iterable[Any]) -> list[str]:
             continue
         seen.add(symbol)
         out.append(symbol)
-        if len(out) >= MAX_SYMBOLS:
+        if len(out) >= cap:
             break
     return out
 
@@ -205,8 +221,11 @@ def consent_covers(consent: Optional[Mapping[str, Any]], request: Mapping[str, A
                 "field": "consent"}
 
     limits = consent.get("limits") or {}
-    allowed = normalize_symbols(limits.get("symbols") or [])
-    wanted = normalize_symbols(request.get("symbols") or [])
+    # Compare the full granted/requested lists (hard ceiling), not the default
+    # 8-symbol form cap: a bot configured with 12 symbols must not be told its
+    # consent covers only the first eight in a particular order.
+    allowed = normalize_symbols(limits.get("symbols") or [], limit=MAX_SYMBOLS_HARD)
+    wanted = normalize_symbols(request.get("symbols") or [], limit=MAX_SYMBOLS_HARD)
     wildcard = "*" in allowed
     outside = [] if wildcard else [s for s in wanted if s not in allowed]
     if outside:
@@ -247,7 +266,10 @@ def consent_request_for(config: Mapping[str, Any],
                         authority: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "mode": config.get("mode"),
-        "symbols": normalize_symbols(config.get("symbols") or []),
+        "symbols": normalize_symbols(
+            config.get("symbols") or [],
+            limit=config.get("maxSymbols"),
+        ),
         "maxOrdersPerDay": config.get("maxOrdersPerDay") or 0,
         "maxMarginPerOrder": authority.get("maxMarginPerOrder") or 0,
         "maxOpenPositions": authority.get("maxOpenPositions") or 0,
@@ -384,6 +406,7 @@ def rank_evaluations(evaluations, *, max_entries: int = 1,
 __all__ = [
     "DEFAULT_THRESHOLD",
     "MAX_SYMBOLS",
+    "MAX_SYMBOLS_HARD",
     "MODES",
     "TIERS",
     "TIMEFRAME_SECONDS",

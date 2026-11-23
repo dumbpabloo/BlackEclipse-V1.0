@@ -45,7 +45,11 @@ promoting, `desktop:refresh` checks for the dev bridge; when it is missing it
 stops the window and its owned server, bridges the install to this checkout
 (`scripts/desktop-dev-bridge.js`, preserving the bundled payload as
 `app.bundled-<version>`), then promotes and relaunches. This happens after the
-build, so the old window keeps working during the slow compile.
+build, so the old window keeps working during the slow compile. The bridge
+writes a shim for every script the Tauri shell invokes by path
+(`desktop-server.js`, `update-apply.js`, `desktop-refresh.js`) — a bridge with
+only the server shim made *Apply update* and *Restart Eclipse* silently spawn
+files that did not exist.
 
 **Orphaned server recovery.** A window can crash, be force-closed, or be
 promoted while its server tree is still exiting. The next launch then finds the

@@ -26,6 +26,42 @@ def test_symbols_normalise_and_match_broker_suffixes():
     assert p.missing_symbols(["EURUSD", "USDJPY"], ["EURUSD"]) == ["USDJPY"]
 
 
+def test_the_universe_size_is_configurable_and_hard_capped():
+    many = [f"SYM{i}" for i in range(40)]
+    assert len(p.normalize_symbols(many)) == p.MAX_SYMBOLS
+    assert len(p.normalize_symbols(many, limit=12)) == 12
+    # A malformed/oversized setting is clamped, never accepted as-is.
+    assert len(p.normalize_symbols(many, limit=999)) == p.MAX_SYMBOLS_HARD
+    # 0/negative/malformed means "use the default", never a surprise 1-symbol bot.
+    assert len(p.normalize_symbols(many, limit=0)) == p.MAX_SYMBOLS
+    assert len(p.normalize_symbols(many, limit=-3)) == p.MAX_SYMBOLS
+    assert len(p.normalize_symbols(many, limit="nonsense")) == p.MAX_SYMBOLS
+
+
+def test_consent_covers_a_universe_wider_than_the_default_form_cap():
+    symbols = [f"SYM{i}" for i in range(12)]
+    consent = {
+        "modes": ["live"],
+        "expiresAt": "2099-01-01T00:00:00Z",
+        "revokedAt": None,
+        "limits": {
+            "symbols": symbols,
+            "maxOrdersPerDay": 4,
+            "maxMarginPerOrder": 100,
+            "maxOpenPositions": 1,
+        },
+    }
+    request = {
+        "mode": "live",
+        # Order must not matter: the grant is a set, not the first eight.
+        "symbols": list(reversed(symbols)),
+        "maxOrdersPerDay": 4,
+        "maxMarginPerOrder": 100,
+        "maxOpenPositions": 1,
+    }
+    assert p.consent_covers(consent, request, NOW)["covered"] is True
+
+
 def test_session_window():
     session = {
         "timezone": "UTC",

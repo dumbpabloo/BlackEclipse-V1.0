@@ -565,6 +565,19 @@ function RiskLimits({
   const [marginMax, setMarginMax] = useState(String(book.maxMarginPct ?? 50));
   const [levelMin, setLevelMin] = useState(String(book.minMarginLevelPct ?? 150));
   const [spreadMax, setSpreadMax] = useState(String(book.maxSpreadPctOfRisk ?? 25));
+  const [heatMax, setHeatMax] = useState(String(book.maxHeatPct ?? 6));
+  const [clusterMax, setClusterMax] = useState(String(book.maxClusterRiskPct ?? 3));
+  const [clusterPos, setClusterPos] = useState(String(book.maxClusterPositions ?? 3));
+  const [ddMax, setDdMax] = useState(String(book.maxDrawdownPct ?? 10));
+  // Stop management (`config.management`): break-even, ATR trail, giveback, time stop.
+  const management = (config.management ?? {}) as Record<string, unknown>;
+  const [mgmtMode, setMgmtMode] = useState(String(management.mode ?? "off"));
+  const [beR, setBeR] = useState(String(management.breakEvenAtR ?? 1));
+  const [atrMult, setAtrMult] = useState(String(management.atrMultiple ?? 2.5));
+  const [percentTrail, setPercentTrail] = useState(String(management.percent ?? 0));
+  const [giveback, setGiveback] = useState(String(management.givebackCapR ?? 0));
+  const [timeStop, setTimeStop] = useState(String(management.timeStopMinutes ?? 0));
+  const [minStep, setMinStep] = useState(String(management.minStep ?? 0));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -591,6 +604,10 @@ function RiskLimits({
         ["maxMarginPct", marginMax],
         ["minMarginLevelPct", levelMin],
         ["maxSpreadPctOfRisk", spreadMax],
+        ["maxHeatPct", heatMax],
+        ["maxClusterRiskPct", clusterMax],
+        ["maxClusterPositions", clusterPos],
+        ["maxDrawdownPct", ddMax],
       ];
       for (const [key, raw] of bookFields) {
         const value = Number(raw);
@@ -598,6 +615,21 @@ function RiskLimits({
       }
       if (Object.keys(nextBook).length) next.risk = nextBook;
       else delete next.risk;
+
+      const nextManagement: Record<string, unknown> = { mode: mgmtMode };
+      const managementFields: Array<[string, string]> = [
+        ["breakEvenAtR", beR],
+        ["atrMultiple", atrMult],
+        ["percent", percentTrail],
+        ["givebackCapR", giveback],
+        ["timeStopMinutes", timeStop],
+        ["minStep", minStep],
+      ];
+      for (const [key, raw] of managementFields) {
+        const value = Number(raw);
+        if (Number.isFinite(value) && value > 0) nextManagement[key] = value;
+      }
+      next.management = nextManagement;
       await updateBrokerConnection(connection.id, { config: next });
       await onSaved();
     } catch (err) {
@@ -646,6 +678,53 @@ function RiskLimits({
         </Field>
         <Field label="Spread / risk %" hint="Spread cost vs planned risk.">
           <input value={spreadMax} onChange={(event) => setSpreadMax(event.target.value)} className={inputClass} />
+        </Field>
+        <Field label="Portfolio heat %" hint="Open risk at stops vs equity.">
+          <input value={heatMax} onChange={(event) => setHeatMax(event.target.value)} className={inputClass} />
+        </Field>
+        <Field label="Cluster risk %" hint="One FX/crypto cluster vs equity.">
+          <input value={clusterMax} onChange={(event) => setClusterMax(event.target.value)} className={inputClass} />
+        </Field>
+        <Field label="Cluster positions" hint="Positions allowed in one cluster.">
+          <input value={clusterPos} onChange={(event) => setClusterPos(event.target.value)} className={inputClass} />
+        </Field>
+        <Field label="Drawdown %" hint="Size falls toward the floor by here.">
+          <input value={ddMax} onChange={(event) => setDdMax(event.target.value)} className={inputClass} />
+        </Field>
+      </div>
+      <p className="pt-1 text-[10px] uppercase tracking-widest text-muted-foreground">
+        Stop management
+      </p>
+      <div className="grid grid-cols-3 gap-2">
+        <Field label="Mode" hint="Automatic stop moves; only ever tightens.">
+          <select
+            value={mgmtMode}
+            onChange={(event) => setMgmtMode(event.target.value)}
+            className={inputClass}
+          >
+            <option value="off">Off (manual)</option>
+            <option value="break_even">Break-even</option>
+            <option value="atr_trail">ATR trail</option>
+            <option value="percent_trail">Percent trail</option>
+          </select>
+        </Field>
+        <Field label="Break-even R" hint="Move to entry after this many R.">
+          <input value={beR} onChange={(event) => setBeR(event.target.value)} className={inputClass} />
+        </Field>
+        <Field label="ATR multiple" hint="Trail distance in ATR units.">
+          <input value={atrMult} onChange={(event) => setAtrMult(event.target.value)} className={inputClass} />
+        </Field>
+        <Field label="Trail %" hint="Used by percent trail (0.02 = 2%).">
+          <input value={percentTrail} onChange={(event) => setPercentTrail(event.target.value)} className={inputClass} />
+        </Field>
+        <Field label="Giveback R" hint="Keep at least this much open profit.">
+          <input value={giveback} onChange={(event) => setGiveback(event.target.value)} className={inputClass} />
+        </Field>
+        <Field label="Time stop min" hint="Close a trade that goes nowhere.">
+          <input value={timeStop} onChange={(event) => setTimeStop(event.target.value)} className={inputClass} />
+        </Field>
+        <Field label="Min step" hint="Smallest stop improvement to apply.">
+          <input value={minStep} onChange={(event) => setMinStep(event.target.value)} className={inputClass} />
         </Field>
       </div>
       {error && <p className="text-[10px] text-rose-300">{error}</p>}

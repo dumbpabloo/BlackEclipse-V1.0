@@ -103,7 +103,9 @@ async def run_strategy(service: Any, definition: Any, *, run_id: str,
     strategy_id = str(config.get("strategyId") or "").strip()
     version = str(config.get("strategyVersion") or "").strip()
     mode = str(config.get("mode") or "shadow").strip().lower()
-    symbols = policy.normalize_symbols(config.get("symbols") or [])
+    symbols = policy.normalize_symbols(
+        config.get("symbols") or [], limit=config.get("maxSymbols"),
+    )
     authority = _authority(definition)
 
     # ── Preparation ───────────────────────────────────────────────────────────
