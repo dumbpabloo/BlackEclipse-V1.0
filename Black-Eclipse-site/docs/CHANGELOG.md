@@ -6,6 +6,15 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-23
 
+- **release: v0.4.28.** Version bumped in `package.json`, `package-lock.json`, `pyproject.toml`,
+  `python/harness/__init__.py` and the README's current-version line, with the SBOM regenerated.
+  Ships today's four fixes/features: charts that render through the running runtime's health
+  (label axes, booting-runtime retry), real absolute file paths plus the `file_locate` tool and
+  shell-owned desktop downloads, and the trading pass (portfolio heat, deterministic stop
+  management, unattended renewal, and the `BOT_VERSION_STALE` renewal refusal). The `v0.4.28`
+  tag drives `desktop-release.yml`; the offline-signed `stable.json` is uploaded to the draft
+  before publishing. docs updated: `docs/UPDATES.md` (release state), `docs/CHANGELOG.md`.
+
 - **fix(files): a produced file now has a real path, and the agent can find it.**
   Two complaints, one root cause: nothing ever told the model where a file
   landed. `eclipse_report`/`document_create` wrote only into the content-addressed
