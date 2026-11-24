@@ -6,6 +6,13 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-23
 
+- **docs(updates): record the published v0.4.29 manifest.** Signed offline against the CI
+  build (`kHVPAsdQeCTARLWbi2uCa`, lockHash `589fd452…`) and the win32-x64 installer
+  (`195,129,411` bytes, sha256 `8b224c74…`), uploaded `stable.json` to the draft, published,
+  and verified end to end: a 0.4.28 window reports `available: true`, stages 0.4.29, and
+  *Restart* (`--restart-only`) reopens on 0.4.29 with `available: false`. docs updated:
+  `docs/UPDATES.md` (release state), `docs/CHANGELOG.md`.
+
 - **release: v0.4.29.** Version bumped in `package.json`, `package-lock.json`, `pyproject.toml`,
   `python/harness/__init__.py` and the README's current-version line; SBOM and published
   benchmarks regenerated. Ships the Restart fix below: the shell now reopens the promoted
