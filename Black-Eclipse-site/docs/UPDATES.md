@@ -135,13 +135,13 @@ Updates are **published**: the repository is
 `"published": true`. A live check verifies the newest signed manifest and offers
 it as soon as it is newer than the running build.
 
-**v0.4.27 is published** (2026-11-23, signed with key id `47e545f302249385`) and
-carries both `builds` (`any` — `BlackEclipse-Build-0.4.27.zip`, 80,021,739 bytes, buildId
-`qNUlhzNwPDc-CUqdH8B2l`, lockHash `8a0da292…`) and `installers` (`win32-x64` —
-`BlackEclipse-Setup-0.4.27.exe`, 195,084,048 bytes, sha256 `9c4acc15…`), so a checkout
+**v0.4.28 is published** (2026-11-24, signed with key id `47e545f302249385`) and
+carries both `builds` (`any` — `BlackEclipse-Build-0.4.28.zip`, 77,316,418 bytes, buildId
+`X2Jp5YF-vG-pqKGM_60ZV`, lockHash `d8c5a3a8…`) and `installers` (`win32-x64` —
+`BlackEclipse-Setup-0.4.28.exe`, 195,136,365 bytes, sha256 `742c815e…`), so a checkout
 updates by download + verified promotion and a packaged install by the signed installer.
 The public `stable.json` verifies against the committed key and
-`node scripts/update.js --check` reports `latest signed release: v0.4.27`.
+`node scripts/update.js --check` reports `latest signed release: v0.4.28`.
 **Every later release must sign `--build-*`** (see *Release builds* and
 *Publishing a release*); the release workflow builds and attaches the archive
 but never holds the signing key, so **sign and upload `stable.json` while the

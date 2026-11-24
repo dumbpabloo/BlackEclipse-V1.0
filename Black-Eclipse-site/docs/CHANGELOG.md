@@ -15,6 +15,14 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
   tag drives `desktop-release.yml`; the offline-signed `stable.json` is uploaded to the draft
   before publishing. docs updated: `docs/UPDATES.md` (release state), `docs/CHANGELOG.md`.
 
+- **docs(updates): record the published v0.4.28 manifest.** Signed the manifest with the
+  offline key (`47e545f302249385`) against the CI-built `BlackEclipse-Build-0.4.28.zip`
+  (buildId `X2Jp5YF-vG-pqKGM_60ZV`, lockHash `d8c5a3a8…`) and the Windows installer
+  (`195,136,365` bytes, sha256 `742c815e…`), uploaded `stable.json` to the draft, and
+  published the release. `node scripts/update.js --check` reports `v0.4.28`, and the
+  local `/api/updates` flips to `available: true` for a 0.4.27 window. docs updated:
+  `docs/UPDATES.md` (release state), `docs/CHANGELOG.md`.
+
 - **fix(files): a produced file now has a real path, and the agent can find it.**
   Two complaints, one root cause: nothing ever told the model where a file
   landed. `eclipse_report`/`document_create` wrote only into the content-addressed
