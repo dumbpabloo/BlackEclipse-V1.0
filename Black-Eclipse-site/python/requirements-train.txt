@@ -18,4 +18,4 @@
 # no image/sequence data path in the ML Lab, so no CNN/RNN adapter is claimed.
 # CPU is enough; a CUDA build is not required.
 
-torch>=2.2,<3
+torch>=2.15.0,<3

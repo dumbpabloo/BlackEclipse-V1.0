@@ -11,4 +11,4 @@
 #
 # Install only if you accept the licence:
 #   python -m pip install -r python/requirements-pdf-incremental.txt
-pymupdf>=1.24,<2
+pymupdf>=2.1,<3

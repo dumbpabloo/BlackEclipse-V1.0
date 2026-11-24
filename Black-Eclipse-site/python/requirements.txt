@@ -8,23 +8,23 @@
 # line here plus a catalog entry in harness/models.py.
 
 # Service
-fastapi>=0.115,<1
-uvicorn[standard]>=0.30
-pydantic>=2.7
+fastapi>=0.165.0,<1
+uvicorn[standard]>=0.54.0
+pydantic>=2.14.4
 
 # Full JSON Schema validation of skill inputs/outputs (nested types, arrays,
 # enums, bounds, required). Already present transitively via the MCP SDK; pinned
 # explicitly because skill contract enforcement depends on it directly.
-jsonschema>=4.21,<5
+jsonschema>=4.26.0,<5
 
 # Agent runtime
-langchain>=1.0
-langchain-core>=1.0
-langgraph>=1.0
+langchain>=1.5.2
+langchain-core>=1.8.4
+langgraph>=1.2.24
 
 # MCP client (Phase 5): local stdio servers. The maintained MCP Python SDK;
 # pinned <3 so a future v3 does not change the transport/lifecycle under us.
-mcp>=2,<3
+mcp>=2.3.0,<3
 
 # The MCP SDK's HTTP transport imports `httpx2` directly (it is re-exported by
 # mcp.client.streamable_http / mcp.client.sse). It is a declared transitive
@@ -32,16 +32,16 @@ mcp>=2,<3
 # bound so an unrelated upgrade cannot change the transport under us. We do not
 # depend on it anywhere except through the MCP SDK; the lighter alternative
 # (the SDK's own client, which it builds on httpx2) is what we use.
-httpx2>=2.5,<3
+httpx2>=2.16.2,<3
 
 # Model providers (universal coverage).
 # langchain-openai also powers EVERY OpenAI-compatible endpoint (Ollama, LM
 # Studio, OpenRouter, DeepSeek, xAI, Perplexity, Together, Fireworks, custom).
-langchain-openai>=1.0
-langchain-anthropic>=0.3
-langchain-google-genai>=2.0
-langchain-mistralai>=0.2
-langchain-groq>=0.2
+langchain-openai>=1.8.5
+langchain-anthropic>=1.7.12
+langchain-google-genai>=4.5.2
+langchain-mistralai>=1.2.0
+langchain-groq>=1.2.1
 
 # Real pseudo-terminal for the terminal subsystem's persistent shells. Optional
 # in effect (the session layer falls back to a piped shell and reports
@@ -57,18 +57,18 @@ ptyprocess>=0.7; sys_platform != "win32"
 # than fabricate a connection — but installed by default so `execute_sql` can
 # actually reach the dialects Eclipse advertises. `pg8000` is pure-Python (no
 # build toolchain); `duckdb` is an embedded wheel (no server).
-pg8000>=1.31,<2
-duckdb>=1.0
+pg8000>=1.31.6,<2
+duckdb>=2.0.1
 
 # Broker bridge — MetaTrader 5 (optional; Windows x64 only). The MetaTrader
 # terminal is a SEPARATE install owned by the operator; this package talks to a
 # running, logged-in terminal over local IPC. It is not needed on other platforms,
 # and its absence is reported honestly by `broker_status` rather than failing boot.
-MetaTrader5>=5.0.45; sys_platform == "win32" and platform_machine == "AMD64"
+MetaTrader5>=5.0.6231; sys_platform == "win32" and platform_machine == "AMD64"
 
 # Tests
-pytest>=8.0
-pytest-asyncio>=0.24
+pytest>=9.2.0
+pytest-asyncio>=1.5.0
 
 # Browser Automation Runtime — structured browser control behind Eclipse's own
 # provider/runtime abstraction (the model never sees a raw Playwright object).
@@ -80,7 +80,7 @@ pytest-asyncio>=0.24
 # BROWSER_UNINSTALLED until it is present.
 # Pinned to the 1.62 series so it shares the SAME chromium build the app's Node
 # Playwright already uses (they cache under one ms-playwright directory).
-playwright>=1.62,<1.63
+playwright>=1.65.2,<1.66
 
 # Computer Use Engine (native desktop) — OPTIONAL in effect. Every backend here
 # is honest: a missing one degrades to UNAVAILABLE/reason, never a fake desktop.
@@ -91,8 +91,8 @@ playwright>=1.62,<1.63
 #   binary, no download, no cloud.
 # Cross-platform Pillow is installed by default; the Windows-only backends carry
 # markers so they are not attempted on macOS/Linux.
-Pillow>=10.0
-uiautomation>=2.0; sys_platform == "win32"
+Pillow>=13.0.0
+uiautomation>=2.0.29; sys_platform == "win32"
 winsdk>=1.0.0b10; sys_platform == "win32"
 
 # Document Authoring — native creation of Office documents (Word .docx, Excel
@@ -106,17 +106,17 @@ winsdk>=1.0.0b10; sys_platform == "win32"
 # * python-docx  — WordprocessingML
 # * openpyxl     — SpreadsheetML
 # * python-pptx  — PresentationML (pulls lxml/Pillow/XlsxWriter, all present)
-python-docx>=1.1,<2
-openpyxl>=3.1,<4
-python-pptx>=0.6
+python-docx>=1.2.0,<2
+openpyxl>=3.1.5,<4
+python-pptx>=1.0.2
 
 # The report/figure renderers: the PDF report backend and the analysis
 # sandbox's figure recipes both draw with matplotlib. Without it a "proper
 # report" fails honestly (REPORT_RENDER_UNAVAILABLE) and a computed figure
 # cannot be drawn — the numbers still work, the picture does not.
-matplotlib>=3.8
-numpy>=1.26
-pandas>=2.1
+matplotlib>=3.11.2
+numpy>=2.5.5
+pandas>=3.1.1
 
 # The chart engine's LIVE output: the chat's charts are authored in Python and
 # rendered in the browser as vector SVG (zoom, pan, hover, a legend), so they
@@ -124,19 +124,19 @@ pandas>=2.1
 # package and is served by the app from its own route - never from a CDN, so
 # the app keeps working offline. Without it the chat falls back to the drawn
 # picture (honest degradation, no broken chart).
-plotly>=5.20
+plotly>=7.1.0
 
 # PDF editing (preservation-first Office/PDF edit path). OPTIONAL in effect:
 # a missing pypdf makes `document_edit` report an honest PDF_LIBRARY_MISSING
 # for PDF operations while DOCX/XLSX/PPTX editing keeps working. pypdf is the
 # BSD-licensed rewrite backend; OOXML editing needs no extra dependency.
-pypdf>=6.21.4,<8
+pypdf>=7.1.1,<8
 
 # Vision / Multimodal subsystem.
 # * pypdfium2: self-contained PDFium binding (no system binary) used to render
 #   PDF pages to images for document/PDF vision. Imported lazily; when absent,
 #   PDF rendering reports an honest UNSUPPORTED_FORMAT rather than faking a page.
-pypdfium2>=4
+pypdfium2>=5.15.2
 
 # Market Data Layer — real-time streaming over provider WebSockets (Binance
 # combined stream). OPTIONAL in effect: when absent, `stream_market_data`
@@ -144,8 +144,8 @@ pypdfium2>=4
 # tools are unaffected. `httpx` (the bridge transport) is already pulled in
 # transitively by the model providers / MCP SDK, but is pinned here explicitly
 # because `service._HttpDataBridge` and the market gateway depend on it directly.
-websockets>=13,<16
-httpx>=0.27,<0.29
+websockets>=17.4,<18
+httpx>=0.28.1,<0.29
 
 
 # Unified search - ANN vector index (sqlite-vec). OPTIONAL in effect: when absent
@@ -153,13 +153,13 @@ httpx>=0.27,<0.29
 # and reports `annBackend: false`; installed by default so semantic search
 # scales out of the box. A small, dependency-free SQLite extension that provides
 # the vec0 virtual table (cosine KNN with authorization-bucket filtering).
-sqlite-vec>=0.1.6
+sqlite-vec>=0.1.9
 
 # On-device speech-to-text (dictation without an API key).
 # The composer auto provider falls back to this when no cloud key is
 # configured; the Whisper model is downloaded once into
 # .black-eclipse/models/whisper and then works offline.
-faster-whisper>=1.0,<2
+faster-whisper>=1.2.1,<2
 
 # PyAV 15+ removed the `metadata_errors` keyword that faster-whisper passes to
 # av.open(), which broke local transcription with "open() got an unexpected
@@ -171,27 +171,27 @@ faster-whisper>=1.0,<2
 # libraries [avformat, ...]"), and with them on a setuptools manifest error.
 # 13.x publishes manylinux/macos/windows wheels for cp312, so the stack installs
 # from a wheel. Raise this only if 14.x starts shipping wheels again.
-av>=12,<14
+av>=19.0.2,<20
 
 # The live-price bridge (`scripts/yfinance_bridge.py`) needs this, and it used to
 # be installed only by `scripts/setup-python.js` - so CI installed the lock, had
 # no yfinance, and every market-data test failed with
 # "ModuleNotFoundError: No module named 'yfinance'". Declaring it here makes the
 # lock the single source of truth for the runtime.
-yfinance>=1.7,<2
+yfinance>=1.8.0,<2
 
 # The ML acceptance tests grade a real LightGBM fit, and the service honestly
 # reports "requires an optional dependency" without it - so a runner that only
 # installed this lock failed both ML tests. Declared here instead of installed
 # ad hoc, so the lock stays the single source of truth.
-lightgbm>=4,<5
+lightgbm>=4.7.0,<5
 
 # lightgbm.sklearn (used by the ML fabric) requires scikit-learn at runtime;
 # it was never declared, so a runner that installed only this lock failed the ML
 # acceptance tests with "scikit-learn is required for lightgbm.sklearn".
-scikit-learn>=1.4,<2
+scikit-learn>=1.9.1,<2
 
 # The ML fabric exposes an xgboost family and the acceptance workflow grades it,
 # so a runner that installed only this lock failed with <requires an optional
 # dependency>. Declared, like lightgbm and scikit-learn.
-xgboost>=2,<4
+xgboost>=3.4.1,<4
