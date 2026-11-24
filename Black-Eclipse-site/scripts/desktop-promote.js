@@ -5,6 +5,7 @@
 //   node scripts/desktop-promote.js                     # promote Stable (.next)
 //   node scripts/desktop-promote.js --channel dev       # promote Dev payload
 //   node scripts/desktop-promote.js --rollback          # flip to the previous release
+//   node scripts/desktop-promote.js --restart-only      # reopen the CURRENT release
 //
 // Safety contract:
 //   * never promotes while another build is running;
@@ -45,6 +46,12 @@ function argValue(flag) {
 
 const rollback = process.argv.includes("--rollback");
 const noRestart = process.argv.includes("--no-restart");
+// Reopen the release the pointer already names, without promoting anything.
+// The in-app updater stages AND promotes in one verified step, so "restart" is
+// only a relaunch. Re-promoting the checkout's `.next` here was a bug: a stale
+// working tree silently replaced the new release and the window reopened on the
+// old version (and kept showing an update notice).
+const restartOnly = process.argv.includes("--restart-only");
 const channel = channelFor(argValue("--channel") || "stable");
 // An explicit source build. `--from .next-desktop-dev` lets a verified Dev
 // build serve Stable without a second identical compile. Omitted: the channel's
@@ -296,9 +303,18 @@ function readJson(file) {
 }
 
 async function main() {
-  if (rollback) rollbackRelease();
-  else promoteRelease();
-  pruneReleases();
+  if (restartOnly) {
+    const current = readPointer(channel, "current");
+    log(
+      current && current.buildId
+        ? `restarting onto the current release ${current.buildId} (--restart-only)`
+        : "restarting (--restart-only; no current release pointer)",
+    );
+  } else {
+    if (rollback) rollbackRelease();
+    else promoteRelease();
+    pruneReleases();
+  }
   if (noRestart) {
     // Used by the in-app updater: the pointer moves now, the running window
     // keeps serving the build it already loaded, and the shell (or the user)

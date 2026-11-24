@@ -2205,14 +2205,22 @@ fn main() {
                     // Both stages run from the shell so nothing the app's own
                     // supervisor kills (`taskkill /T` on the server tree) can
                     // take them down mid-build.
+                    //
+                    // The restart must NOT call desktop-refresh: with --no-build
+                    // it promotes `channel.buildDir` (the checkout's `.next`),
+                    // which is often an OLDER build than the release the updater
+                    // just staged. That overwrote the pointer with the old build
+                    // and restarted into it, so the window kept claiming an
+                    // update was available. `--restart-only` restarts onto the
+                    // pointer as it stands (see scripts/desktop-promote.js).
                     let script = if action == "apply" {
                         log_line(&format!("[update] staging the {channel} release"));
                         "update-apply.js"
                     } else {
                         log_line(&format!(
-                            "[update] promoting the staged {channel} build and restarting"
+                            "[update] restarting onto the promoted {channel} build"
                         ));
-                        "desktop-refresh.js"
+                        "desktop-promote.js"
                     };
                     let mut command = Command::new(node);
                     command
@@ -2224,7 +2232,7 @@ fn main() {
                         .stdout(Stdio::null())
                         .stderr(Stdio::null());
                     if action == "restart" {
-                        command.arg("--no-build");
+                        command.arg("--restart-only");
                     }
                     if action == "apply" {
                         if let Some(version) = running_version.as_deref() {

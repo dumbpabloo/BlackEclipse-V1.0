@@ -382,7 +382,7 @@ a capability that is not in them is not promised:
 
 Known limits, stated plainly:
 
-- **`v0.4.28` is single-operator and self-hosted.** It is not a multi-tenant
+- **`v0.4.29` is single-operator and self-hosted.** It is not a multi-tenant
   service and does not pretend to be.
 - **Updates are signed artifact swaps.** v0.4.22 and later download the release's
   compiled build (SHA-256 verified against the signed manifest) and promote it;

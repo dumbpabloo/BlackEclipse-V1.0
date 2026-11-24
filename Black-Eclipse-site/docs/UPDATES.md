@@ -102,7 +102,7 @@ key-order/whitespace ambiguity: change one byte and verification fails.
 | Stage an update in-app | `scripts/update-apply.js` (git checkout+build for a source tree; signed-installer download for a packaged install) (spawned by the shell via `be-update`, or by `src/app/api/updates/apply/route.ts` as a fallback) |
 | Dependency install (staged + atomic swap, never empties the live tree) | `scripts/lib/deps-install.js` (tests in `src/lib/updates/deps-install.test.ts`) |
 | Staged-job reader (spent-job filtering) | `src/lib/updates/job.ts` (tests in `job.test.ts`) |
-| Restart into the staged build | `src/lib/desktop/update-bridge.ts` (Tauri event `be-update`) → `main.rs` listener |
+| Restart into the promoted build | `src/lib/desktop/update-bridge.ts` (Tauri event `be-update`) → `main.rs` listener → `scripts/desktop-promote.js --restart-only` |
 | Dismiss/skip/enable prefs | `src/lib/updates/prefs.ts` (`be_update_prefs_v1`) |
 | Settings UI | `src/components/screens/general-settings.tsx` → General › Updates |
 | Tests | `src/lib/updates/core.test.ts` |
@@ -405,8 +405,10 @@ branch:
      normal restart. A replaced tree that the app still maps is parked under a
      timestamped name and removed by the next install. See ADR-083.
 2. **Promote.** The runner continues with
-   `desktop-refresh.js --no-build --version <signed version>`, which stages the
-   new build under `releases/stable/<buildId>` and moves the pointer. The version
+   `desktop-refresh.js --no-build --from <staged build> --version <signed version>`,
+   which stages the new build under `releases/stable/<buildId>` and moves the
+   pointer. `--from` is what makes the promoted bytes the verified release rather
+   than the checkout's `.next`. The version
    comes from the SIGNED manifest, not from the checkout on disk: a prebuilt
    artifact carries no `package.json`, and recording the checkout's version made
    release metadata describe a build that did not exist ("up to date" for a
@@ -417,19 +419,32 @@ branch:
    `previous`.
 3. **Restart.** The panel offers *Restart Eclipse*, which emits the Tauri event
    `be-update` (`{action:"restart", channel}`). The Rust shell spawns
-   `desktop-refresh.js --no-build`, which re-promotes the same build (a no-op)
-   and relaunches the window. Closing and reopening Eclipse achieves the same
-   thing, so an older shell that predates the `be-update` listener still ends up
-   on the new build once it is reopened.
+   `desktop-promote.js --restart-only`, which relaunches the window onto
+   whatever `current.json` already names — it promotes nothing. Closing and
+   reopening Eclipse achieves the same thing, so an older shell that predates the
+   `be-update` listener still ends up on the new build once it is reopened.
+
+   **Do not restart through a promote.** `desktop-refresh.js --no-build` used to
+   promote `channel.buildDir` (the checkout's `.next`), which is usually an OLDER
+   build than the release the updater just staged. On 2026-11-24 the Restart
+   button did exactly that: it moved `current.json` back to the 0.4.27 build,
+   reopened the window on it, and the update notice for 0.4.28 never went away.
+   Step 2 already promoted the verified release, so a restart is only a relaunch.
+   Two guards now keep a stale checkout from being promoted: the shell calls
+   `--restart-only`, and `desktop-refresh.js --no-build` **without `--from`**
+   delegates to that same reopen instead of promoting `.next`. Only an explicit
+   `--from <build>` promotes.
    The relaunch deliberately **waits for the old window process to exit** before
    starting the new one (`waitForShellExit`), then confirms the new process
    survived and retries once. Without that wait, Tauri's single-instance plugin
    handed the launch to the still-exiting old process: no window ran its
    bootstrap and the app sat on a black splash with no server — the "update
    blacks out my app" failure. A **bridged** install (see `environments.md`)
-   also needs `update-apply.js` and `desktop-refresh.js` shims next to the
-   `desktop-server.js` bridge, because the shell runs those scripts from its
-   packaged root; `desktop-dev-bridge.js` writes all three.
+   also needs `update-apply.js`, `desktop-refresh.js` and `desktop-promote.js`
+   shims next to the `desktop-server.js` bridge, because the shell runs those
+   scripts from its packaged root; `desktop-dev-bridge.js` writes all four
+   (`BRIDGED_SCRIPTS`). A new script the shell spawns without a shim fails
+   silently in a bridged install.
 
 **Why the restart lives in Rust.** Promotion itself is safe while the app runs
 (atomic pointer write, previous release kept). The restart is the destructive

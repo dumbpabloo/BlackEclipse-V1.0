@@ -5,7 +5,8 @@
 // dance. It never touches a browser server, never kills a build it did not
 // start, and stages the new build before the window is restarted.
 //
-// Flags: --no-build (promote the existing build) · --channel dev
+// Flags: --no-build (reopen the current release; with --from <dir>, promote
+//        that build instead) · --channel dev
 
 const fs = require("fs");
 const path = require("path");
@@ -93,6 +94,22 @@ function main() {
         "Wait for it to finish, then run this again. Refresh never races a build.",
     );
     process.exit(1);
+  }
+
+  // `--no-build` with no source is a RESTART, not a promotion. The old shell's
+  // Restart button invokes exactly this, and promoting the checkout's `.next`
+  // there silently replaced a newer staged release with an older build (the
+  // 0.4.28 update reopened on 0.4.27 and the notice never cleared). Restarting
+  // onto the existing pointer is the only correct meaning.
+  if (noBuild && !from) {
+    log("no source build given — reopening the current release instead of re-promoting");
+    const promoteArgs = ["--channel", channel.id, "--restart-only"];
+    if (noRestart) promoteArgs.push("--no-restart");
+    if (!run("desktop-promote.js", promoteArgs)) {
+      console.error("[desktop:refresh] could not reopen the current release");
+      process.exit(1);
+    }
+    return;
   }
 
   const source = from ? path.resolve(ROOT, from) : path.join(ROOT, channel.buildDir);

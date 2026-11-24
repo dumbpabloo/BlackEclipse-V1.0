@@ -6,6 +6,24 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-23
 
+- **release: v0.4.29.** Version bumped in `package.json`, `package-lock.json`, `pyproject.toml`,
+  `python/harness/__init__.py` and the README's current-version line; SBOM and published
+  benchmarks regenerated. Ships the Restart fix below: the shell now reopens the promoted
+  release instead of re-promoting the checkout's `.next`, and `desktop-refresh.js --no-build`
+  without `--from` refuses to downgrade. docs updated: `docs/UPDATES.md`, `docs/CHANGELOG.md`.
+
+- **fix(desktop): Restart Eclipse reopens the promoted build, not the checkout's stale one.**
+  After an in-app update, *Restart Eclipse* spawned `desktop-refresh.js --no-build`, which
+  promotes `channel.buildDir` (`.next`). That is the user's working tree, not the release the
+  updater had just verified and promoted — so it moved `current.json` back to the older build
+  (0.4.27 after staging 0.4.28), reopened on it, and the update notice never cleared. The shell
+  now spawns `desktop-promote.js --restart-only`, which relaunches onto whatever `current.json`
+  already names and promotes nothing. `desktop-refresh.js --no-build` without `--from` delegates
+  to the same reopen, so a shell that still invokes it (0.4.28 or older) can no longer downgrade
+  the pointer. `desktop-dev-bridge.js` also writes a `desktop-promote.js` shim so bridged
+  installs can run it. docs updated: `docs/UPDATES.md` (restart contract, file map),
+  `docs/CHANGELOG.md`.
+
 - **release: v0.4.28.** Version bumped in `package.json`, `package-lock.json`, `pyproject.toml`,
   `python/harness/__init__.py` and the README's current-version line, with the SBOM regenerated.
   Ships today's four fixes/features: charts that render through the running runtime's health
