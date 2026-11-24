@@ -15,9 +15,9 @@
 # (or the interpreter resolved by scripts/setup-python.js). Version bounds are
 # pinned to the majors verified against this runtime (Python 3.12, NumPy 2.x).
 
-scikit-learn>=1.4,<1.7
-lightgbm>=4.3,<5
-xgboost>=2.1,<4
+scikit-learn>=1.9.1,<1.10
+lightgbm>=4.7.0,<5
+xgboost>=3.4.1,<4
 
 # Explainability (Phase 8) — only needed for SHAP-based explanations.
 # shap>=0.46,<1
