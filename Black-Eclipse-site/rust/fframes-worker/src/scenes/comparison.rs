@@ -71,19 +71,19 @@ pub fn render<'a>(
                 {theme::panel(lx + left_dx, py, pw, ph, left_stroke, left_width)}
                 <text
                     x={lx + 48.0 + left_dx} y={py + 100.0}
-                    font-family="Segoe UI" font-size="36" fill={theme::MUTED}
+                    font-family={theme::SANS} font-size="36" fill={theme::MUTED}
                 >
                     {left_label}
                 </text>
                 <text
                     x={lx + 48.0 + left_dx} y={py + 260.0}
-                    font-family="Segoe UI" font-size="88" font-weight="600" fill={theme::FG}
+                    font-family={theme::SANS} font-size="88" font-weight="600" fill={theme::FG}
                 >
                     {left_value}
                 </text>
                 <text
                     x={lx + 48.0 + left_dx} y={py + 340.0}
-                    font-family="Segoe UI" font-size="28" fill={theme::DIM}
+                    font-family={theme::SANS} font-size="28" fill={theme::DIM}
                 >
                     {left_detail}
                 </text>
@@ -92,19 +92,19 @@ pub fn render<'a>(
                 {theme::panel(rx + right_dx, py, pw, ph, right_stroke, right_width)}
                 <text
                     x={rx + 48.0 + right_dx} y={py + 100.0}
-                    font-family="Segoe UI" font-size="36" fill={theme::MUTED}
+                    font-family={theme::SANS} font-size="36" fill={theme::MUTED}
                 >
                     {right_label}
                 </text>
                 <text
                     x={rx + 48.0 + right_dx} y={py + 260.0}
-                    font-family="Segoe UI" font-size="88" font-weight="600" fill={theme::FG}
+                    font-family={theme::SANS} font-size="88" font-weight="600" fill={theme::FG}
                 >
                     {right_value}
                 </text>
                 <text
                     x={rx + 48.0 + right_dx} y={py + 340.0}
-                    font-family="Segoe UI" font-size="28" fill={theme::DIM}
+                    font-family={theme::SANS} font-size="28" fill={theme::DIM}
                 >
                     {right_detail}
                 </text>
@@ -114,7 +114,7 @@ pub fn render<'a>(
                 stroke-width="2" opacity={vs_opacity}
             />
             <text
-                x="960" y="621" text-anchor="middle" font-family="Segoe UI" font-size="30"
+                x="960" y="621" text-anchor="middle" font-family={theme::SANS} font-size="30"
                 font-weight="600" fill={theme::MUTED} opacity={vs_opacity}
             >
                 "VS"

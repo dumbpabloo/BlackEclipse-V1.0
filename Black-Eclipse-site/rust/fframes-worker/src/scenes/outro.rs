@@ -35,7 +35,7 @@ pub fn render<'a>(
             {theme::background(scene.index, &scene.accent)}
             <text
                 x="960" y={520.0 + title_dy}
-                text-anchor="middle" font-family="Segoe UI" font-size="96" font-weight="600"
+                text-anchor="middle" font-family={theme::SANS} font-size="96" font-weight="600"
                 fill={theme::FG} opacity={title_opacity}
             >
                 {title}
@@ -46,7 +46,7 @@ pub fn render<'a>(
             />
             <text
                 x="960" y={648.0 + subtitle_dy}
-                text-anchor="middle" font-family="Segoe UI" font-size="36" font-weight="300"
+                text-anchor="middle" font-family={theme::SANS} font-size="36" font-weight="300"
                 fill={theme::MUTED} opacity={subtitle_opacity}
             >
                 {subtitle}

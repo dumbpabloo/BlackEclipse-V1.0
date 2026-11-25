@@ -89,7 +89,7 @@ pub fn render<'a>(
             {theme::header(frame, title, accent)}
             <g opacity={panel_opacity}>
                 {theme::panel(px, py, pw, ph, theme::LINE, 1.5)}
-                <text x={inner_x0} y={py + 54.0} font-family="Consolas" font-size="26" fill={theme::DIM}>
+                <text x={inner_x0} y={py + 54.0} font-family={theme::MONO} font-size="26" fill={theme::DIM}>
                     {chip}
                 </text>
                 <g opacity={grid_opacity}>{grid}</g>

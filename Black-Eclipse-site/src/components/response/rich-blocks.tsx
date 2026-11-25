@@ -22,8 +22,9 @@ import {
 import { cn } from '@/lib/utils';
 import { Markdown } from '@/components/chat/markdown';
 import { resolveResponseIcon } from '@/lib/response/icons';
-import { downloadUrl } from '@/lib/harness/clients/artifacts-browser';
+import { downloadUrl, inlineUrl, thumbnailUrl } from '@/lib/harness/clients/artifacts-browser';
 import { downloadFromUrlInShell } from '@/lib/desktop/download';
+import { VideoPlayer } from '@/components/media/video-player';
 import type {
   ActionGroupBlock as ActionGroupBlockType,
   ArtifactBlock as ArtifactBlockType,
@@ -473,6 +474,19 @@ export function ArtifactBlock({ block }: { block: ArtifactBlockType }) {
                   {artifact.mimeType && <span>{artifact.mimeType}</span>}
                 </div>
                 {artifact.description && <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground/80">{artifact.description}</p>}
+                {artifact.artifactId && artifact.mimeType?.toLowerCase().startsWith('video/') ? (
+                  <div className="mt-1.5">
+                    <VideoPlayer
+                      src={inlineUrl(artifact.artifactId, artifact.version)}
+                      poster={thumbnailUrl(artifact.artifactId)}
+                      downloadHref={href ?? undefined}
+                      fileName={artifact.name}
+                      onDownload={(event) => downloadFromUrlInShell(event, href!, artifact.name)}
+                      compact
+                      label={`Video: ${artifact.name}`}
+                    />
+                  </div>
+                ) : null}
                 {href && (
                   <a
                     href={href}

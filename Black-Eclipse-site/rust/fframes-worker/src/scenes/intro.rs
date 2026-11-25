@@ -35,14 +35,14 @@ pub fn render<'a>(
             <rect x={160.0 + bar_x} y="548" width="128" height="8" rx="4" fill={accent} />
             <text
                 x="160" y={500.0 + title_dy}
-                font-family="Segoe UI" font-size="118" font-weight="600" fill={theme::FG}
+                font-family={theme::SANS} font-size="118" font-weight="600" fill={theme::FG}
                 opacity={title_opacity}
             >
                 {title}
             </text>
             <text
                 x="164" y={616.0 + subtitle_dy}
-                font-family="Segoe UI" font-size="40" font-weight="300" fill={theme::MUTED}
+                font-family={theme::SANS} font-size="40" font-weight="300" fill={theme::MUTED}
                 opacity={subtitle_opacity}
             >
                 {subtitle}

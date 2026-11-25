@@ -42,7 +42,7 @@ pub fn render<'a>(
         .unwrap_or_else(|| {
             fframes::svgr!(
                 <text
-                    x="340" y="400" font-family="Segoe UI" font-size="54" font-weight="300"
+                    x="340" y="400" font-family={theme::SANS} font-size="54" font-weight="300"
                     fill="#f8fafc"
                 >
                     {text}
@@ -55,14 +55,14 @@ pub fn render<'a>(
             {theme::background(scene.index, &scene.accent)}
             <text
                 x="298" y={438.0 + mark_dy}
-                font-family="Segoe UI" font-size="240" font-weight="700" fill={accent}
+                font-family={theme::SANS} font-size="240" font-weight="700" fill={accent}
                 opacity="0.18"
             >
                 "“"
             </text>
             <g opacity={block_opacity}>{block}</g>
             <text
-                x="344" y="832" font-family="Segoe UI" font-size="32" fill={theme::MUTED}
+                x="344" y="832" font-family={theme::SANS} font-size="32" fill={theme::MUTED}
                 opacity={attribution_opacity}
             >
                 {attribution}

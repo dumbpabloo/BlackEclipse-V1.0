@@ -343,13 +343,28 @@ conversation association end-to-end), the collector, the preview seam
 (extractor present/absent/failing), range/inline serving, the proxy + client,
 and the panel's honest states.
 
+### Bundled type system (deterministic layout)
+
+The worker links **Inter 4.1** (Regular/Medium/SemiBold/Bold) and **JetBrains
+Mono 2.304** (Regular/Bold) and registers them through fframes'
+`DynamicMediaProvider` (`src/fonts.rs` → `assets/fonts/`, SIL OFL 1.1 with the
+licence files). `theme::SANS` / `theme::MONO` (and every scene) name those
+families; `RenderOptions.default_font` is `Inter`.
+
+Why this matters beyond looks: the layout engine measures text with the SAME
+face it draws, so resolving `Segoe UI`/`Consolas` from the host made a Linux or
+macOS render shift metrics — text that fit on Windows could clip elsewhere. With
+the faces linked in, a storyboard renders identically on every host. System
+fonts stay enabled only as a glyph fallback (CJK, emoji). `cargo test` parses
+every bundled face and asserts all six are registered.
+
 ### The player contract (one component, one transport)
 
 Every produced MP4 the app shows goes through ONE component,
 `src/components/media/video-player.tsx`: the chat `VideoPanel`, the Artifact
-Center detail view and the inline run artifact. It is domain-free (a same-origin
-`src`, an optional poster, a download href) and owns the concerns the old bare
-`<video controls>` elements did not:
+Center detail view, inline run artifacts and the response artifact cards. It is
+domain-free (a same-origin `src`, an optional poster, a download href) and owns
+the concerns the old bare `<video controls>` elements did not:
 
 - **phases**: `loading → ready → playing → ended | error`. A failed stream says
   why (`MediaError` code → plain sentence) and offers Retry (cache-busted),

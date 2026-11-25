@@ -53,13 +53,13 @@ pub fn render<'a>(
                 />
                 <text
                     x={x + 36.0} y={top + 84.0 + dy}
-                    font-family="Segoe UI" font-size="28" fill={theme::MUTED}
+                    font-family={theme::SANS} font-size="28" fill={theme::MUTED}
                 >
                     {label}
                 </text>
                 <text
                     x={x + 36.0} y={top + 200.0 + dy}
-                    font-family="Segoe UI" font-size={value_size} font-weight="600" fill={theme::FG}
+                    font-family={theme::SANS} font-size={value_size} font-weight="600" fill={theme::FG}
                 >
                     {value}
                 </text>

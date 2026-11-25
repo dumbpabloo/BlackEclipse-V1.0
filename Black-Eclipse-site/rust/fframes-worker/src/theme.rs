@@ -6,8 +6,8 @@ use fframes::{Frame, Svgr};
 pub const W: f32 = 1920.0;
 pub const MARGIN: f32 = 160.0;
 
-pub const SANS: &str = "Segoe UI";
-pub const MONO: &str = "Consolas";
+pub const SANS: &str = crate::fonts::SANS;
+pub const MONO: &str = crate::fonts::MONO;
 
 pub const FG: &str = "#f8fafc";
 pub const MUTED: &str = "#94a3b8";
@@ -89,7 +89,7 @@ pub fn header<'a>(frame: &mut Frame, title: &'a str, accent: &'a str) -> Svgr<'a
             <rect x="160" y="112" width={bar_width} height="7" rx="3.5" fill={accent} opacity={bar_opacity} />
             <text
                 x="160" y={196.0 + title_dy}
-                font-family="Segoe UI" font-size="56" font-weight="600" fill="#f8fafc"
+                font-family={SANS} font-size="56" font-weight="600" fill="#f8fafc"
                 opacity={title_opacity}
             >
                 {title}

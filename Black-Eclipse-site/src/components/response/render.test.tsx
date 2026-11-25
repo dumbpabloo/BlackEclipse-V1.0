@@ -210,6 +210,25 @@ describe('block rendering', () => {
     expect(out).toContain('report.pdf');
     expect(out).toContain('/api/artifacts/abc/download');
   });
+
+  it('plays a produced video inline through the shared player', () => {
+    const out = html(
+      <ArtifactBlock
+        block={{
+          type: 'artifact',
+          artifacts: [
+            { artifactId: 'vid1', name: 'recap.mp4', mimeType: 'video/mp4' },
+          ],
+        }}
+      />,
+    );
+    expect(out).toContain('<video');
+    expect(out).toContain('/api/artifacts/vid1/download?inline=1');
+    expect(out).toContain('/api/artifacts/vid1/thumbnail');
+    expect(out).toContain('Video: recap.mp4');
+    // The download link stays available next to the player.
+    expect(out).toContain('/api/artifacts/vid1/download');
+  });
 });
 
 describe('website-style visual blocks', () => {

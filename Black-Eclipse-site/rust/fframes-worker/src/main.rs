@@ -6,6 +6,7 @@ use fframes::{
     Transform, Video,
 };
 
+mod fonts;
 mod scenes;
 mod spec;
 mod theme;
@@ -57,7 +58,7 @@ impl Video for TitleCard {
                         at 0.4 => 1.2, animate Transform::translate(0, 40) => Transform::translate(0, 0), Easing::EaseOut,
                     ))}
                 >
-                    <text x="160" y="500" font-family="Segoe UI" font-size="118" font-weight="600" fill="#f8fafc">
+                    <text x="160" y="500" font-family={fonts::SANS} font-size="118" font-weight="600" fill="#f8fafc">
                         "BLACK ECLIPSE"
                     </text>
                 </g>
@@ -70,7 +71,7 @@ impl Video for TitleCard {
                         at 1.0 => 1.8, animate Transform::translate(0, 24) => Transform::translate(0, 0), Easing::EaseOut,
                     ))}
                 >
-                    <text x="164" y="616" font-family="Segoe UI" font-size="40" font-weight="300" fill="#94a3b8">
+                    <text x="164" y="616" font-family={fonts::SANS} font-size="40" font-weight="300" fill="#94a3b8">
                         "Video pipeline - Phase 1 - Windows proof of concept"
                     </text>
                 </g>
@@ -78,12 +79,12 @@ impl Video for TitleCard {
                 <g opacity={frame.animate(fframes::timeline!(
                     at 1.2 => 2.0, animate 0.0 => 1.0, Easing::EaseOut,
                 ))}>
-                    <text x="164" y="684" font-family="Consolas" font-size="28" fill="#64748b">
+                    <text x="164" y="684" font-family={fonts::MONO} font-size="28" fill="#64748b">
                         "fframes 1.2.0 - cpu backend - 1920x1080@30"
                     </text>
                 </g>
 
-                <text x="1760" y="1020" text-anchor="end" font-family="Consolas" font-size="26" fill="#334155">
+                <text x="1760" y="1020" text-anchor="end" font-family={fonts::MONO} font-size="26" fill="#334155">
                     {format!("t={:.1}s  f={}", frame.seconds(), frame.index)}
                 </text>
 
@@ -112,9 +113,13 @@ struct WorkerArgs {
 
 fn main() -> ExitCode {
     let args = cli::parse::<WorkerArgs>();
+    // The bundled faces are linked into the process and registered with the
+    // renderer, so the layout engine measures exactly what it draws — on any OS.
+    let fonts = fonts::media_provider();
     let options = RenderOptions {
         load_system_fonts: true,
-        default_font: "Segoe UI",
+        default_font: fonts::SANS,
+        media: Some(&fonts),
         ..Default::default()
     };
     match args.app.project.clone() {

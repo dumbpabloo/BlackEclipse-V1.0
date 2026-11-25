@@ -22,9 +22,17 @@ import {
   listServerConversations,
   saveServerConversation,
 } from './transcript-client';
+import { createSerialLane } from './serial-lane';
 import { useWorkspaceStore } from '../agent-workspace/store';
 import { restoreWorkspaceForChat } from '../agent-workspace/restore';
 import type { Message } from '@/types/chat';
+
+// All transcript writes/deletes share ONE serial lane (see serial-lane.ts):
+// a first-run migration can queue hundreds of large upserts, and sending them
+// in parallel saturates the browser's ~6 connections per origin — the boot's
+// own summary/settings/health fetches then queue behind them and the app sits
+// on its global "LOADING" screen. One at a time keeps boot responsive.
+const queueTranscriptWrite = createSerialLane();
 
 export interface ConversationPersistenceOptions {
   /** False until the shell has mounted (SSR-safe gate). */
@@ -251,7 +259,9 @@ export function useConversationPersistence(opts: ConversationPersistenceOptions)
         // Seed the sync ledger with what the server already holds, then push the
         // conversations that exist only locally (first-run migration).
         for (const c of merged) syncedRef.current.set(c.id, JSON.stringify(c));
-        for (const c of localOnly) void saveServerConversation(c);
+        // Queued, never parallel: one request at a time so a large migration
+        // cannot starve the boot's own fetches.
+        for (const c of localOnly) void queueTranscriptWrite(() => saveServerConversation(c));
         serverHydratedRef.current = true;
         // Refresh the OPEN transcript from the merged (durable) copy. The
         // localStorage first paint above can be stale: it is origin-scoped and
@@ -305,7 +315,7 @@ export function useConversationPersistence(opts: ConversationPersistenceOptions)
         const signature = JSON.stringify(c);
         if (syncedRef.current.get(c.id) === signature) continue;
         syncedRef.current.set(c.id, signature);
-        void saveServerConversation(c).catch(() => {
+        void queueTranscriptWrite(() => saveServerConversation(c)).catch(() => {
           // A failed write must be retried on the next change.
           syncedRef.current.delete(c.id);
         });
@@ -314,7 +324,7 @@ export function useConversationPersistence(opts: ConversationPersistenceOptions)
       for (const id of [...syncedRef.current.keys()]) {
         if (seen.has(id)) continue;
         syncedRef.current.delete(id);
-        void deleteServerConversation(id).catch(() => undefined);
+        void queueTranscriptWrite(() => deleteServerConversation(id)).catch(() => undefined);
       }
     }, 700);
     return () => clearTimeout(timer);

@@ -54,14 +54,14 @@ pub fn render<'a>(
                 />
                 <text
                     x={x} y={axis_y - 56.0 + label_dy}
-                    text-anchor="middle" font-family="Segoe UI" font-size="36" font-weight="600"
+                    text-anchor="middle" font-family={theme::SANS} font-size="36" font-weight="600"
                     fill={theme::FG} opacity={label_opacity}
                 >
                     {label}
                 </text>
                 <text
                     x={x} y={axis_y + 84.0 + label_dy}
-                    text-anchor="middle" font-family="Segoe UI" font-size="25" fill={theme::DIM}
+                    text-anchor="middle" font-family={theme::SANS} font-size="25" fill={theme::DIM}
                     opacity={label_opacity}
                 >
                     {detail}
