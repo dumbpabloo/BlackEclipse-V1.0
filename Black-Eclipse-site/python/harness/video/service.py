@@ -1126,6 +1126,7 @@ def _artifact_summary(artifact: Any) -> dict[str, Any]:
         "sizeBytes": getattr(artifact, "size_bytes", None),
         "category": getattr(category, "value", category),
         "checksum": getattr(artifact, "checksum", None),
+        "thumbnailKey": getattr(artifact, "thumbnail_key", None),
     }
 
 

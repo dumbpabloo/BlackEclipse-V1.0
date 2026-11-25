@@ -143,7 +143,20 @@ class VideoRunner:
         run = await self._execute(
             argv, cwd=workdir, timeout_ms=timeout_ms, cancel_event=cancel_event, on_event=on_event
         )
-        return self._render_result(run, out_path)
+        result = self._render_result(run, out_path)
+        # Playback hardening: move the MP4 index to the front so a player can
+        # start and seek from the first bytes. Best-effort by contract — it is
+        # reported, never allowed to turn a real render into a failure.
+        if result.get("ok") and not draft:
+            from .transcode import ensure_faststart  # noqa: PLC0415
+
+            output = Path(str(result.get("outputPath") or out_path))
+            result["faststart"] = await asyncio.to_thread(
+                ensure_faststart, output, self._config.resolve_ffmpeg_dir()
+            )
+            if output.is_file():
+                result["sizeBytes"] = output.stat().st_size
+        return result
 
     async def inspect(
         self,

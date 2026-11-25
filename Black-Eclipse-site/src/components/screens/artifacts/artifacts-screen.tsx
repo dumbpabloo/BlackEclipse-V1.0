@@ -28,6 +28,7 @@ import {
   type ArtifactVersion, type ListParams,
 } from '@/lib/harness/clients/artifacts-browser';
 import { downloadFromUrlInShell } from '@/lib/desktop/download';
+import { VideoPlayer } from '@/components/media/video-player';
 
 type ViewMode = 'grid' | 'list';
 
@@ -256,16 +257,20 @@ function PreviewBody({ artifact, preview }: { artifact: Artifact; preview: Artif
       // eslint-disable-next-line @next/next/no-img-element
       return <img src={downloadUrl(artifact.id)} alt={artifact.name} className="max-h-80 rounded-lg" />;
     case 'video':
-      // Plays inline (the download route serves `inline=1` and honors byte
-      // ranges, so seeking works). A honest fallback below when the browser
-      // cannot play the codec.
+      // One shared player (custom controls, poster, honest error + retry). The
+      // download route serves `inline=1` and honors byte ranges, so seeking
+      // works; if the codec cannot play here the player says so and offers the
+      // file instead of a dead black box.
       return (
-        <video
-          controls
-          preload="metadata"
-          playsInline
+        <VideoPlayer
           src={inlineUrl(artifact.id)}
-          className="max-h-80 w-full rounded-lg bg-black/40"
+          poster={artifact.thumbnailKey ? thumbnailUrl(artifact.id) : undefined}
+          downloadHref={downloadUrl(artifact.id)}
+          fileName={artifact.name}
+          onDownload={(event) =>
+            downloadFromUrlInShell(event, downloadUrl(artifact.id), artifact.name)
+          }
+          label={`Video: ${artifact.name}`}
         />
       );
     case 'pdf':

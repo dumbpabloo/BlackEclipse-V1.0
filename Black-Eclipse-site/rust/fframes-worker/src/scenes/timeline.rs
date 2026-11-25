@@ -72,7 +72,7 @@ pub fn render<'a>(
 
     fframes::svgr!(
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
-            {theme::background(scene.index)}
+            {theme::background(scene.index, &scene.accent)}
             {theme::header(frame, title, accent)}
             <line
                 x1={x0} y1={axis_y} x2={x1} y2={axis_y}

@@ -23,12 +23,14 @@ log = logging.getLogger("harness.video.poster")
 
 _CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 _TIMEOUT_S = 30
-#: Where in the video the poster is taken from, tried in order. 1.5 s clears
-#: the opening fade-in (scenes animate in over ~0.2-0.4 s) on every normal
-#: video; the 0.5 s fallback still yields a real frame for a minimal render
-#: (one 1 s scene), where 1.5 s does not exist. A frame is never fabricated:
-#: when no candidate produces one the preview stays UNSUPPORTED.
+#: Fallback sample points, tried in order when the duration is unknown. 1.5 s
+#: clears the opening fade-in (scenes animate in over ~0.2-0.4 s); 0.5 s still
+#: yields a real frame for a minimal one-scene render. A frame is never
+#: fabricated: when no candidate produces one the preview stays UNSUPPORTED.
 _POSTER_TIMES: tuple[float, ...] = (1.5, 0.5)
+#: Where the poster is taken from when the duration IS known: just over a third
+#: in, past the intro and before the outro — a representative content frame.
+_POSTER_AT_FRACTION = 0.35
 _POSTER_WIDTH = 512
 
 
@@ -51,12 +53,64 @@ def extract_video_poster(storage: Any, artifact: Any) -> Optional[bytes]:
             if not source:
                 return None
             with tempfile.TemporaryDirectory(prefix="ve-poster-") as tmp:
-                for seconds in _POSTER_TIMES:
+                for seconds in _candidate_times(ffmpeg, str(source)):
                     poster = _extract_at(ffmpeg, str(source), Path(tmp), seconds)
                     if poster is not None:
                         return poster
                 return None
     except Exception:  # noqa: BLE001 - an absent poster is an honest None
+        return None
+
+
+def _candidate_times(ffmpeg: Path, source: str) -> tuple[float, ...]:
+    """Duration-relative first, then the fixed fallbacks (deduped, in order).
+
+    A 40 s recap would otherwise thumbnail its title card; sampling just over a
+    third in shows actual content. Unknown duration (no ffprobe / unreadable
+    file) keeps the proven fixed points.
+    """
+    duration = _probe_duration(ffmpeg, source)
+    if duration is None or duration <= 0.2:
+        return _POSTER_TIMES
+    preferred = round(duration * _POSTER_AT_FRACTION, 2)
+    preferred = min(max(preferred, 0.2), max(0.2, duration - 0.1))
+    candidates = [preferred, *_POSTER_TIMES]
+    seen: set[float] = set()
+    ordered: list[float] = []
+    for value in candidates:
+        if value >= duration:
+            continue
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return tuple(ordered) or (0.0,)
+
+
+def _probe_duration(ffmpeg: Path, source: str) -> Optional[float]:
+    """The container duration in seconds, or None when ffprobe cannot say."""
+    name = "ffprobe.exe" if os.name == "nt" else "ffprobe"
+    probe = ffmpeg.with_name(name)
+    if not probe.is_file():
+        return None
+    try:
+        completed = subprocess.run(
+            [
+                str(probe), "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                source,
+            ],
+            capture_output=True,
+            timeout=_TIMEOUT_S,
+            creationflags=_CREATE_NO_WINDOW,
+        )
+        if completed.returncode != 0:
+            return None
+        text = (completed.stdout or b"").decode("utf-8", errors="replace").strip()
+        value = float(text)
+        return value if value > 0 else None
+    except Exception:  # noqa: BLE001 - the fixed fallbacks still work
         return None
 
 

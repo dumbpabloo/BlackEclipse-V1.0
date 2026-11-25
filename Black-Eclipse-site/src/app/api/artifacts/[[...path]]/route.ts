@@ -52,6 +52,7 @@ async function proxy(request: Request, ctx: Ctx, method: string): Promise<Respon
   // would cut long playback off mid-stream. JSON calls keep the hard bound.
   const isDownload = segments.endsWith("/download");
   const range = request.headers.get("range");
+  const ifRange = request.headers.get("if-range");
   const init: RequestInit = {
     method,
     headers: {
@@ -59,6 +60,7 @@ async function proxy(request: Request, ctx: Ctx, method: string): Promise<Respon
       ...(token ? { "X-Harness-Operator": token } : {}),
       ...(await runtimeIdentityHeaders(request)),
       ...(range ? { Range: range } : {}),
+      ...(ifRange ? { "If-Range": ifRange } : {}),
     },
     signal: isDownload ? request.signal : AbortSignal.timeout(60_000),
   };
@@ -66,7 +68,19 @@ async function proxy(request: Request, ctx: Ctx, method: string): Promise<Respon
     init.body = await request.text();
   }
   try {
-    const res = await fetch(`${HARNESS_PY_URL}${target}${url.search}`, init);
+    // A media stream is bound by the client connection; one transient upstream
+    // failure (a runtime restart, a closed socket) must not end playback. JSON
+    // calls keep their single attempt: a retried mutation is not a retry.
+    const upstream = async (): Promise<Response> => {
+      try {
+        return await fetch(`${HARNESS_PY_URL}${target}${url.search}`, init);
+      } catch (error) {
+        const signal = init.signal as AbortSignal | undefined;
+        if (method !== "GET" || request.signal.aborted || signal?.aborted) throw error;
+        return await fetch(`${HARNESS_PY_URL}${target}${url.search}`, init);
+      }
+    };
+    const res = await upstream();
     // Downloads stream bytes, not JSON — pass them through untouched.
     const contentType = res.headers.get("content-type") ?? "";
     if (method === "GET" && !contentType.includes("application/json")) {
@@ -74,6 +88,7 @@ async function proxy(request: Request, ctx: Ctx, method: string): Promise<Respon
       // the range headers to seek (Accept-Ranges/Content-Range/206).
       const headers: Record<string, string> = {
         "Content-Type": contentType || "application/octet-stream",
+        Vary: "Range",
       };
       for (const name of [
         "content-disposition",

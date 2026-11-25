@@ -3,8 +3,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Loader2, Play, RotateCcw, X } from '@/lib/icons';
 import { cn } from '@/lib/utils';
-import { downloadUrl, inlineUrl } from '@/lib/harness/clients/artifacts-browser';
+import { downloadUrl, inlineUrl, thumbnailUrl } from '@/lib/harness/clients/artifacts-browser';
 import { downloadFromUrlInShell } from '@/lib/desktop/download';
+import { VideoPlayer } from '@/components/media/video-player';
 import { VideoApiError, cancelVideoJob, getVideoJob, renderVideoProject } from '@/lib/harness/clients/video-client';
 import {
   coerceVideoBlob,
@@ -227,12 +228,21 @@ function VideoJobRow({
 
       {status?.terminal && !failed ? <SuccessDetail ref_={ref_} status={status} /> : null}
       {status?.artifactId ? (
-        <video
-          controls
-          preload="metadata"
-          playsInline
+        <VideoPlayer
           src={inlineUrl(status.artifactId)}
-          className="mt-2 max-h-64 w-full rounded-lg bg-black/40"
+          poster={status.hasThumbnail ? thumbnailUrl(status.artifactId) : undefined}
+          downloadHref={downloadUrl(status.artifactId)}
+          fileName={status.artifactName ?? 'eclipse-video.mp4'}
+          onDownload={(event) =>
+            downloadFromUrlInShell(
+              event,
+              downloadUrl(status.artifactId!),
+              status.artifactName ?? 'eclipse-video.mp4',
+            )
+          }
+          compact
+          label={status.artifactName ? `Video: ${status.artifactName}` : 'Rendered video'}
+          className="mt-2"
         />
       ) : null}
 

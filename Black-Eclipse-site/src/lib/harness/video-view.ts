@@ -29,6 +29,8 @@ export interface VideoJobStatus {
   /** The Artifact Center entry (final renders only). */
   artifactId: string | null;
   artifactName: string | null;
+  /** The runtime recorded a real poster frame for this artifact. */
+  hasThumbnail: boolean;
   durationSeconds: number | null;
   /** Preview jobs: how many PNGs registered. */
   previewCount: number | null;
@@ -108,6 +110,7 @@ export function coerceVideoJobStatus(jobId: string, raw: unknown): VideoJobStatu
     error: null,
     artifactId: null,
     artifactName: null,
+    hasThumbnail: false,
     durationSeconds: null,
     previewCount: null,
     findingsTotal: null,
@@ -133,6 +136,7 @@ export function coerceVideoJobStatus(jobId: string, raw: unknown): VideoJobStatu
     error: str(raw.error) ?? str(output.error),
     artifactId: str(artifact.id),
     artifactName: str(artifact.name),
+    hasThumbnail: typeof artifact.thumbnailKey === 'string' && artifact.thumbnailKey.length > 0,
     durationSeconds: num(output.durationSeconds),
     previewCount: previews ? previews.length : null,
     findingsTotal: num(output.findingsTotal),

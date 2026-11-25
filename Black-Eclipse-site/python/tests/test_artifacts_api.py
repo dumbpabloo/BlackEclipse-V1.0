@@ -94,6 +94,9 @@ def test_download_range_inline():
     full = client.get(f"/artifacts/{artifact_id}/download")
     assert full.status_code == 200
     assert full.headers.get("accept-ranges") == "bytes"
+    # A player needs a known length even on a plain 200, or Chromium treats the
+    # media as unseekable and can refuse to start.
+    assert full.headers["content-length"] == "16"
     assert full.content == payload
 
     middle = client.get(
@@ -119,3 +122,12 @@ def test_download_range_inline():
     inline = client.get(f"/artifacts/{artifact_id}/download", params={"inline": "1"})
     assert inline.status_code == 200
     assert inline.headers["content-disposition"].startswith("inline;")
+
+    # `If-Range` mismatch means the object changed: the whole file, never a 206
+    # fragment from another version.
+    stale = client.get(
+        f"/artifacts/{artifact_id}/download",
+        headers={"Range": "bytes=4-7", "If-Range": '"different-etag"'},
+    )
+    assert stale.status_code == 200
+    assert stale.content == payload

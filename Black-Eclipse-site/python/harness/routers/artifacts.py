@@ -453,6 +453,13 @@ def download_artifact(
         except Exception:  # noqa: BLE001 - an unseekable handle is servable as-is
             size = None
     range_header = request.headers.get("range") or ""
+    # `If-Range`: a client resuming a partial download only wants bytes if the
+    # object is unchanged. A mismatch means "send the whole thing", never a
+    # 206 fragment from a different version.
+    if_range = (request.headers.get("if-range") or "").strip()
+    etag = headers.get("ETag")
+    if range_header and if_range and etag and if_range != etag:
+        range_header = ""
     if size and range_header:
         parsed = _parse_byte_range(range_header, int(size))
         if parsed is None:
@@ -478,6 +485,10 @@ def download_artifact(
                 media_type=media_type,
                 headers=headers,
             )
+    # A player needs a known length even for a plain 200: without it Chromium
+    # treats the media as unseekable and can refuse to start at all.
+    if size is not None:
+        headers["Content-Length"] = str(int(size))
     return StreamingResponse(handle, media_type=media_type, headers=headers)
 
 

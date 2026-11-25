@@ -4,6 +4,8 @@ UNSUPPORTED without one."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from harness.artifacts.preview import set_video_poster_extractor
@@ -93,6 +95,61 @@ def test_the_seam_can_be_cleared():
     from harness.artifacts import preview as engine
 
     assert engine._video_poster is None
+
+
+def test_poster_samples_content_not_the_title_card(monkeypatch):
+    """A known duration puts the poster just over a third in (past the intro)."""
+    from harness.video import poster
+
+    monkeypatch.setattr(poster, "_probe_duration", lambda ffmpeg, source: 40.0)
+    times = poster._candidate_times(Path("ffmpeg"), "clip.mp4")
+    assert times[0] == 14.0
+    assert times[1:] == poster._POSTER_TIMES
+
+
+def test_poster_falls_back_to_fixed_times_without_a_duration(monkeypatch):
+    from harness.video import poster
+
+    monkeypatch.setattr(poster, "_probe_duration", lambda ffmpeg, source: None)
+    assert poster._candidate_times(Path("ffmpeg"), "clip.mp4") == poster._POSTER_TIMES
+
+
+def test_poster_candidates_are_bounded_and_deduped(monkeypatch):
+    from harness.video import poster
+
+    # 4.2857 s * 0.35 rounds to 1.5 — the fixed fallback must not repeat it.
+    monkeypatch.setattr(poster, "_probe_duration", lambda ffmpeg, source: 4.2857)
+    times = poster._candidate_times(Path("ffmpeg"), "clip.mp4")
+    assert times[0] == 1.5
+    assert len(times) == len(set(times))
+
+    # A tiny clip never samples at or past its end.
+    monkeypatch.setattr(poster, "_probe_duration", lambda ffmpeg, source: 0.8)
+    tiny = poster._candidate_times(Path("ffmpeg"), "clip.mp4")
+    assert all(0 <= value < 0.8 for value in tiny)
+
+
+def test_extractor_prefers_the_content_frame(monkeypatch, tmp_path):
+    from harness.video import poster
+
+    tried: list[float] = []
+
+    def fake_extract(ffmpeg, source, tmp, seconds):
+        tried.append(seconds)
+        return b"png"
+
+    monkeypatch.setattr(poster, "_ffmpeg_binary", lambda: Path("ffmpeg"))
+    monkeypatch.setattr(poster, "_probe_duration", lambda ffmpeg, source: 30.0)
+    monkeypatch.setattr(poster, "_extract_at", fake_extract)
+
+    path = tmp_path / "clip.mp4"
+    path.write_bytes(_MP4_BYTES)
+    storage = LocalArtifactStorage(root=tmp_path / "artifacts")
+    stored = storage.import_file(path, owner_id="local", name="clip.mp4")
+    artifact = type("A", (), {"storage_key": stored.storage_key, "mime_type": "video/mp4"})()
+
+    assert extract_video_poster(storage, artifact) == b"png"
+    assert tried == [10.5]
 
 
 def test_install_video_layer_registers_the_poster_extractor(tmp_path, monkeypatch):

@@ -31,7 +31,7 @@ pub fn render<'a>(
 
     fframes::svgr!(
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
-            {theme::background(scene.index)}
+            {theme::background(scene.index, &scene.accent)}
             <rect x={160.0 + bar_x} y="548" width="128" height="8" rx="4" fill={accent} />
             <text
                 x="160" y={500.0 + title_dy}

@@ -52,7 +52,7 @@ pub fn render<'a>(
 
     fframes::svgr!(
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
-            {theme::background(scene.index)}
+            {theme::background(scene.index, &scene.accent)}
             <text
                 x="298" y={438.0 + mark_dy}
                 font-family="Segoe UI" font-size="240" font-weight="700" fill={accent}

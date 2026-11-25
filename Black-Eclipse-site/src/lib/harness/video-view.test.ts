@@ -66,6 +66,23 @@ describe("video-view coercers", () => {
     expect(status.failed).toBe(false);
     expect(status.artifactId).toBe("art_1");
     expect(status.durationSeconds).toBe(12.5);
+    expect(status.hasThumbnail).toBe(false);
+  });
+
+  it("reports a real poster only when the runtime recorded one", () => {
+    const status = coerceVideoJobStatus("job_t", {
+      status: "SUCCEEDED",
+      terminal: true,
+      output: {
+        artifact: { id: "art_2", name: "Recap.mp4", thumbnailKey: "thumbs/art_2.png" },
+      },
+    });
+    expect(status.hasThumbnail).toBe(true);
+    const noKey = coerceVideoJobStatus("job_u", {
+      status: "SUCCEEDED",
+      output: { artifact: { id: "art_3", name: "Recap.mp4" } },
+    });
+    expect(noKey.hasThumbnail).toBe(false);
   });
 
   it("treats a failed job as terminal without inventing output", () => {

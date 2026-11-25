@@ -9,7 +9,6 @@
 <sub>The Windows installer is unsigned — [verify the SHA-256](#install) before running. macOS and Linux builds are not published yet. [All releases](https://github.com/dumbpabloo/BlackEclipse-V1.0/releases).</sub>
 
 ![Core license: MIT](https://img.shields.io/badge/core%20license-MIT-green)
-![Pine engine: AGPL-3.0-only](https://img.shields.io/badge/pine%20engine-AGPL--3.0--only-orange)
 ![Next.js](https://img.shields.io/badge/Next.js-15-black?logo=next.js)
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python)
 

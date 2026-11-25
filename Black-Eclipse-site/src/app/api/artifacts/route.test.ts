@@ -83,6 +83,58 @@ describe("/api/artifacts proxy", () => {
     expect(res.headers.get("content-type")).toBe("image/png");
   });
 
+  it("forwards Range/If-Range and passes 206 + seek headers back", async () => {
+    ensurePythonRuntime.mockResolvedValue(true);
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(new Uint8Array([4, 5, 6, 7]), {
+        status: 206,
+        headers: {
+          "content-type": "video/mp4",
+          "accept-ranges": "bytes",
+          "content-range": "bytes 4-7/16",
+          "content-length": "4",
+          etag: '"abc"',
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const rangeRequest = new Request("http://localhost:3000/api/artifacts/a1/download?inline=1", {
+      method: "GET",
+      headers: { range: "bytes=4-7", "if-range": '"abc"' },
+    });
+    const res = await GET(rangeRequest, ctx(["a1", "download"]));
+
+    expect(res.status).toBe(206);
+    expect(res.headers.get("content-range")).toBe("bytes 4-7/16");
+    expect(res.headers.get("accept-ranges")).toBe("bytes");
+    expect(res.headers.get("content-length")).toBe("4");
+    expect(res.headers.get("vary")).toBe("Range");
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    expect(headers.Range).toBe("bytes=4-7");
+    expect(headers["If-Range"]).toBe('"abc"');
+  });
+
+  it("retries a dropped media GET once instead of ending playback", async () => {
+    ensurePythonRuntime.mockResolvedValue(true);
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("socket closed"))
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([1]), {
+          status: 206,
+          headers: { "content-type": "video/mp4", "content-range": "bytes 0-0/1" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await GET(req("GET"), ctx(["a1", "download"]));
+    expect(res.status).toBe(206);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("guards DELETE as a mutation", async () => {
     guardMutation.mockReturnValue(null);
     ensurePythonRuntime.mockResolvedValue(true);

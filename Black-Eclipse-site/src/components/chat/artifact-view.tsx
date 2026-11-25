@@ -3,9 +3,10 @@
 import { useEffect, useState } from 'react';
 import { Download } from '@/lib/icons';
 import { useT } from '@/lib/i18n/use-t';
-import { listArtifacts, downloadUrl, type Artifact } from '@/lib/harness/clients/artifacts-browser';
+import { listArtifacts, downloadUrl, inlineUrl, thumbnailUrl, type Artifact } from '@/lib/harness/clients/artifacts-browser';
 import type { ComputedArtifact } from '@/lib/harness/analysis-types';
 import { downloadFromUrlInShell } from '@/lib/desktop/download';
+import { VideoPlayer } from '@/components/media/video-player';
 
 // ─── Phase 15/18 artifact view ──────────────────────────────────────────────
 // A produced file the run handed over: an IMAGE renders inline through the
@@ -72,6 +73,27 @@ export function ArtifactView({
           src={downloadUrl(entry.id)}
           alt={artifact.name}
           className="max-h-72 w-auto rounded-lg border border-border/30"
+        />
+        <figcaption className="mt-0.5 text-[9px] text-muted-foreground/70">
+          {artifact.name}
+        </figcaption>
+      </figure>
+    );
+  }
+
+  if (entry && mime.startsWith('video/')) {
+    // A produced video plays inline through the ONE shared player; when the
+    // codec cannot play here it offers the file instead of a dead box.
+    return (
+      <figure className="mt-1">
+        <VideoPlayer
+          src={inlineUrl(entry.id)}
+          poster={entry.thumbnailKey ? thumbnailUrl(entry.id) : undefined}
+          downloadHref={downloadUrl(entry.id)}
+          fileName={artifact.name}
+          onDownload={(event) => downloadFromUrlInShell(event, downloadUrl(entry.id), artifact.name)}
+          compact
+          label={`Video: ${artifact.name}`}
         />
         <figcaption className="mt-0.5 text-[9px] text-muted-foreground/70">
           {artifact.name}

@@ -1,7 +1,7 @@
 ---
 title: Video Pipeline — fframes Render Worker
 status: Current
-last-verified: 2026-10-18
+last-verified: 2026-11-24
 ---
 
 # Video Pipeline — fframes Render Worker
@@ -324,13 +324,15 @@ back to the agent. Nothing on this card claims a video that is not
 The artifact preview engine stays free of video imports: `artifacts/preview.py`
 exposes one seam (`set_video_poster_extractor`), and the video layer registers
 an FFmpeg poster extractor (`video/poster.py`) over the SAME FFmpeg tree the
-renderer links — a real frame at 0.5 s, 512 px wide, stored as the artifact's
-`.thumb.png`. No extractor / no extractable frame ⇒ `UNSUPPORTED`, never a
-fabricated poster. The Artifact Center shows the poster in grid cards when a
-thumbnail exists and plays the MP4 inline in the detail view; the download
-route now honors `Range` requests (`206` + `Content-Range` + `Accept-Ranges`)
-and `?inline=1` (inline disposition), with the Next proxy forwarding range
-headers and byte-stream metadata — so seeking works, and the bytes and
+renderer links — when `ffprobe` can report the duration, a real content frame
+just over a third in (past the intro, before the outro); otherwise the proven
+1.5 s / 0.5 s fallbacks. 512 px wide, stored as the artifact's `.thumb.png`. No
+extractor / no extractable frame ⇒ `UNSUPPORTED`, never a fabricated poster. The
+Artifact Center shows the poster in grid cards when a thumbnail exists and plays
+the MP4 inline in the detail view; the download route now honors `Range`
+requests (`206` + `Content-Range` + `Accept-Ranges`) and `?inline=1` (inline
+disposition), with the Next proxy forwarding range headers and byte-stream
+metadata — so seeking works, and the bytes and
 authorization are unchanged.
 
 **Acceptance (Phase 7)**: the opt-in
@@ -340,6 +342,37 @@ the artifact's thumbnail; the offline suites pin the router contract (incl.
 conversation association end-to-end), the collector, the preview seam
 (extractor present/absent/failing), range/inline serving, the proxy + client,
 and the panel's honest states.
+
+### The player contract (one component, one transport)
+
+Every produced MP4 the app shows goes through ONE component,
+`src/components/media/video-player.tsx`: the chat `VideoPanel`, the Artifact
+Center detail view and the inline run artifact. It is domain-free (a same-origin
+`src`, an optional poster, a download href) and owns the concerns the old bare
+`<video controls>` elements did not:
+
+- **phases**: `loading → ready → playing → ended | error`. A failed stream says
+  why (`MediaError` code → plain sentence) and offers Retry (cache-busted),
+  Download and Open-in-browser — never a dead black box and never a fake
+  "ready".
+- **one player at a time**, pause when scrolled off-screen, keyboard control
+  (`space`/`k`, `←`/`→` 5 s, `m`, `f`), mute/volume, speed, fullscreen on the
+  container, a poster frame and a buffered/seek rail.
+- **desktop downloads stay shell-owned**: the download control calls
+  `downloadFromUrlInShell`, which writes through `be-save-download`.
+
+The transport underneath is part of the contract:
+
+| Invariant | Where |
+|---|---|
+| A range request answers `206` + `Content-Range` + `Content-Length`; a bad range is `416` with `bytes */size` | `routers/artifacts.py::download_artifact` |
+| A plain `200` still sets `Content-Length` — without a known length Chromium treats media as unseekable and can refuse to start | same |
+| `If-Range` mismatch serves the WHOLE object, never a fragment of another version | same |
+| The Next artifact proxy forwards `Range`/`If-Range`, passes `206` + byte headers through, sets `Vary: Range`, and retries a dropped media GET once | `src/app/api/artifacts/[[...path]]/route.ts` |
+| Final renders are remuxed `-movflags +faststart` (`-c copy`, atomic replace), so the index leads the file; the outcome is reported on the render result and can never fail the render | `video/transcode.py` + `video/runner.py` |
+
+The chat card's status blob also carries `artifact.thumbnailKey`, so the player
+only requests a poster that actually exists (`VideoJobStatus.hasThumbnail`).
 
 ## Phase 8 — hardening: ceilings, isolation, SBOM, recaps, deployment
 
