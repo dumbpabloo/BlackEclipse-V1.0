@@ -97,7 +97,8 @@ export function CanvasAiPanel(props: CanvasAiPanelProps) {
     );
   }
 
-  const hasResult = Boolean(proposal && (proposal.answer || proposal.summary || proposal.operations.length || proposal.resultContent));
+  const operationCount = (proposal?.operations.length ?? 0) + (proposal?.deckOperations?.length ?? 0);
+  const hasResult = Boolean(proposal && (proposal.answer || proposal.summary || operationCount || proposal.resultContent));
   const showDiff = Boolean(proposal?.resultContent != null && proposal.resultContent !== currentContent);
 
   return (
@@ -207,6 +208,29 @@ export function CanvasAiPanel(props: CanvasAiPanelProps) {
                   ) : op.content ? (
                     <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] text-muted-foreground/60">
                       {op.content}
+                    </pre>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {proposal.deckOperations && proposal.deckOperations.length > 0 ? (
+            <div className="flex flex-col gap-1.5">
+              <h3 className="text-[11px] uppercase tracking-wide text-muted-foreground/60">
+                Deck operations ({proposal.deckOperations.length})
+              </h3>
+              {proposal.deckOperations.map((op, i) => (
+                <div key={i} className="rounded-lg glass-card-subtle p-2 text-[11px]">
+                  <div className="font-mono text-foreground/90">
+                    {op.op}{op.slideId ? ` · ${op.slideId}` : ''}
+                  </div>
+                  {op.explanation ? <div className="mt-0.5 text-muted-foreground/70">{op.explanation}</div> : null}
+                  {op.text ? (
+                    <div className="mt-1 break-words font-mono text-[10px] text-muted-foreground/60">{op.text}</div>
+                  ) : op.bullets ? (
+                    <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] text-muted-foreground/60">
+                      {op.bullets.join('\n')}
                     </pre>
                   ) : null}
                 </div>

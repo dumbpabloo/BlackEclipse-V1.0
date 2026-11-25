@@ -146,7 +146,9 @@ def test_prompt_ceiling_was_lowered_not_raised():
     # an ABSOLUTE path returned by the tool, use `file_locate`, never state a
     # location from memory. Guidance the runtime needs; re-pinned to the measured
     # size, may only shrink. Matches the same test in `test_memory_tools.py`.
-    assert len(ECLIPSE_AGENT_SYSTEM_PROMPT) <= 48294
+    # Re-pinned 48294->48732 (2026-11-25) for the presentation guidance: a deck
+    # request routes to `presentation_create`. Matches the sibling ratchet.
+    assert len(ECLIPSE_AGENT_SYSTEM_PROMPT) <= 48732
 
 
 def test_main_still_reexports_the_identity_boundary_surface():

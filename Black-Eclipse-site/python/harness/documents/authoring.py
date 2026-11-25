@@ -262,58 +262,76 @@ def build_xlsx(sheets: Sequence[dict[str, Any]], *, title: str = "") -> bytes:
 # ── PowerPoint (.pptx) ────────────────────────────────────────────────────────
 
 
+def _deck_bullets(bullets: Sequence[Any]) -> list[list[str]]:
+    """Split bullets into deck-legal groups (<=180 chars, <=7 per slide).
+
+    The one-shot writer used to keep every line, so trimming here would lose
+    text silently. Long lines are split at word boundaries and extra lines become
+    continuation slides instead.
+    """
+    flat: list[str] = []
+    for bullet in bullets:
+        text = str(bullet).strip()
+        while len(text) > 180:
+            cut = text.rfind(" ", 0, 180)
+            if cut <= 0:
+                cut = 180
+            flat.append(text[:cut].strip())
+            text = text[cut:].strip()
+        if text:
+            flat.append(text)
+    if not flat:
+        return [[]]
+    return [flat[index:index + 7] for index in range(0, len(flat), 7)]
+
+
 def build_pptx(slides: Sequence[dict[str, Any]], *, title: str = "") -> bytes:
-    try:
-        from pptx import Presentation  # noqa: PLC0415
-    except Exception as exc:  # noqa: BLE001
-        raise DocumentError(
-            "DOCUMENT_LIBRARY_MISSING", "python-pptx is not installed (PowerPoint authoring unavailable)"
-        ) from exc
+    """Build a real .pptx through the deck writer (one layout engine).
 
-    presentation = Presentation()
-    entries = list(slides or [])[:MAX_SLIDES]
+    The simple `{title, bullets, notes}` vocabulary is converted into a minimal
+    DeckSpec and exported by `presentations/export_pptx.py`, so the one-shot
+    document tool and the dedicated deck tool share a writer. Bullets beyond the
+    deck's 7-per-slide limit become continuation slides (nothing is dropped). A
+    missing python-pptx still reports `DOCUMENT_LIBRARY_MISSING`.
+    """
+    from ..presentations.model import MAX_SLIDES as DECK_MAX_SLIDES  # noqa: PLC0415
+    from ..presentations.model import DeckError, parse_deck  # noqa: PLC0415
+    from ..presentations.render import render_deck  # noqa: PLC0415
+    from ..presentations.export_pptx import export_pptx  # noqa: PLC0415
 
-    # A leading title slide whenever a deck title is present.
+    deck_slides: list[dict[str, Any]] = []
     if title:
-        title_layout = presentation.slide_layouts[0]
-        cover = presentation.slides.add_slide(title_layout)
-        if cover.shapes.title is not None:
-            cover.shapes.title.text = title
-
-    for slide in entries:
+        deck_slides.append({"layout": "title", "title": title})
+    for slide in list(slides or []):
         if not isinstance(slide, dict):
             continue
-        layout = presentation.slide_layouts[1] if len(presentation.slide_layouts) > 1 else presentation.slide_layouts[0]
-        built = presentation.slides.add_slide(layout)
-        if built.shapes.title is not None:
-            built.shapes.title.text = _as_text(slide.get("title"))
-        body_placeholders = [
-            shape for shape in built.placeholders if shape.placeholder_format.idx != 0
-        ]
-        bullets = list(slide.get("bullets") or [])
-        if body_placeholders:
-            body = body_placeholders[0].text_frame
-            body.clear()
-            for i, bullet in enumerate(bullets):
-                paragraph = body.paragraphs[0] if i == 0 else body.add_paragraph()
-                paragraph.text = _as_text(bullet)
-                paragraph.level = 0
-        elif bullets:
-            # No content placeholder (custom template): fall back to a textbox.
-            from pptx.util import Inches  # noqa: PLC0415
-
-            box = built.shapes.add_textbox(Inches(0.5), Inches(1.5), Inches(9), Inches(5))
-            frame = box.text_frame
-            frame.text = _as_text(bullets[0])
-            for bullet in bullets[1:]:
-                frame.add_paragraph().text = _as_text(bullet)
+        slide_title = str(slide.get("title") or "Slide")
         notes = slide.get("notes")
-        if notes:
-            built.notes_slide.notes_text_frame.text = _as_text(notes)
-
-    buffer = io.BytesIO()
-    presentation.save(buffer)
-    return buffer.getvalue()
+        groups = _deck_bullets(slide.get("bullets") or [])
+        for index, group in enumerate(groups):
+            deck_slides.append({
+                "layout": "bullets" if group else "section",
+                "title": slide_title if index == 0 else f"{slide_title} (cont.)",
+                "bullets": group,
+                **({"notes": notes} if index == 0 and notes else {}),
+            })
+    if not deck_slides:
+        deck_slides = [{"layout": "title", "title": title or "Presentation"}]
+    if len(deck_slides) > DECK_MAX_SLIDES:
+        raise DocumentError(
+            "DOCUMENT_INVALID_CONTENT",
+            f"the deck needs {len(deck_slides)} slides; a presentation carries at most {DECK_MAX_SLIDES}",
+        )
+    try:
+        deck = parse_deck({"meta": {"title": title or "Presentation"}, "slides": deck_slides})
+        data, _summary = export_pptx(deck, render_deck(deck))
+        return data
+    except DeckError as exc:
+        if exc.code == "PRESENTATION_LIBRARY_MISSING":
+            raise DocumentError(
+                "DOCUMENT_LIBRARY_MISSING", "python-pptx is not installed (PowerPoint authoring unavailable)"
+            ) from exc
+        raise DocumentError("DOCUMENT_INVALID_CONTENT", exc.message) from exc
 
 
 # ── text formats ──────────────────────────────────────────────────────────────

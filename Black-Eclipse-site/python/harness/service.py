@@ -643,6 +643,15 @@ class AgenticService:
             register_document_authoring_tools(self.registry)
         except Exception:  # noqa: BLE001 - authoring is optional; never block boot
             log.warning("document authoring subsystem unavailable", exc_info=True)
+        # Presentations: decks are canvas artifacts and the .pptx is a rendered
+        # derivative. It owns no store; a missing python-pptx or artifact service
+        # is reported honestly per call, so it never blocks boot.
+        try:
+            from .presentations.tools import register_presentation_tools  # noqa: PLC0415
+
+            register_presentation_tools(self.registry)
+        except Exception:  # noqa: BLE001 - decks are optional; never block boot
+            log.warning("presentation subsystem unavailable", exc_info=True)
         # UI Engineering runtime: the component catalog + declarative blueprint
         # engine + `ui_*` agent tools, on the ONE agent-memory connection. A
         # failure only leaves `self.ui` None, so it never blocks boot.

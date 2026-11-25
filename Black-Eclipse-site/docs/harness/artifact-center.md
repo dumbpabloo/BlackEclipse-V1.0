@@ -1,13 +1,13 @@
 ---
 title: Artifact Center
 status: Current
-last-verified: 2026-10-18
+last-verified: 2026-11-25
 ---
 
 # Artifact Center
 
 **Who this is for:** anyone asking "where did the file Eclipse produced go, and
-how do I find/preview/download it again?" — and anyone extending the catalog.
+how do I find/preview/download it again?" â€” and anyone extending the catalog.
 
 The Artifact Center is the **one durable catalog of everything Eclipse and the
 user produce**: reports, datasets, charts, images, code, backtest outputs, uploaded
@@ -20,11 +20,11 @@ documents. It is reachable from the Agentic sidebar (**Artifacts**), from the ag
 |---|---|---|
 | Catalog rows | `agent-memory.db` tables `HarnessArtifact*` | metadata, provenance, lifecycle, tags, collections |
 | File bytes | `.black-eclipse/artifacts/<owner>/<YYYY>/<MM>/<sha16>-<name>` | the content-addressed originals + thumbnails |
-| Surfaces | `/artifacts/*` (FastAPI) → `/api/artifacts/**` (Next proxy) → Artifact Center UI | list/search/preview/download |
+| Surfaces | `/artifacts/*` (FastAPI) â†’ `/api/artifacts/**` (Next proxy) â†’ Artifact Center UI | list/search/preview/download |
 
 The catalog is **NOT JDdS** (`jdds.db`, market data) and **NOT** another
 subsystem's tables. It adds its own tables through `artifacts/store.py`'s
-`_ensure_schema`, on the ONE shared `agent-memory.db` connection — the same
+`_ensure_schema`, on the ONE shared `agent-memory.db` connection â€” the same
 pattern as `tasks/store.py` and `execution/store.py`.
 
 ## Code map
@@ -36,19 +36,19 @@ python/harness/artifacts/
                  the closed SORT_COLUMNS table
   content.py     the ONE MIME/category/preview-kind derivation (magic-byte sniff
                  where bytes exist; extension is a hint, never proof)
-  storage.py     LocalArtifactStorage — confined, content-addressed, atomic,
+  storage.py     LocalArtifactStorage â€” confined, content-addressed, atomic,
                  size-bounded; OWNS storage keys (the service never sees a path)
-  store.py       ArtifactStore — the tables + parameterized list/search; sort
+  store.py       ArtifactStore â€” the tables + parameterized list/search; sort
                  keys are looked up, never interpolated
   preview.py     bounded text/CSV/JSON/code extracts + Pillow image/PDF thumbs;
                  office files read as ZIP+XML (never executed); VIDEO posters
                  come from a registered extractor seam
-                 (`set_video_poster_extractor` — the video layer installs one
-                 over the renderer's FFmpeg tree; absent/failed ⇒ UNSUPPORTED,
+                 (`set_video_poster_extractor` â€” the video layer installs one
+                 over the renderer's FFmpeg tree; absent/failed â‡’ UNSUPPORTED,
                  never a fabricated poster)
-  service.py     ArtifactService — register/version/preview/tag/collect/archive/
+  service.py     ArtifactService â€” register/version/preview/tag/collect/archive/
                  restore/delete/purge/reconcile; owner scope + idempotency
-  compare.py     compare_versions / compare_revisions / to_markdown — a
+  compare.py     compare_versions / compare_revisions / to_markdown â€” a
                  deterministic diff of two stored revisions: checksum + size,
                  provenance, change note and metadata (added/removed/changed).
                  Bytes are compared by checksum, never line-diffed
@@ -64,7 +64,7 @@ src/components/screens/artifacts/artifacts-screen.tsx  the Artifact Center scree
 ## Registration contract (how files get in)
 
 A producer calls `ArtifactService.register(...)` (or `register_bytes` /
-`register_path`) with a **source** — a path inside an authorized workspace root, or
+`register_path`) with a **source** â€” a path inside an authorized workspace root, or
 inline bytes. The caller **may never supply a storage key**. The service:
 
 1. resolves + confines the source (refused if outside every authorized root),
@@ -72,7 +72,10 @@ inline bytes. The caller **may never supply a storage key**. The service:
 3. computes the sha256, MIME (with magic-byte sniff) and category,
 4. inserts the row, the v1 version row, tags/collection links, and a lifecycle
    event, **then** generates the preview. A preview failure never invalidates the
-   original — it is recorded as `previewStatus: FAILED`/`UNSUPPORTED`.
+   original â€” it is recorded as `previewStatus: FAILED`/`UNSUPPORTED`. A
+   `.deck.json` artifact previews as a readable outline (deck title + slide list)
+   plus a first-slide thumbnail written by the presentation layer
+   (`preview.py::_deck_outline`, `ArtifactService.set_preview_thumbnail`).
 
 Idempotency: pass an `idempotencyKey`; a repeat returns the existing artifact
 rather than creating a duplicate (this is how a run retry or a job replay stays
@@ -80,14 +83,14 @@ clean).
 
 Producers wired today:
 
-- `python/harness/analysis_tools.py` — every `ArtifactRef` an `analysis_run`
+- `python/harness/analysis_tools.py` â€” every `ArtifactRef` an `analysis_run`
   produced (`register_run_artifacts`, idempotent per run+digest).
-- `python/harness/tasks/scheduler.py` — a completed task's outcome artifacts
+- `python/harness/tasks/scheduler.py` â€” a completed task's outcome artifacts
   (`register_reference_dicts`), mirrored beside the existing `HarnessTaskArtifact`.
-- `python/harness/execution/orchestrator.py` — every file the Code Execution &
-  Verification Layer collected from `dist/build/out/coverage/reports/…`
+- `python/harness/execution/orchestrator.py` â€” every file the Code Execution &
+  Verification Layer collected from `dist/build/out/coverage/reports/â€¦`
   (`_register_produced`, absolute paths from the workspace binding).
-- `python/harness/research/web_engine.py` — a completed web-research run, recorded
+- `python/harness/research/web_engine.py` â€” a completed web-research run, recorded
   as an evidence-REFERENCING report artifact (`register_research_report`,
   best-effort, idempotent per `(researchId, snapshotId)`). The Markdown report
   names claim verdicts, conflicts and an evidence appendix by id, and its metadata
@@ -95,11 +98,11 @@ Producers wired today:
   the durable evidence records instead of duplicating them (ADR-H162).
 - Agents directly: `artifact_register`, `artifact_add_version`, `artifact_list`,
   `artifact_get`, `artifact_tag`, `artifact_create_collection`.
-- `python/harness/documents/` — the Document Authoring `document_create` tool builds
+- `python/harness/documents/` â€” the Document Authoring `document_create` tool builds
   Word/Excel/PowerPoint/Markdown/CSV/JSON files and registers the bytes here
   (`register_bytes`, explicit MIME so the category/preview resolve correctly). See
-  `docs/harness/document-intelligence.md` › *Authoring*, ADR-H192.
-- `python/harness/documents/edit/` — `document_edit` publishes a targeted edit as a
+  `docs/harness/document-intelligence.md` â€º *Authoring*, ADR-H192.
+- `python/harness/documents/edit/` â€” `document_edit` publishes a targeted edit as a
   NEW version through `add_version`. It passes `expectedChecksum` (the source's
   sha256); `ArtifactService.add_version` refuses with `ARTIFACT_CONFLICT` when the
   current artifact checksum no longer matches, so a concurrent edit cannot silently
@@ -112,8 +115,8 @@ arbitrary machine directories.
 
 ## Lifecycle
 
-`ACTIVE → ARCHIVED → ACTIVE` (archive/restore are distinct and reversible) and
-`→ DELETED → PURGED`. Delete is soft (bytes retained, recoverable); purge removes
+`ACTIVE â†’ ARCHIVED â†’ ACTIVE` (archive/restore are distinct and reversible) and
+`â†’ DELETED â†’ PURGED`. Delete is soft (bytes retained, recoverable); purge removes
 every version's bytes and the rows, and **refuses while another artifact shares the
 content**. State never changes without a recorded `HarnessArtifactEvent`.
 
@@ -140,7 +143,7 @@ Full design, routes and the operation contract: `docs/canvas.md`; ADR-049.
 Every `/artifacts/*` route (reads AND mutations) carries `require_operator`
 (loopback or the runtime secret), and every query is scoped by `ownerId` (the
 front door passes `x-harness-user`, defaulting to `local`). A caller can never
-read, preview or download another owner's artifact — not by id, not by search, not
+read, preview or download another owner's artifact â€” not by id, not by search, not
 by thumbnail. Storage keys are validated against traversal, absolute paths and
 symlink escape. Untrusted content is never executed; HTML/SVG is served as a
 download and never rendered in the app origin.
@@ -153,11 +156,11 @@ holds no video import), and a missing extractor or frame is an honest
 `UNSUPPORTED`, never a placeholder image. For inline playback the download
 route additionally supports:
 
-- `Range` requests → `206` + `Content-Range` + `Accept-Ranges: bytes` (so a
+- `Range` requests â†’ `206` + `Content-Range` + `Accept-Ranges: bytes` (so a
   player can seek; an unsatisfiable range is `416` with `bytes */<size>`), and
-- `?inline=1` → `Content-Disposition: inline` instead of `attachment`.
+- `?inline=1` â†’ `Content-Disposition: inline` instead of `attachment`.
 
-The bytes are identical and the authorization is unchanged — the Next proxy
+The bytes are identical and the authorization is unchanged â€” the Next proxy
 forwards the client's `Range` header and the upstream range/stream metadata.
 Artifacts registered by the video pipeline also carry a `conversationId`
 (when the requesting conversation supplied one), so the catalog can be
@@ -170,7 +173,7 @@ storage object is gone as `MISSING`, recovers rows whose object reappeared, and
 (opt-in) verifies checksums. With `discover`, it registers new files found under
 the bounded workspace artifact directories. With `purge_expired`, it permanently
 removes soft-deleted artifacts whose retention deadline (`retentionUntil`, else
-`deletedAt + HARNESS_ARTIFACT_RETENTION_DAYS`) has passed — never ACTIVE/ARCHIVED
+`deletedAt + HARNESS_ARTIFACT_RETENTION_DAYS`) has passed â€” never ACTIVE/ARCHIVED
 rows. A background reconciler runs reconcile+discover+purge every
 `HARNESS_ARTIFACT_RECONCILE_SECONDS` (default 900, disable with
 `HARNESS_ARTIFACT_RECONCILE=0`; disable purge with `HARNESS_ARTIFACT_AUTO_PURGE=0`).

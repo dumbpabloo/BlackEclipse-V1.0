@@ -1,22 +1,54 @@
 ---
 title: Presentations (Decks) -- dedicated subsystem plan
-status: Proposed (not implemented)
-last-verified: 2026-11-24
+status: Implemented (Phases 0-4; template gallery/brand kit and animation remain out of scope)
+last-verified: 2026-11-25
 ---
 
 # Presentations (Decks) -- dedicated subsystem plan
 
-**Who this is for:** whoever builds the next step. It is the design, the file
-map, the phase order, the acceptance tests and the honest trade-offs.
+**Who this is for:** whoever builds the next step, or wants the reasoning behind
+the shipped deck subsystem. The canonical "how it works" doc is
+[`docs/harness/presentations.md`](./harness/presentations.md).
 
-**What this is not:** an implemented feature. Nothing in this document exists in
-the tree yet unless a file is named as *existing*. Items under
-[Decisions](#decisions-needed-before-phase-1) still need an answer; the
-recommendation is stated for each.
+**What this is:** the design, the file map, the phase order, the acceptance
+tests, the trade-offs, and an honest record of what shipped vs what did not.
+
+## Implemented 2026-11-25
+
+Phases 0-4 are shipped (the planned template gallery/brand kit and animations are
+not in scope):
+
+- `python/harness/presentations/` — `DeckSpec`, four theme presets, deterministic
+  fit, fractional layout engine, neutral render model, `python-pptx` export
+  (notes, tables, native charts, images, UNAVAILABLE placeholders), **PDF and
+  per-slide PNG export** (Matplotlib), **first-slide thumbnails**, closed deck
+  ops, `PresentationService`, and `presentation_create` / `_edit` / `_export` /
+  `_outline` / `_import` on the ONE registry.
+- **Deck-aware AI proposals**: the Canvas copilot branches on
+  `CanvasKind.PRESENTATION`, returns typed `DeckOp` proposals (`deckOperations`),
+  and the same revision-guarded save path applies them; text ops are refused.
+- Canvas kind `presentation` (`application/vnd.eclipse.deck+json`, `.deck.json`),
+  a slide rail/stage/inspector editor, fullscreen present mode, and an Export
+  menu for PowerPoint / PDF / PNG slides.
+- `.pptx` import as an editable outline (`presentation_import`), and
+  `document_create(format="pptx")` now delegates to the same exporter.
+- `src/lib/presentation/` — the zod mirror, theme/fit/layout mirrors pinned by a
+  committed Python golden fixture, and one React slide renderer.
+- `/deck` agent-turn command; deck outline + thumbnail preview in the Artifact
+  Center.
+- Tests: 39 Python (33 unit/export/import/AI + 6 API), 18 schema/layout/theme,
+  5 render, 2 proposal, 3 command.
+
+Deviations, stated plainly: `timeline`/`comparison` layouts were dropped (13
+layouts ship); import is an outline, not a design-preserving conversion; a
+template gallery and brand kit are not built.
+
+**What this document is not:** an exhaustive changelog. See
+`docs/harness/presentations.md` and `docs/CHANGELOG.md`.
 
 ---
 
-## 1. What Eclipse can do today
+## 1. What Eclipse could do before this change
 
 | Capability | Where | What is missing |
 |---|---|---|
@@ -160,7 +192,7 @@ Closed vocabulary (v1):
 
 | Group | Values |
 |---|---|
-| `layout` | `title`, `section`, `agenda`, `bullets`, `two_column`, `statement`, `quote`, `metric_row`, `table`, `chart`, `image_full`, `image_right`, `timeline`, `comparison`, `closing` |
+| `layout` | `title`, `section`, `agenda`, `bullets`, `two_column`, `statement`, `quote`, `metric_row`, `table`, `chart`, `image_full`, `image_right`, `closing` |
 | `size` | `16:9`, `4:3` |
 | `theme.preset` | `eclipse`, `paper`, `midnight`, `slate` |
 | `fit` | `cover`, `contain` |
@@ -306,10 +338,10 @@ and calls the new exporter, so the two writers cannot drift.
 
 - Preview kind for `.deck.json`: outline text (title + up to 20 slide titles) via
   `artifacts/preview.py`; downloadable JSON.
-- Phase 4 adds real slide thumbnails: the editor renders slide 1 client-side and
-  uploads it through a small preview-bytes endpoint (new route, owner-scoped), or
-  the server draws a schematic with PIL. Decide in Phase 4; until then
-  `UNSUPPORTED` is the honest state.
+- Shipped: a real first-slide thumbnail. The server renders slide 1 with the same
+  neutral model (`export_pdf.render_slide_png`) and stores it through
+  `ArtifactService.set_preview_thumbnail` on every deck write; the outline text
+  preview is kept. No client upload endpoint is needed.
 
 ## 9. File-by-file change map
 
@@ -515,20 +547,15 @@ macros, collaborative multi-cursor editing, mobile editing, arbitrary
 pixel-positioned elements, a template marketplace, legacy `.ppt` authoring,
 Keynote/Google Slides export, and a lossless `.pptx` -> deck round-trip.
 
-## 14. Decisions needed before Phase 1
+## 14. Decisions (resolved when Phases 0-2 shipped)
 
-1. **Source of truth.** Deck JSON + rendered export (recommended), or `.pptx` +
-   LibreOffice preview? Recommendation: JSON.
-2. **Where decks live.** A fourth Canvas kind (recommended: reuse versions,
-   owner scope, AI panel, inline chat pane) or a separate `/decks` screen with its
-   own rail? Recommendation: Canvas kind; add a filtered "Decks" view in the
-   Artifact Center later if the list gets noisy.
-3. **PDF now or later.** Recommendation: later (Phase 4), and native Matplotlib
-   so zero-config holds; LibreOffice only improves fidelity.
-4. **Present mode in Phase 2 or 5.** Recommendation: Phase 2, because "dedicated
-   presentation tool" implies presenting; it is a small renderer variant.
-5. **Chart authoring depth in v1.** Recommendation: line/bar/area/pie/scatter +
-   candlestick via PNG; everything else deferred.
+1. **Source of truth.** Deck JSON + rendered export — implemented (ADR-085).
+2. **Where decks live.** A fourth Canvas kind — implemented; `/canvas` opens it
+   and the Artifact Center lists it.
+3. **PDF now or later.** Later (Phase 4). The `.pptx` path shipped first.
+4. **Present mode in Phase 2 or 5.** Phase 2 — implemented.
+5. **Chart authoring depth in v1.** line/area/bar/stackedBar/pie/donut as native
+   charts; other kinds are UNAVAILABLE in decks until Phase 3/4.
 
 ## 15. Rollout and observability
 

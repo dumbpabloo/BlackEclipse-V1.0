@@ -1,0 +1,182 @@
+{
+  "schemaVersion": 1,
+  "meta": {
+    "title": "Parity Deck",
+    "subtitle": "Every layout",
+    "author": "Eclipse",
+    "date": "2026-11-25",
+    "footer": "Confidential -- not investment advice",
+    "language": "en"
+  },
+  "size": "16:9",
+  "theme": {
+    "preset": "eclipse"
+  },
+  "dataSources": {
+    "aapl": {
+      "kind": "price",
+      "symbol": "AAPL",
+      "range": "1y",
+      "interval": "1d"
+    }
+  },
+  "slides": [
+    {
+      "layout": "title",
+      "title": "Parity Deck",
+      "subtitle": "Every layout",
+      "eyebrow": "Q3 2026"
+    },
+    {
+      "layout": "section",
+      "title": "Results",
+      "eyebrow": "01"
+    },
+    {
+      "layout": "agenda",
+      "title": "Agenda",
+      "bullets": [
+        "Results",
+        "Outlook",
+        "Risks"
+      ]
+    },
+    {
+      "layout": "bullets",
+      "title": "Highlights",
+      "bullets": [
+        "Revenue up 18%",
+        "Costs flat",
+        "Cash up"
+      ],
+      "source": "10-Q 2026-09-30"
+    },
+    {
+      "layout": "two_column",
+      "title": "Risks / Mitigants",
+      "left": {
+        "heading": "Risks",
+        "bullets": [
+          "Demand",
+          "Rates"
+        ]
+      },
+      "right": {
+        "heading": "Mitigants",
+        "bullets": [
+          "Diversified book",
+          "Hedged"
+        ]
+      }
+    },
+    {
+      "layout": "statement",
+      "statement": "One sentence, set large."
+    },
+    {
+      "layout": "quote",
+      "statement": "Price is what you pay, value is what you get.",
+      "attribution": "Warren Buffett"
+    },
+    {
+      "layout": "metric_row",
+      "title": "By the numbers",
+      "metrics": [
+        {
+          "label": "Revenue",
+          "value": "$12.4M",
+          "delta": "+18% YoY",
+          "source": "10-Q"
+        },
+        {
+          "label": "Margin",
+          "value": "42%",
+          "delta": "+2pp",
+          "source": "10-Q"
+        },
+        {
+          "label": "Cash",
+          "value": "$4.1M",
+          "note": "unrestricted",
+          "source": "10-Q"
+        },
+        {
+          "label": "Headcount",
+          "value": "84",
+          "source": "HR"
+        }
+      ]
+    },
+    {
+      "layout": "table",
+      "title": "Comps",
+      "table": {
+        "headers": [
+          "Ticker",
+          "P/E",
+          "EV/EBITDA"
+        ],
+        "rows": [
+          [
+            "AAPL",
+            "31.2",
+            "24.1"
+          ],
+          [
+            "MSFT",
+            "35.0",
+            "26.4"
+          ]
+        ],
+        "caption": "Source: public filings"
+      }
+    },
+    {
+      "layout": "chart",
+      "title": "Revenue trend",
+      "chart": {
+        "kind": "line",
+        "categories": [
+          "Jan",
+          "Feb",
+          "Mar"
+        ],
+        "series": [
+          {
+            "name": "Revenue",
+            "data": [
+              10,
+              11,
+              12
+            ]
+          }
+        ]
+      },
+      "source": "JDdS daily close"
+    },
+    {
+      "layout": "image_full",
+      "title": "Product",
+      "image": {
+        "artifactId": "art_missing",
+        "alt": "Product photo",
+        "fit": "cover"
+      }
+    },
+    {
+      "layout": "image_right",
+      "title": "Product detail",
+      "body": "A short description on the left.",
+      "image": {
+        "artifactId": "art_missing",
+        "alt": "Diagram",
+        "fit": "contain"
+      }
+    },
+    {
+      "layout": "closing",
+      "title": "Thank you",
+      "subtitle": "Questions?"
+    }
+  ]
+}

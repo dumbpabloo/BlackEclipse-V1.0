@@ -560,6 +560,12 @@ const TOOL_LABELS: Record<string, string> = {
   // Document Authoring — the write side (Word / Excel / PowerPoint / text).
   document_create: 'Creating the document',
   eclipse_report: 'Creating the report',
+  // Presentations — a versioned deck plus its PowerPoint derivative.
+  presentation_create: 'Building the presentation',
+  presentation_edit: 'Editing the presentation',
+  presentation_export: 'Exporting the presentation',
+  presentation_outline: 'Reading the presentation',
+  presentation_import: 'Importing the presentation',
   // Native video — the render pipeline's plain job names.
   video_capabilities: 'Checking video support',
   video_create_project: 'Creating the video project',

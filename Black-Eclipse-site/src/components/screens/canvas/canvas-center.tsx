@@ -36,12 +36,14 @@ export interface CanvasCenterProps {
   onRename: (name: string) => void;
   onLanguageChange: (language: string) => void;
   onRestore: (version: number) => void;
-  onExport: (action: 'download' | 'copy' | 'print') => void;
+  onExport: (action: 'download' | 'copy' | 'print' | 'pptx' | 'pdf' | 'png') => void;
   onSaveNow: () => void;
   onDelete: () => void;
   fullWidth: boolean;
   onToggleFullWidth: () => void;
   editable: boolean;
+  /** A transient result message (e.g. the exported PowerPoint path). */
+  notice?: string | null;
   /** Inline in the chat dock: no inner card chrome, close button in the header. */
   inline?: boolean;
   onClose?: () => void;
@@ -70,10 +72,10 @@ export function CanvasCenter(props: CanvasCenterProps) {
   const {
     snapshot, content, dirty, saveState, saveError, onContentChange, onSelectionChange,
     editorHandleRef, onRename, onLanguageChange, onRestore, onExport, onSaveNow, onDelete,
-    fullWidth, onToggleFullWidth, editable, inline = false, onClose,
+    fullWidth, onToggleFullWidth, editable, notice = null, inline = false, onClose,
   } = props;
 
-  const displayName = snapshot.name.replace(/\.(json|md|markdown)$/i, '') || 'Canvas';
+  const displayName = snapshot.name.replace(/\.(deck\.json|json|md|markdown)$/i, '') || 'Canvas';
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(displayName);
   const titleRef = useRef<HTMLInputElement>(null);
@@ -132,6 +134,9 @@ export function CanvasCenter(props: CanvasCenterProps) {
           </select>
         ) : null}
         <SaveChip state={saveState} dirty={dirty} error={saveError} />
+        {notice ? (
+          <span className="max-w-[220px] truncate text-[10px] text-emerald-400" title={notice}>{notice}</span>
+        ) : null}
         <DropdownMenu>
           <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="More canvas actions" />}>
             <MoreHorizontal className="h-4 w-4" />
@@ -180,6 +185,20 @@ export function CanvasCenter(props: CanvasCenterProps) {
                 <Download className="h-4 w-4" /> Export
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent className="w-[200px]">
+                {snapshot.kind === 'presentation' ? (
+                  <>
+                    <DropdownMenuItem onClick={() => onExport('pptx')}>
+                      <FileOutput className="h-3.5 w-3.5" /> Export PowerPoint (.pptx)
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => onExport('pdf')}>
+                      <FileOutput className="h-3.5 w-3.5" /> Export PDF
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => onExport('png')}>
+                      <FileOutput className="h-3.5 w-3.5" /> Export PNG slides (.zip)
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                ) : null}
                 <DropdownMenuItem onClick={() => onExport('download')}>
                   <Download className="h-3.5 w-3.5" /> Download file
                 </DropdownMenuItem>

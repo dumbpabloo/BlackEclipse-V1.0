@@ -1,7 +1,7 @@
 ---
 title: Document Intelligence Subsystem
 status: Current
-last-verified: 2026-10-14
+last-verified: 2026-11-25
 ---
 
 # Document Intelligence Subsystem
@@ -23,23 +23,23 @@ its confined filesystem path.
 A single, provider-agnostic document-understanding capability integrated with the
 existing agent runtime. It turns a file of any supported format into one unified
 `DocumentIR`, then indexes, searches, compares and cites it. It never builds a
-second provider stack, OCR engine, evidence store, database or query engine —
+second provider stack, OCR engine, evidence store, database or query engine â€”
 every one of those is reused.
 
 ```
 agent tool (document_open, document_search, ...)
-        │
-        ▼
+        â”‚
+        â–¼
 process_document(...)                          document_intelligence/orchestrator.py
-        │
-        ├─ validate          security.py        (size, magic, macro, SSRF, injection)
-        ├─ cache             store.py           (content-hash → reuse extraction)
-        ├─ detect + parse    adapters/registry  (one adapter per format → DocumentIR)
-        ├─ OCR routing       ocr.py             (deterministic first → vision fallback)
-        ├─ structure         base.py / entities (sections, entities)
-        ├─ chunk + index     chunking.py / store.py
-        ├─ evidence          evidence.py        (→ research EvidenceStore, UNTRUSTED)
-        └─ assess            processing.py      (READY | PARTIALLY_READY | FAILED)
+        â”‚
+        â”œâ”€ validate          security.py        (size, magic, macro, SSRF, injection)
+        â”œâ”€ cache             store.py           (content-hash â†’ reuse extraction)
+        â”œâ”€ detect + parse    adapters/registry  (one adapter per format â†’ DocumentIR)
+        â”œâ”€ OCR routing       ocr.py             (deterministic first â†’ vision fallback)
+        â”œâ”€ structure         base.py / entities (sections, entities)
+        â”œâ”€ chunk + index     chunking.py / store.py
+        â”œâ”€ evidence          evidence.py        (â†’ research EvidenceStore, UNTRUSTED)
+        â””â”€ assess            processing.py      (READY | PARTIALLY_READY | FAILED)
 ```
 
 ## The DocumentIR (the backbone)
@@ -68,13 +68,13 @@ as data), `Block`, `Table`/`TableCell`, `DocumentImage`, `Section`, `BBox`,
 | `tabular` | csv, tsv | streaming rows, column schema + type profiles, bounded preview |
 | `text` | markdown, mdx, txt, html, json, jsonl, xml, yaml, toml | structure-preserving; HTML sanitized; data formats get schema inference |
 | `image` | png/jpeg/webp/gif/tiff/bmp/svg | single-page doc; OCR then vision caption/layout |
-| `epub` | epub | spine order → pages, sanitized XHTML |
+| `epub` | epub | spine order â†’ pages, sanitized XHTML |
 | `legacy` | rtf, doc, xls, ppt | RTF native; legacy OLE converted via LibreOffice when present, else honest refusal |
 | `archive` | zip, tar, gz, 7z | **lazy inspection only**; bomb guards before any extraction |
 
 OOXML/ODF are read with the stdlib (`zipfile` + `ElementTree`), with a bounded
 `lxml` recovery parser for a malformed part. The READ path adds no `openpyxl` /
-`python-docx` / `python-pptx` dependency. (The WRITE path — see *Authoring* below —
+`python-docx` / `python-pptx` dependency. (The WRITE path â€” see *Authoring* below â€”
 is a separate subsystem and does use those three writers.)
 
 ## Authoring (the write side)
@@ -82,17 +82,17 @@ is a separate subsystem and does use those three writers.)
 Document Intelligence only READS. Producing new documents is a separate, small
 subsystem: **Document Authoring** (`python/harness/documents/`, tools
 `document_create` and `eclipse_report`, ADR-H192). It builds REAL Word (`.docx`),
-Excel (`.xlsx`) and PowerPoint (`.pptx`) files — plus Markdown, CSV, JSON and
-`.txt` — from a neutral content vocabulary (`blocks` for docx/markdown/txt,
+Excel (`.xlsx`) and PowerPoint (`.pptx`) files â€” plus Markdown, CSV, JSON and
+`.txt` â€” from a neutral content vocabulary (`blocks` for docx/markdown/txt,
 `sheets` for xlsx, `slides` for pptx, `rows` for csv/json) and records the bytes
 in the **Artifact Center** (`artifacts/`, ADR-H160) for preview and download.
 `eclipse_report` adds paginated PDF reports via the vendored Matplotlib PDF
 backend (`documents/reporting.py`), using the same block vocabulary. See
 `docs/harness/reports.md`.
 
-Every produced document also gets a **readable copy** in a real folder —
+Every produced document also gets a **readable copy** in a real folder â€”
 `Documents/Eclipse` by default, or the `saveTo` the user named (`downloads`,
-`desktop`, an absolute folder) — and the result carries its absolute path, so an
+`desktop`, an absolute folder) â€” and the result carries its absolute path, so an
 answer can point at the file instead of describing it. `documents/outputs.py`
 owns that write plus `locate()`, and the `file_locate` tool searches the person's
 own folders (export folder, Downloads, Documents, Desktop, the bound workspace)
@@ -103,39 +103,45 @@ by name, extension and age, newest first. A miss names the folders it searched.
   ONE format report `DOCUMENT_LIBRARY_MISSING` instead of emitting a broken file.
 - Bytes go straight into the confined artifact store through the ONE
   `ArtifactService`; a missing store reports `ARTIFACT_UNAVAILABLE`. The only
-  other write is the export copy above — the export folder, or an absolute folder
+  other write is the export copy above â€” the export folder, or an absolute folder
   the user explicitly named; a relative path is refused.
-- It is the answer to "Word/Excel/PowerPoint cannot be created" — the read path
+- It is the answer to "Word/Excel/PowerPoint cannot be created" â€” the read path
   stays stdlib-only.
 - Editing an EXISTING file is a separate, preservation-first subsystem:
   `python/harness/documents/edit/` and the `document_edit` tool. See
   `docs/harness/office-edit.md`.
+- A **dedicated presentation/deck lane** sits beside this one:
+  `presentation_create` builds a versioned `DeckSpec` artifact and exports a
+  `.pptx` from it, with themes, 13 layouts, speaker notes, tables, native charts,
+  in-app preview/present and editing. `document_create(format="pptx")` now
+  delegates to the same deck exporter (one layout writer), so the one-shot path
+  and the editable path cannot drift. See `docs/harness/presentations.md`.
 
 ## Reuse (no forks)
 
-- **OCR / rendering / models** — `harness.vision` (`ocr.run_ocr`,
+- **OCR / rendering / models** â€” `harness.vision` (`ocr.run_ocr`,
   `documents.open_pdf`/`render_page`/`parse_table`, `providers.call_model`).
-- **Evidence** — `research.web_contracts.Evidence` + `research.web_store.EvidenceStore`.
-- **Query** — read-only SQL over DuckDB (preferred) or a pandas `df.query`
+- **Evidence** â€” `research.web_contracts.Evidence` + `research.web_store.EvidenceStore`.
+- **Query** â€” read-only SQL over DuckDB (preferred) or a pandas `df.query`
   fallback; only a single `SELECT`/`WITH` statement is accepted.
-- **Storage** — the ONE `agent-memory.db` connection (`DiDocument`, `DiVersion`,
+- **Storage** â€” the ONE `agent-memory.db` connection (`DiDocument`, `DiVersion`,
   `DiJob`, `DiChunk`, `DiTable`, `DiImage`, `DiEntity`, `DiOcrRun`, `DiCache`).
-- **Security** — `mcp.ssrf.check_outbound_url`, `research.web_security` boundary.
+- **Security** â€” `mcp.ssrf.check_outbound_url`, `research.web_security` boundary.
 
 ## OCR routing
 
 ```
-image → deterministic OCR (winsdk/tesseract) → confidence ≥ threshold? → accept
-                                              └─ no → vision-model transcription
+image â†’ deterministic OCR (winsdk/tesseract) â†’ confidence â‰¥ threshold? â†’ accept
+                                              â””â”€ no â†’ vision-model transcription
 ```
-Method + confidence are recorded per page. No engine and low confidence ⇒
+Method + confidence are recorded per page. No engine and low confidence â‡’
 `UNAVAILABLE`, never a fabricated transcript.
 
 ## Security (documents are untrusted input)
 
 - extension/MIME/magic detection + byte ceilings before any parser runs;
 - macro-enabled Office documents refused (`MACRO_ENABLED`) unless allowed;
-- archive bombs detected by declared size, ratio, entry count, nesting — before
+- archive bombs detected by declared size, ratio, entry count, nesting â€” before
   extraction;
 - document URLs SSRF-guarded through `mcp.ssrf`;
 - HTML active content stripped; scripts never execute;
@@ -144,8 +150,8 @@ Method + confidence are recorded per page. No engine and low confidence ⇒
 
 ## States, retry, caching
 
-`DISCOVERED → VALIDATING → INGESTING → PARSING → OCR → VISION → STRUCTURING →
-INDEXING → READY | PARTIALLY_READY | FAILED | CANCELLED`. A stage that cannot run
+`DISCOVERED â†’ VALIDATING â†’ INGESTING â†’ PARSING â†’ OCR â†’ VISION â†’ STRUCTURING â†’
+INDEXING â†’ READY | PARTIALLY_READY | FAILED | CANCELLED`. A stage that cannot run
 is `UNAVAILABLE`/`SKIPPED`. Parsing retries transient failures (bounded, backoff)
 and is bounded by `processing_timeout_seconds`. The same content hash reuses a
 fresh cached extraction unless `force` is set.
@@ -155,8 +161,8 @@ fresh cached extraction unless `force` is set.
 `collector.py` collects each `document_*` result into a bounded run blob,
 persisted on the `HarnessRun.documents` column and returned on
 `RunResult.documents`/`client.final`. TS `document-view.ts` coerces it and
-`src/components/chat/document-panel.tsx` renders it in the transcript — document,
-type, pages, status, the per-capability processing checklist (✓/✗), current
+`src/components/chat/document-panel.tsx` renders it in the transcript â€” document,
+type, pages, status, the per-capability processing checklist (âœ“/âœ—), current
 page/section, evidence/entity counts.
 
 ## Configuration

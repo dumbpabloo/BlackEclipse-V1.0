@@ -87,9 +87,36 @@ def _office_text(data: bytes) -> Optional[str]:
         return None
 
 
+def _deck_outline(data: bytes) -> Optional[str]:
+    """A deck's readable preview: its title and slide outline, not raw JSON."""
+    import json  # noqa: PLC0415
+
+    try:
+        parsed = json.loads(data.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("slides"), list):
+        return None
+    meta = parsed.get("meta") if isinstance(parsed.get("meta"), dict) else {}
+    lines = [str(meta.get("title") or "Untitled deck")]
+    if meta.get("subtitle"):
+        lines.append(str(meta["subtitle"]))
+    lines.append("")
+    for index, slide in enumerate(parsed["slides"][:40], start=1):
+        if not isinstance(slide, dict):
+            continue
+        title = slide.get("title") or slide.get("statement") or "(untitled)"
+        lines.append(f"{index}. [{slide.get('layout') or 'bullets'}] {title}")
+    return "\n".join(lines)[:MAX_PREVIEW_CHARS]
+
+
 def generate_text_preview(
     data: bytes, *, mime: str, kind: str, name: str = ""
 ) -> Optional[str]:
+    if name.casefold().endswith(".deck.json"):
+        outline = _deck_outline(data)
+        if outline is not None:
+            return outline
     if kind in ("text", "code", "markdown"):
         return _text_extract(data)
     if kind == "json":

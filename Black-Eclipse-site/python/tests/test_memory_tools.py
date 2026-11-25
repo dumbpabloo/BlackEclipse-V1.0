@@ -498,7 +498,10 @@ def test_prompt_char_ceiling():
     # Re-pinned 48205->48294 (2026-11-23) for the file-path honesty clause: name
     # an ABSOLUTE path returned by the tool, use `file_locate`, never state a
     # location from memory. May only shrink.
-    assert len(prompt) <= 48294, f"prompt grew to {len(prompt)} chars"
+    # Re-pinned 48294->48732 (2026-11-25) for the presentation guidance: a deck
+    # request routes to `presentation_create` (an editable deck artifact + a real
+    # .pptx), not to the one-shot document writer. A genuinely new capability.
+    assert len(prompt) <= 48732, f"prompt grew to {len(prompt)} chars"
 
 
 def test_prompt_market_data_semantics_present():

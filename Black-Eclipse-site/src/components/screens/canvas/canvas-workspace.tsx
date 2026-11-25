@@ -19,6 +19,8 @@ export interface CanvasWorkspaceProps {
   artifactError: CanvasErrorState | null;
   onRetryArtifact: () => void;
   onCreate: (kind: CanvasKind) => void;
+  /** Presentation editing uses the slide surface; the text-edit AI panel is hidden. */
+  hideAi?: boolean;
   /** Inline-in-chat mode: no rail, wrapped in a glass card with a close button. */
   inline?: boolean;
   onClose?: () => void;
@@ -64,7 +66,7 @@ function ArtifactError({ error, onRetry }: { error: CanvasErrorState; onRetry: (
 
 export function CanvasWorkspace({
   rail, center, ai, loadingArtifact, artifactError, onRetryArtifact, onCreate,
-  inline = false, onClose,
+  hideAi = false, inline = false, onClose,
 }: CanvasWorkspaceProps) {
   const fullWidth = center?.fullWidth ?? false;
 
@@ -94,7 +96,7 @@ export function CanvasWorkspace({
     <div className="flex min-h-0 flex-1 flex-col gap-3 lg:flex-row">
       <CanvasRail {...rail} />
       <main className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">{body}</main>
-      {!fullWidth ? <CanvasAiPanel {...ai} /> : null}
+      {!fullWidth && !hideAi ? <CanvasAiPanel {...ai} /> : null}
     </div>
   );
 }

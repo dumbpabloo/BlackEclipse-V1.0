@@ -102,6 +102,43 @@ const BUILDERS: Record<string, InstructionBuilder> = {
     return template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_match, key: string) => vars[key] ?? "");
   },
 
+  "agent.deck": (_spec, args) => {
+    const subject = (Array.isArray(args.positionals.subject) ? (args.positionals.subject as string[]) : [])
+      .join(" ")
+      .trim();
+    const theme = typeof args.flags.theme === "string" ? args.flags.theme.trim() : "";
+    const slideCount = typeof args.flags.slides === "number" ? args.flags.slides
+      : typeof args.flags.slides === "string" ? Number(args.flags.slides) : 0;
+    return [
+      "Build a real presentation (a `deck` artifact plus a .pptx export) for this request:",
+      "",
+      `Subject: ${subject || "(not given — ask the user what the deck is about and STOP, building nothing yet)"}`,
+      theme ? `Theme: ${theme}` : "",
+      Number.isFinite(slideCount) && slideCount > 0 ? `Target slide count: ${Math.min(slideCount, 120)}` : "",
+      "",
+      "Follow this exactly:",
+      "1. Call `presentation_create` with a `title`, an optional `theme`, and `slides[]`. Each slide has a `layout`:",
+      "   `title` · `section` · `agenda` · `bullets` · `two_column` · `statement` · `quote` · `metric_row` · `table` ·",
+      "   `chart` · `image_full` · `image_right` · `closing` — plus the fields that layout uses (`bullets`, `left`/`right`,",
+      "   `metrics`, `table`, `chart`, `image`, `notes`, `source`).",
+      "2. Use only real data you can source with your tools (JDdS, market data, portfolio, research) or facts already in the",
+      "   conversation. Never invent a number, a peer, a date or a citation. Every non-obvious figure carries a `source` line",
+      "   or is labelled as computed.",
+      "3. For a chart slide, put the actual `categories` and `series` in the chart. If — and only if — you name a market",
+      "   series via `dataSources`, the runtime resolves it once and stores the series in the deck. An unresolved chart is",
+      "   exported as UNAVAILABLE; never fill it with a made-up shape.",
+      "4. A deck is not a document: at most 7 bullets per slide, short lines, one idea per slide. Put detail in speaker",
+      "   `notes`. Use `metric_row` for 1-4 KPIs, `table` for a real comparison, `statement` for one line.",
+      "5. `presentation_create` returns the deck artifact id, the slide count and the ABSOLUTE path of the exported .pptx.",
+      "   Report exactly what the tool returned. If the export failed, say so and give the deck artifact id — never claim a",
+      "   file exists when the tool did not return a path.",
+      "6. Tell the user the deck is editable and can be presented from Canvas (Open in Canvas / Export .pptx). For later",
+      "   changes use `presentation_edit` with the current `baseVersion`; for a new export use `presentation_export`.",
+    ]
+      .filter((line) => line !== "")
+      .join("\n");
+  },
+
   "agent.visual": (_spec, args) => {
     const subject = (Array.isArray(args.positionals.subject) ? (args.positionals.subject as string[]) : [])
       .join(" ")

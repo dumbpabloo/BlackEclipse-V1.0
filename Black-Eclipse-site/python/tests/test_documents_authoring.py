@@ -94,6 +94,24 @@ def test_build_pptx_is_valid_ooxml():
     assert any(p.startswith("ppt/slides/slide") for p in parts)
 
 
+def test_build_pptx_chunks_overflow_bullets_without_dropping_text():
+    from pptx import Presentation as Pptx
+
+    long_bullet = "word " * 80  # 400 chars, must split at word boundaries
+    bullets = [long_bullet] + [f"point {index}" for index in range(9)]
+    data = build_pptx([{"title": "Many", "bullets": bullets}])
+    presentation = Pptx(io.BytesIO(data))
+    assert len(presentation.slides) == 2  # 7 + 4 lines, all preserved
+    text = " ".join(
+        shape.text_frame.text
+        for slide in presentation.slides
+        for shape in slide.shapes
+        if shape.has_text_frame
+    )
+    assert "point 8" in text
+    assert "word" in text
+
+
 def test_build_text_formats():
     markdown = build_markdown(
         [{"type": "heading", "text": "Hi", "level": 1}, {"type": "bullets", "items": ["x"]}],

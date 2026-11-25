@@ -50,6 +50,7 @@ from .routers.channels import router as channels_router
 from .routers.application import router as application_router
 from .routers.artifacts import router as artifacts_router
 from .routers.canvas import router as canvas_router                      
+from .routers.presentations import router as presentations_router
 from .routers.charts import router as charts_router
 from .routers.notebook import router as notebook_router
 from .routers.a2a import router as a2a_router
@@ -133,6 +134,7 @@ app.include_router(advisory_router)
 app.include_router(application_router)
 app.include_router(artifacts_router)
 app.include_router(canvas_router)
+app.include_router(presentations_router)
 app.include_router(charts_router)
 app.include_router(notebook_router)
 app.include_router(automation_router)

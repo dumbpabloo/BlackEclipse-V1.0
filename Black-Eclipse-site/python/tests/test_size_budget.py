@@ -47,7 +47,9 @@ RATCHET_PY: dict[str, int] = {
     # route block remains the split candidate. May only shrink.
     # Shrank 1272 -> 1271 (2026-11-20): the OpenBB router adds an import + an
     # include_router, paid for by joining the four stdlib imports. May only shrink.
-    "main.py": 1271,
+    # +2 (2026-11-25): the presentations router import + include (the deck
+    # subsystem's only main.py seam). Split candidate remains the setup routes.
+    "main.py": 1273,
     # Grew with the deterministic finance tool catalog (`finance_calc`,
     # 2026-11-09). SPLIT CANDIDATE: the finance tool block.
     # Re-pinned 1222 -> 1227 (2026-11-11) for in-flight shared-tree research
@@ -465,7 +467,7 @@ RATCHET_PY: dict[str, int] = {
     # surface) and the computer-use runner wiring install in the boot catalog.
     # Pinned to the measured size; the kernel seam is still the split candidate.
     # May only shrink.
-    "service.py": 2121,
+    "service.py": 2130,  # +9 (2026-11-25): presentation tool registration seam
     # Quota-aware admission (2026-11-12, multi-session concurrency) lives on the
     # ONE model path: shared credential-pool wait, per-key FIFO semaphore,
     # cooldown/RPM/TPM windows, provider `Retry-After`, request-token accounting.
@@ -522,7 +524,7 @@ RATCHET_PY: dict[str, int] = {
     # 2026-11-23 (pre-existing shared-tree growth; this change adds no agent
     # definitions). SPLIT CANDIDATE: the preset/profile block. Pinned to the
     # measured size; may only shrink.
-    "agents.py": 1211,
+    "agents.py": 1213,  # +2 (2026-11-25): presentation tools in DOCUMENT_TOOLS
     # The computer-use core loop grew past the hard ceiling with the grounding
     # ladder, best-of-N selection and verification/recovery wiring (2026-11-23).
     # SPLIT CANDIDATE: the observe->act loop versus the verification/recovery

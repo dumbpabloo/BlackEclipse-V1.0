@@ -179,6 +179,8 @@ DOCUMENT_TOOLS = [
     "document_capabilities",
     "document_create",
     "eclipse_report", "file_locate",
+    "presentation_create", "presentation_edit", "presentation_export",
+    "presentation_outline", "presentation_import",
 ]
 
 #: Alternative-intelligence signals (`intel_*`). Read-only: each tool measures a

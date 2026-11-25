@@ -73,6 +73,10 @@ def apply_operations(
     content: str, operations: Iterable[EditOperation], *, kind: str = "document"
 ) -> str:
     """Apply operations in order, validating each against the live content."""
+    if kind == "presentation":
+        raise OpError(
+            "text operations do not apply to decks; use the presentation deck ops"
+        )
     ops = list(operations)
     if len(ops) > MAX_OPERATIONS:
         _fail(f"at most {MAX_OPERATIONS} operations may be applied at once")

@@ -43,11 +43,13 @@ _MIME: dict[CanvasKind, str] = {
     CanvasKind.DOCUMENT: "text/markdown",
     CanvasKind.CODE: "text/plain",
     CanvasKind.VISUAL: "application/vnd.eclipse.canvas.visual+json",
+    CanvasKind.PRESENTATION: "application/vnd.eclipse.deck+json",
 }
 _CATEGORY: dict[CanvasKind, ArtifactCategory] = {
     CanvasKind.DOCUMENT: ArtifactCategory.DOCUMENT,
     CanvasKind.CODE: ArtifactCategory.CODE,
     CanvasKind.VISUAL: ArtifactCategory.REPORT,
+    CanvasKind.PRESENTATION: ArtifactCategory.DOCUMENT,
 }
 _EXTENSION: dict[str, str] = {
     "python": ".py",
@@ -267,6 +269,8 @@ class CanvasService:
             )
         except ArtifactError as exc:
             raise CanvasError(exc.message, code=exc.code) from exc
+        if input_model.kind is CanvasKind.PRESENTATION:
+            self._refresh_deck_thumbnail(artifact.id, content, owner_id)
         return self.snapshot(artifact.id, owner_id=owner_id)
 
     def save(
@@ -285,9 +289,27 @@ class CanvasService:
                     current_version=artifact.version_number,
                 )
             if input_model.operations:
-                new_content = apply_operations(
-                    current, input_model.operations, kind=self.kind_of(artifact).value
-                )
+                if self.kind_of(artifact) is CanvasKind.PRESENTATION:
+                    # Deck ops are a different vocabulary; a text op here would
+                    # corrupt the JSON. Lazy import avoids an import cycle.
+                    from ..presentations.model import DeckError  # noqa: PLC0415
+                    from ..presentations.ops import DeckOp, apply_deck_ops  # noqa: PLC0415
+
+                    try:
+                        deck_ops = [DeckOp.model_validate(item) for item in input_model.operations]
+                        new_content = apply_deck_ops(current, deck_ops)
+                    except DeckError as exc:
+                        raise CanvasError(exc.message, code=exc.code) from exc
+                    except Exception as exc:  # noqa: BLE001 - a bad op body is a 400
+                        raise CanvasError(
+                            f"invalid deck operation: {exc}", code="CANVAS_INVALID_OPERATION"
+                        ) from exc
+                else:
+                    new_content = apply_operations(
+                        current,
+                        [EditOperation.model_validate(item) for item in input_model.operations],
+                        kind=self.kind_of(artifact).value,
+                    )
             elif input_model.content is not None:
                 new_content = input_model.content
             else:
@@ -311,6 +333,8 @@ class CanvasService:
                 )
             except ArtifactError as exc:
                 raise CanvasError(exc.message, code=exc.code) from exc
+        if self.kind_of(artifact) is CanvasKind.PRESENTATION:
+            self._refresh_deck_thumbnail(updated.id, new_content, owner_id)
         return self.snapshot(updated.id, owner_id=owner_id)
 
     def restore(
@@ -350,6 +374,25 @@ class CanvasService:
 
     # ── helpers used by the AI orchestrator ──────────────────────────────────
 
+    def _refresh_deck_thumbnail(self, artifact_id: str, content: str,
+                                owner_id: Optional[str]) -> None:
+        """Best-effort first-slide thumbnail for a deck artifact.
+
+        Lazy imports keep the canvas package free of a presentation import at
+        module load; a missing Matplotlib or a bad spec simply leaves the
+        outline preview in place.
+        """
+        try:
+            from ..presentations.export_pdf import render_slide_png  # noqa: PLC0415
+            from ..presentations.model import parse_deck  # noqa: PLC0415
+            from ..presentations.render import render_deck  # noqa: PLC0415
+
+            deck = parse_deck(content)
+            png = render_slide_png(render_deck(deck), 0)
+            self._artifacts.set_preview_thumbnail(artifact_id, png, owner_id=owner_id or "local")
+        except Exception:  # noqa: BLE001 - a thumbnail never blocks the deck
+            return
+
     def read_for_edit(
         self, artifact_id: str, base_version: int, *, owner_id: Optional[str] = None
     ) -> tuple[Artifact, str]:
@@ -379,6 +422,8 @@ class CanvasService:
     @staticmethod
     def _with_extension(name: str, kind: CanvasKind, language: Optional[str]) -> str:
         cleaned = name.strip()
+        if kind is CanvasKind.PRESENTATION:
+            return cleaned if cleaned.casefold().endswith(".deck.json") else f"{cleaned}.deck.json"
         if "." in cleaned.rsplit("/", 1)[-1]:
             return cleaned
         if kind is CanvasKind.DOCUMENT:

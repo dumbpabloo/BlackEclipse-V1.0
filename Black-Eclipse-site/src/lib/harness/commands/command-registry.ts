@@ -1232,6 +1232,34 @@ const OPEN: CommandSpec = {
   examples: ["/open alerts", "/open journal", "/open artifacts"],
 };
 
+const DECK: CommandSpec = {
+  id: "presentation.deck",
+  name: "deck",
+  aliases: ["slides", "presentation"],
+  summary: "Build an editable presentation and export PowerPoint.",
+  description:
+    "Turn a request into a real presentation (a deck artifact you can edit and present in Canvas, plus a .pptx export saved to Documents/Eclipse). An agent-turn command: the model composes slides with real data only, and an unresolved chart becomes an explicit UNAVAILABLE slide rather than an invented series.",
+  category: "visual",
+  tags: ["presentation", "deck", "slides", "powerpoint", "pptx"],
+  version: V,
+  status: "available",
+  args: [{ name: "subject", description: "What the deck is about.", variadic: true }],
+  flags: [
+    { name: "theme", description: "Deck theme preset.", type: "string", values: ["eclipse", "paper", "midnight", "slate"] },
+    { name: "slides", description: "Target slide count.", type: "number" },
+  ],
+  handler: { type: "agent", target: "agent.deck" },
+  permissions: { approval: "none" },
+  risk: "none",
+  executionMode: "sync",
+  timeoutMs: 300_000,
+  output: { type: "response", summary: "A deck artifact, its slide outline, and an exported .pptx path." },
+  examples: [
+    "/deck a Q3 investor update for AAPL --slides 10",
+    "/deck explain our data path to a new engineer --theme paper",
+  ],
+};
+
 const HISTORY: CommandSpec = {
   id: "runtime.history",
   name: "history",
@@ -1299,6 +1327,7 @@ export const COMMAND_REGISTRY: readonly CommandSpec[] = [
   HISTORY,
   ANATOMY,
   VISUAL,
+  DECK,
   APP,
   ECLIPSESDK,
 ];

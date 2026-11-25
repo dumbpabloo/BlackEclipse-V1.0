@@ -1,7 +1,7 @@
 ---
 title: Slash Commands
 status: Current
-last-verified: 2026-11-13
+last-verified: 2026-11-25
 ---
 
 # Slash Commands
@@ -18,22 +18,22 @@ command**. There are three kinds, and the distinction is the whole design:
   own; they force a deterministic run *profile* for the next agent turn. They are
   parsed in TS (`src/lib/harness/commands/commands.ts`) and the runtime still enforces the
   actual grant.
-- **Routed commands** (`/skills`, `/status`, `/market`, …) are executed by the
+- **Routed commands** (`/skills`, `/status`, `/market`, â€¦) are executed by the
   **shared command router** and return a rendered result immediately. They never
   open an LLM turn.
-- **Agent-turn commands** (`/skill`, `/anatomy`, `/visual`) rewrite the chat
+- **Agent-turn commands** (`/skill`, `/anatomy`, `/visual`, `/deck`) rewrite the chat
   query into a directive and run as a **normal agent turn**, so the chatbot does
   the work (and streaming + conversation history are preserved). `/skill <name>
   <what it should do>` tells Eclipse to author a new reusable skill; `/anatomy
-  <concept>` tells it to explain the concept as an interactive **3D model** — an
+  <concept>` tells it to explain the concept as an interactive **3D model** â€” an
   orbitable machine composed from mechanism recipes, rendered inline as a
   `model3d` block with a numbered key, stages and `.glb` export; `/visual <what
   to chart>` tells it to render ONE inline data **`chart`** block, choosing from
   the full chart-type set and plotting only real values. The rewrites live in
   `src/lib/harness/commands/command-agent.ts`.
 
-Profile commands exist because the alternative — asking a classifier to infer "is
-this a coding request?" from prose — is fuzzy. The set of profile commands is
+Profile commands exist because the alternative â€” asking a classifier to infer "is
+this a coding request?" from prose â€” is fuzzy. The set of profile commands is
 deliberately tiny. Agent-turn commands run under the **default** profile (no
 classifier narrowing) so the write-capable `skill_create` tool stays bound.
 
@@ -54,28 +54,28 @@ Invariants the registry enforces:
 - **Only handler-backed commands are `available`.** `isCommandAvailable()` is the
   single source of truth. `status: "unavailable"` commands are still registered
   (so `/help` and the palette are honest and complete) but a routed invocation
-  returns an explicit, structured **unsupported** error — never a fake success.
+  returns an explicit, structured **unsupported** error â€” never a fake success.
 - **No duplicate names/aliases.** `detectRegistryConflicts()` makes a collision
   visible to tests/CI; `resolveCommand()` is first-wins.
 
-## Parse → Resolve → Validate → Authorize → Execute → Render → Audit
+## Parse â†’ Resolve â†’ Validate â†’ Authorize â†’ Execute â†’ Render â†’ Audit
 
 The router (`src/lib/harness/commands/command-router.ts`) is the ONE execution path for
 every routed command.
 
-1. **Parse** — `command-parser.ts`. A real tokenizer (not `split(' ')`) that
+1. **Parse** â€” `command-parser.ts`. A real tokenizer (not `split(' ')`) that
    preserves quoted strings, Unicode, filenames with spaces, and backslash
    escapes, then binds tokens to the command's declared schema. Unknown flags are
    errors unless the command opts into `passThroughFlags` (how
-   `/skills run <id> --objective "…"` builds a skill's input object).
-2. **Resolve** — a leading `/token` that matches no command yields an `unknown`
+   `/skills run <id> --objective "â€¦"` builds a skill's input object).
+2. **Resolve** â€” a leading `/token` that matches no command yields an `unknown`
    result. `/usr/bin` is not a command (the token must be followed by whitespace
    or end-of-text).
-3. **Validate** — missing/invalid args produce a readable usage error.
-4. **Authorize** — a command declaring `approval: "operator"` is denied unless the
+3. **Validate** â€” missing/invalid args produce a readable usage error.
+4. **Authorize** â€” a command declaring `approval: "operator"` is denied unless the
    caller passed the operator gate (transport/token). This is defense in depth:
    the Python runtime re-enforces its own default-deny policy.
-5. **Execute** — dispatch on `handler.target` to a handler in
+5. **Execute** â€” dispatch on `handler.target` to a handler in
    `src/lib/harness/commands/command-handlers.ts` that calls the **existing** systems
    (skills-client, tasks-client, workflows-client, python-client, and loopback
    calls to the app's own `/api/...` front doors). The router owns no agent loop,
@@ -84,10 +84,10 @@ every routed command.
    only when `idempotent: true`, and a deprecation notice before a deprecated
    command's output. Idempotency is what makes retrying safe; a side-effecting
    command is never retried implicitly.
-6. **Render** — build validated `eclipse-response` blocks (`command-render.ts`);
+6. **Render** â€” build validated `eclipse-response` blocks (`command-render.ts`);
    each block is checked against `src/lib/response/contract.ts` before it is
    emitted.
-7. **Audit** — a structured, redacted audit event (command id, actor, operator,
+7. **Audit** â€” a structured, redacted audit event (command id, actor, operator,
    status, handler target, skill/run id, duration) is logged.
 
 Handlers are injected through `CommandDeps`, so the router is fully
@@ -113,8 +113,8 @@ unit-testable without a live runtime.
 - **Durable audit.** Every terminal result (completed, failed, denied, pending,
   invalid, unknown) is appended to `.black-eclipse/command-audit.jsonl` as one
   redacted JSON line (`command-audit.ts`): command id/name, actor, operator,
-  status, risk/approval, duration, skill/run id and an error **code** — never
-  output, arguments or secrets. The file rotates at 2 MB to `…jsonl.1`.
+  status, risk/approval, duration, skill/run id and an error **code** â€” never
+  output, arguments or secrets. The file rotates at 2 MB to `â€¦jsonl.1`.
   `/history [limit]` reads it newest-first; `/usage --commands` aggregates it
   (status counts, runs per command, p50/p95 duration, high-risk count).
   The sink is injected through `CommandDeps.audit`, so tests never touch the
@@ -169,12 +169,12 @@ A command can return a `ui` intent in its result:
   `client.final`, `events.ts` validates it (`navigate` needs a string `tab`,
   `openCanvas` has no required fields), `use-agent-run` stores it on the turn,
   and `stock-chat.tsx` dispatches it through the SAME destination store as the
-  ⌘K bar (`useCommandStore.dispatch`, or openCanvas).
+  âŒ˜K bar (`useCommandStore.dispatch`, or openCanvas).
 - It is **data, not code**. Non-UI surfaces (remote channels, CLI) receive the
   text result and ignore the intent.
 - Commands using it today:
-  - `/canvas [artifactId]` → `openCanvas`
-  - `/open <tab>` (alias `/go`) → `navigate`; the tab is validated against the
+  - `/canvas [artifactId]` â†’ `openCanvas`
+  - `/open <tab>` (alias `/go`) â†’ `navigate`; the tab is validated against the
     single `APP_TABS` vocabulary.
 - The intent is dispatched once per completed turn, after the answer is
   persisted. It never runs on the server and cannot execute tools.
@@ -196,36 +196,36 @@ A command can return a `ui` intent in its result:
 
 ## Where it is wired
 
-- **Composer palette** — `src/components/chat/command-palette.tsx` renders the
+- **Composer palette** â€” `src/components/chat/command-palette.tsx` renders the
   inline palette (`useCommandPalette` + `CommandPaletteBody`): grouped by
-  category, with Pinned → Recent at the top, each row's argument hint,
+  category, with Pinned â†’ Recent at the top, each row's argument hint,
   availability, risk/operator gate and a detail footer (description, usage,
   aliases). `command-palette-model.ts` owns the pure ordering (so the highlighted
   index always matches the rendered list). Typing `/` never executes; selection
   only inserts `/name `.
-- **⌘K / Ctrl+K** — `src/components/chat/command-dialog.tsx` opens the same
+- **âŒ˜K / Ctrl+K** â€” `src/components/chat/command-dialog.tsx` opens the same
   surface as a centered dialog with its own search box and a two-column
   list/detail layout. It is independent of the draft; selection inserts
   `/name ` into the composer. Only the visible composer answers the shortcut,
   so a keep-alive tab cannot open a second dialog.
-- **Recents and pins** — `src/lib/harness/commands/command-history.ts` stores the last
+- **Recents and pins** â€” `src/lib/harness/commands/command-history.ts` stores the last
   50 command names and up to 24 pins in `localStorage` (`be.command.history.v1`,
   `be.command.favorites.v1`). This is a UI convenience, never an authority; the
   server audit remains the record of what ran.
-- **Argument completion** — `src/lib/harness/commands/command-suggest.ts` detects the
+- **Argument completion** â€” `src/lib/harness/commands/command-suggest.ts` detects the
   completion-bearing argument under a command and calls
-  `GET /api/harness/suggest?provider=…&q=…` (skills, symbols, portfolios,
+  `GET /api/harness/suggest?provider=â€¦&q=â€¦` (skills, symbols, portfolios,
   workflows, models). `command-suggestions.tsx` renders the candidates with
   arrow/Enter/Tab/Esc handling. The route is read-only and degrades to an empty
   list (never a blocking error) when a subsystem is unavailable.
-- **Chat surfaces** — both `/api/harness/chat` and `/api/harness/chat/stream`
+- **Chat surfaces** â€” both `/api/harness/chat` and `/api/harness/chat/stream`
   intercept a routed command *before* starting an agent run. The stream route
   emits a synthetic `client.run` / `client.final` / `stream.end` sequence, so the
   existing chat UI and renderer handle a command result with no special casing.
   Profile commands, agent-turn commands, and ordinary prose fall through to the
   normal agent path; unknown `/tokens` also fall through, so text that merely
   starts with a slash keeps working.
-- **Direct entry** — `POST /api/harness/command` runs the same router for routed
+- **Direct entry** â€” `POST /api/harness/command` runs the same router for routed
   commands and the chat path for agent-turn commands.
 
 ## Commands implemented today
@@ -237,28 +237,28 @@ Backed by real handlers/endpoints:
   (alias `/health`), `/compact`, `/tasks` (alias `/plans`), `/workflows`,
   `/agents`, `/models` (alias `/providers`), `/tools`, `/usage` (alias `/cost`;
   `/usage --commands` summarizes the command audit), `/history` (alias
-  `/audit` — recent redacted command executions).
+  `/audit` â€” recent redacted command executions).
 - Markets / portfolio / memory / MCP: `/market` (gateway providers + health),
   `/alerts` (alert watches + running monitor count), `/news [query|--ticker]`
   (stored headlines with source/sentiment/time; never a live fetch), `/quote`
-  (`/quotes` — JDdS quotes with honest freshness), `/portfolio` (real
+  (`/quotes` â€” JDdS quotes with honest freshness), `/portfolio` (real
   portfolios), `/theses [symbol]` (tracked theses), `/journal [all|open|closed]`
   (recorded trades + the journal's own P&L), `/memory` (overview + recent, or
   `/memory <query>` to search), `/mcp` (configured servers).
 - Research / web: `/research`, `/deep-research` (alias `/deep`), `/web`
-  (alias `/browse`), `/read` (alias `/summarize`) — all through the web research
+  (alias `/browse`), `/read` (alias `/summarize`) â€” all through the web research
   engine, returning the answer with its sources.
-- Quant: `/backtest` — lists saved strategies, or backtests one by id.
-- Runtime surfaces: `/open <tab>` (alias `/go` — navigate via a typed UI intent),
+- Quant: `/backtest` â€” lists saved strategies, or backtests one by id.
+- Runtime surfaces: `/open <tab>` (alias `/go` â€” navigate via a typed UI intent),
   `/jobs` (scheduled/watched jobs), `/artifacts` (recent
   Artifact Center rows), `/sessions` (durable chat sessions), and `/stop`
-  (aliases `/cancel` — list active runs, or cancel one by id; operator-gated).
+  (aliases `/cancel` â€” list active runs, or cancel one by id; operator-gated).
   All are read-only except an explicit `/stop <runId>`, which calls the same
   cooperative cancellation route as the Stop button.
 - Dev: `/code` (start a code task), `/git [status|diff|log] [--staged]`
   (read-only repository inspection; stage/commit/push are intentionally not chat
   commands), `/canvas [artifactId]` (open the inline Canvas via a typed UI
-  intent), `/terminal` (aliases `/run`, `/sh` — run a
+  intent), `/terminal` (aliases `/run`, `/sh` â€” run a
   shell command; operator- and effect-gated). `/terminal` takes
   `--shell powershell|cmd|wsl|bash` and `--cwd <path>`; on Windows the host
   default is PowerShell, so use `--shell cmd` for cmd.exe-specific syntax. The
@@ -268,19 +268,25 @@ Backed by real handlers/endpoints:
   real output rather than an empty result. Both `/terminal` and `/code` are
   high-risk: they return a `pending` confirmation card first and run only when
   re-sent with the single-use `--confirm <token>`.
-- Visual: `/anatomy` (aliases `/visualize`, `/mechanism`) — explain a concept as
+- Visual: `/anatomy` (aliases `/visualize`, `/mechanism`) â€” explain a concept as
   an interactive **3D model** (an orbitable `model3d` block with labelled parts,
   mechanism recipes and step-through stages); an agent-turn command that authors a
   declarative scene and never writes meshes or code (see
   `docs/interactive-response-engine.md`, "3D mechanism models").
-- Visual: `/visual` (aliases `/chart`, `/plot`) — render a request as ONE inline
+- Visual: `/visual` (aliases `/chart`, `/plot`) â€” render a request as ONE inline
   data **`chart`** block. Eclipse picks the best of the sixteen chart types
   (line, area, bar, stacked_bar, grouped_bar, pie, scatter, bubble, histogram,
   heatmap, treemap, sunburst, funnel, gauge, radar, waterfall) and plots only
-  real values it can source — never an invented curve. Agent-turn; see
+  real values it can source â€” never an invented curve. Agent-turn; see
   `docs/interactive-response-engine.md`, "Chart & diagram presentation".
+- Visual: `/deck` (aliases `/slides`, `/presentation`) â€” build a real presentation
+  (a versioned **deck** artifact plus a `.pptx` export) from a subject, with
+  `--theme eclipse|paper|midnight|slate` and `--slides N`. Agent-turn: the model
+  composes slides with sourced data only; an unresolved chart becomes an explicit
+  UNAVAILABLE slide. The deck opens in Canvas for editing and presenting. See
+  `docs/harness/presentations.md`.
 - Skills: `/skills` (list/search/category/show/**run**/test/validate),
-  `/skill` (**author a new skill** — agent turn), `/skill-explain`, `/skill-test`,
+  `/skill` (**author a new skill** â€” agent turn), `/skill-explain`, `/skill-test`,
   `/skill-enable`, `/skill-disable`, `/skill-create` (learning-engine draft).
 - Profile: `/app` (control the Eclipse app through the typed SDK; alias
   `/eclipse`) and `/eclipsesdk` (edit Eclipse's own source code; alias `/esdk`).
@@ -288,7 +294,7 @@ Backed by real handlers/endpoints:
 
 Every registered command has a real handler (the palette `soon` badge is gone).
 Commands that call a subsystem (research, quant, code, terminal, quotes) reuse
-the **same front-door APIs the UI uses** — the router makes a loopback call to
+the **same front-door APIs the UI uses** â€” the router makes a loopback call to
 `/api/...`, so a command never re-implements an engine. `/terminal` requires the
 operator gate; a non-operator is refused before anything runs.
 
@@ -300,7 +306,7 @@ cancellation route as the Stop button (operator-gated). They live in
 `src/lib/harness/commands/command-handlers-workspace.ts`, so adding a new reader does not
 grow the main dispatch file.
 
-## Manual compaction — `/compact`
+## Manual compaction â€” `/compact`
 
 The chat already compacts automatically when the runtime bounds history
 (`python/harness/compaction.py`, `history.py`). `/compact` is the **manual**
@@ -308,9 +314,9 @@ counterpart: the user asks for room now, without waiting for a limit.
 
 - **What is replaced.** The turns older than `--keep N` (default 6) are replaced
   by the fenced `<compacted-conversation>` block. The most recent N turns stay
-  verbatim. `--keep` is clamped to 0–50.
+  verbatim. `--keep` is clamped to 0â€“50.
 - **The transcript is not rewritten.** Every message stays visible in the chat.
-  Only the history sent to the model changes — the same behaviour as automatic
+  Only the history sent to the model changes â€” the same behaviour as automatic
   compaction.
 - **It is deterministic.** `/compact` calls `compact_history()` in
   `python/harness/compaction.py`, which builds the skeleton and **never calls a
@@ -322,9 +328,9 @@ counterpart: the user asks for room now, without waiting for a limit.
   history at the stored `through` boundary, so the effect survives a reload.
   A stored compaction is ignored when the client history is shorter (the
   conversation was cleared or rewritten).
-- **It fails honestly.** No history in the request → `NO_HISTORY`; fewer turns
-  than the keep window → "Nothing to compact" and nothing is stored; runtime
-  unreachable → the normal runtime-unavailable error is surfaced.
+- **It fails honestly.** No history in the request â†’ `NO_HISTORY`; fewer turns
+  than the keep window â†’ "Nothing to compact" and nothing is stored; runtime
+  unreachable â†’ the normal runtime-unavailable error is surfaced.
 - **Endpoint.** `POST /history/compact` on the Python runtime
   (`{"history": [...], "keepTurns": 6}`) returns
   `{ok, block, droppedTurns, keptTurns, chars, reason}`. The TS command handler
@@ -332,11 +338,11 @@ counterpart: the user asks for room now, without waiting for a limit.
 
 ## Skill integration
 
-### Run a skill — `/skills run <id> [--<input> <value>]…`
+### Run a skill â€” `/skills run <id> [--<input> <value>]â€¦`
 
 Resolves the skill against the authoritative registry and calls the existing
 `executeSkill`, which runs through the Python runtime's real executor (allowlist,
-permissions, dependency DAG, and budget enforced in Python — the `SKILL.md` text
+permissions, dependency DAG, and budget enforced in Python â€” the `SKILL.md` text
 is prompt-delivered and can never widen authority). An unknown id returns
 `SKILL_NOT_FOUND`; a disabled/incompatible skill is refused by Python.
 
@@ -348,13 +354,13 @@ input makes the runtime block the run with `INPUT_VALIDATION_FAILED` before the
 skill starts. `--version <v>` pins a version (it is a declared flag, so it is not
 treated as input).
 
-### Author a skill — `/skill <name> <what it should do>`
+### Author a skill â€” `/skill <name> <what it should do>`
 
-Typing `/skill …` tells Eclipse to **make a skill for itself**. It is an
+Typing `/skill â€¦` tells Eclipse to **make a skill for itself**. It is an
 agent-turn command: the query is rewritten (`command-agent.ts`) into an authoring
 directive, and the normal chat turn runs. The chatbot generates the skill (a
 one-line description, concise steps, minimal tools/permissions, input schema) and
-persists it with the existing `skill_create` tool — so it lands in the Python
+persists it with the existing `skill_create` tool â€” so it lands in the Python
 skill library and **appears on the Skills page** (`src/components/screens/skills/`)
 where the user can view, edit, enable, evaluate, or run it. Creation is gated by a
 single-use operator approval (an approval card in the streaming chat), and the
@@ -370,13 +376,13 @@ The user does not have to remember a skill name. The Python runtime already bind
 a relevant ENABLED skill and run it as a controlled sub-run when a request
 matches. Discovery is metadata-only (bounded context); execution re-enforces the
 skill's allowlist/permissions and links the child run to the turn. This is the
-existing runtime behaviour, not a second planner — the TS side only owns the
+existing runtime behaviour, not a second planner â€” the TS side only owns the
 explicit command surfaces.
 
 ## Security notes
 
 - Agent-generated text, skill descriptions, and user input are treated as
-  untrusted data — the router does not evaluate them.
+  untrusted data â€” the router does not evaluate them.
 - Operator-only commands are gated at the front door AND re-enforced in Python.
 - Command output is redacted (`redactSecrets`) before it is returned.
 - The router cannot enable live trading or external side effects by adding a
@@ -384,41 +390,41 @@ explicit command surfaces.
 
 ## Tests
 
-- `src/lib/harness/commands/command-registry.test.ts` — resolution, aliases, conflicts,
+- `src/lib/harness/commands/command-registry.test.ts` â€” resolution, aliases, conflicts,
   availability, search, argument hints.
-- `src/lib/harness/commands/command-registry.contract.test.ts` — registry↔handler
+- `src/lib/harness/commands/command-registry.contract.test.ts` â€” registryâ†”handler
   coverage, self-describing commands, risk/approval invariants, the `confirm`
   flag on high-risk commands, completion providers, deprecation/unavailability
   metadata, `/help <command>`.
-- `src/lib/harness/commands/command-audit.test.ts` — status/risk aggregation, per-command
+- `src/lib/harness/commands/command-audit.test.ts` â€” status/risk aggregation, per-command
   percentiles, empty and single-row audits.
-- `src/lib/harness/commands/command-palette-model.test.ts` — pinned → recent → category
+- `src/lib/harness/commands/command-palette-model.test.ts` â€” pinned â†’ recent â†’ category
   ordering, de-duplication, search-section behavior, flat/section agreement.
-- `src/lib/harness/commands/command-history.test.ts` — recents de-duplication and cap,
+- `src/lib/harness/commands/command-history.test.ts` â€” recents de-duplication and cap,
   pin/unpin, clear-history-keeps-pins, empty-name rejection.
-- `src/lib/harness/commands/command-suggest.test.ts` — completion argument detection,
+- `src/lib/harness/commands/command-suggest.test.ts` â€” completion argument detection,
   variadic token replacement, flags/prose/commands without a provider.
-- `src/app/api/harness/suggest/route.test.ts` — provider allowlist, skills/
+- `src/app/api/harness/suggest/route.test.ts` â€” provider allowlist, skills/
   symbols/portfolios/workflows/models mapping, unavailable degradation.
-- `src/lib/harness/commands/command-plugins.test.ts` — valid packs, builtin name/alias
+- `src/lib/harness/commands/command-plugins.test.ts` â€” valid packs, builtin name/alias
   collisions, invalid names/prompts/args, missing vs invalid JSON.
-- `src/app/api/harness/commands/route.test.ts` — builtin + project manifest,
+- `src/app/api/harness/commands/route.test.ts` â€” builtin + project manifest,
   omitted prompt template, stable ETag/304.
-- `src/lib/harness/commands/command-parser.test.ts` — quoting, escapes, Unicode, enum and
+- `src/lib/harness/commands/command-parser.test.ts` â€” quoting, escapes, Unicode, enum and
   required-arg validation, pass-through flags.
-- `src/lib/harness/commands/command-agent.test.ts` — `/skill` rewrites into a skill-authoring
+- `src/lib/harness/commands/command-agent.test.ts` â€” `/skill` rewrites into a skill-authoring
   directive, `/anatomy` into a 3D-model (`model3d`) directive, and `/visual` into a
   `chart` directive; non-agent commands and prose return null.
-- `src/lib/harness/commands/command-router.test.ts` — unknown/invalid/unavailable/denied
+- `src/lib/harness/commands/command-router.test.ts` â€” unknown/invalid/unavailable/denied
   paths, `/help`, `/status`, `/skills`, `/skills run`, operator gating,
   `/skill-create` requiring a real source, the workspace readers
   (`/alerts`, `/news`, `/theses`, `/journal`, `/jobs`, `/artifacts`,
   `/sessions`, `/git`, `/stop`, `/memory <query>`), the confirmation/replay
   flow, rate limiting + recovery, `/history`, `/usage --commands`, audit
   append, and the `/canvas` / `/open` UI intents.
-- `src/lib/agent/events.test.ts` — `client.final` carries a validated typed UI
+- `src/lib/agent/events.test.ts` â€” `client.final` carries a validated typed UI
   intent.
-- `src/app/api/harness/command/route.test.ts` — the direct route, including the
+- `src/app/api/harness/command/route.test.ts` â€” the direct route, including the
   agent-turn path.
 
 ## Known gaps / follow-ups
@@ -435,12 +441,12 @@ explicit command surfaces.
   lines); the read-only workspace readers already live in
   `command-handlers-workspace.ts`. The next extraction candidates are the
   research/quant/dev renderers and the per-domain command specs.
-- The confirmation card is **copy-paste** — it shows the exact `--confirm`
+- The confirmation card is **copy-paste** â€” it shows the exact `--confirm`
   command. There is no click-to-approve button yet because the response contract
   has no typed confirm action.
 - The command audit is a local JSONL file with a 2 MB roll, not a database; it
   does not sync across machines and a server restart invalidates pending
   confirmation tokens.
-- **Mentions (`@`).** The `@` sibling — naming a bot or group chat so the main
-  chat delegates the turn to it — is a separate surface documented in
+- **Mentions (`@`).** The `@` sibling â€” naming a bot or group chat so the main
+  chat delegates the turn to it â€” is a separate surface documented in
   `docs/harness/mentions.md`.

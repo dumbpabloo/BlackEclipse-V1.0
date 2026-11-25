@@ -5,7 +5,7 @@
 // handed to the container, so the rail never fetches on its own.
 
 import {
-  AlertTriangle, FileJson, FileText, Loader2, PanelLeft, Plus, RefreshCw, Search, SquareCode, Upload,
+  AlertTriangle, FileJson, FileText, Loader2, Monitor, PanelLeft, Plus, RefreshCw, Search, SquareCode, Upload,
 } from '@/lib/icons';
 import type { CanvasKind, CanvasListItem } from '@/lib/harness/clients/canvas-client';
 import { cn } from '@/lib/utils';
@@ -35,6 +35,7 @@ export interface CanvasRailProps {
 function KindIcon({ kind }: { kind: CanvasKind }) {
   if (kind === 'code') return <SquareCode className="h-4 w-4 shrink-0" />;
   if (kind === 'visual') return <FileJson className="h-4 w-4 shrink-0" />;
+  if (kind === 'presentation') return <Monitor className="h-4 w-4 shrink-0" />;
   return <FileText className="h-4 w-4 shrink-0" />;
 }
 
@@ -42,6 +43,7 @@ const NEW_ITEMS: { kind: CanvasKind; label: string }[] = [
   { kind: 'document', label: 'Document' },
   { kind: 'code', label: 'Code' },
   { kind: 'visual', label: 'Visual report' },
+  { kind: 'presentation', label: 'Presentation' },
 ];
 
 export function CanvasRail({

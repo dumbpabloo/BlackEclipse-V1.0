@@ -3,15 +3,17 @@
 // mapping the container uses. Duck-typed against the client error classes so
 // this module never needs to import (and be mocked with) the client itself.
 
-import type { CanvasKind } from '@/lib/harness/clients/canvas-client';
+import type { CanvasKind, CanvasProposal } from '@/lib/harness/clients/canvas-client';
+import { emptyDeck, serializeDeck } from '@/lib/presentation/schema';
 
-export const CANVAS_KINDS: CanvasKind[] = ['document', 'code', 'visual'];
+export const CANVAS_KINDS: CanvasKind[] = ['document', 'code', 'visual', 'presentation'];
 
 export function kindLabel(kind: CanvasKind): string {
   switch (kind) {
     case 'document': return 'Document';
     case 'code': return 'Code';
     case 'visual': return 'Visual report';
+    case 'presentation': return 'Presentation';
   }
 }
 
@@ -50,12 +52,14 @@ const CONTENT_EXT: Record<string, string> = {
 export function contentExtension(kind: CanvasKind, language?: string | null): string {
   if (kind === 'document') return 'md';
   if (kind === 'visual') return 'json';
+  if (kind === 'presentation') return 'deck.json';
   return CONTENT_EXT[monacoLanguage(language)] ?? 'txt';
 }
 
 export function contentMime(kind: CanvasKind, language?: string | null): string {
   if (kind === 'document') return 'text/markdown';
   if (kind === 'visual') return 'application/json';
+  if (kind === 'presentation') return 'application/vnd.eclipse.deck+json';
   const ext = contentExtension(kind, language);
   if (ext === 'json') return 'application/json';
   if (ext === 'html') return 'text/html';
@@ -65,6 +69,7 @@ export function contentMime(kind: CanvasKind, language?: string | null): string 
 
 export function starterContent(kind: CanvasKind): string {
   if (kind === 'visual') return JSON.stringify({ blocks: [] }, null, 2);
+  if (kind === 'presentation') return serializeDeck(emptyDeck('Untitled deck'));
   return '';
 }
 
@@ -130,6 +135,16 @@ export interface CanvasEditorHandle {
 }
 
 export type CanvasSaveState = 'idle' | 'saving' | 'saved' | 'error' | 'conflict';
+
+/** The typed operations a proposal carries (deck ops win for a presentation). */
+export function proposalOperations(proposal: CanvasProposal): unknown[] {
+  if (proposal.deckOperations && proposal.deckOperations.length > 0) return proposal.deckOperations;
+  return proposal.operations;
+}
+
+export function proposalOperationCount(proposal: CanvasProposal | null): number {
+  return proposal ? proposalOperations(proposal).length : 0;
+}
 
 export function diffLines(before: string, after: string): DiffLine[] {
   const a = before.split('\n');

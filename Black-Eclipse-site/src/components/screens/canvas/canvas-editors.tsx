@@ -22,6 +22,11 @@ const CodeEditor = dynamic(() => import('./code-editor'), {
   loading: () => <EditorLoading label="Loading code editor…" />,
 });
 
+const PresentationEditor = dynamic(() => import('./presentation-editor'), {
+  ssr: false,
+  loading: () => <EditorLoading label="Loading deck editor…" />,
+});
+
 function EditorLoading({ label }: { label: string }) {
   return (
     <div className="flex min-h-[40vh] flex-1 items-center justify-center gap-2 rounded-lg glass-card-subtle text-sm text-muted-foreground/70">
@@ -58,6 +63,14 @@ export function CanvasEditor({
       <CodeEditor
         content={content} language={language} editable={editable}
         onChange={onChange} onSelectionChange={onSelectionChange} handleRef={handleRef}
+      />
+    );
+  }
+  if (kind === 'presentation') {
+    return (
+      <PresentationEditor
+        content={content} editable={editable} docKey={docKey}
+        onChange={onChange} handleRef={handleRef}
       />
     );
   }

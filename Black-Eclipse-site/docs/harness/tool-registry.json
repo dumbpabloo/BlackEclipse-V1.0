@@ -1,7 +1,7 @@
 {
-  "digest": "8d5189419fdb304a",
+  "digest": "d6f00a0ec387f0fb",
   "manifestVersion": "1",
-  "toolCount": 1116,
+  "toolCount": 1121,
   "tools": [
     {
       "deprecated": false,
@@ -23794,6 +23794,282 @@
         "type": "object"
       },
       "name": "pre_register_hypothesis",
+      "permission": "read",
+      "replacement": null,
+      "risk": "low",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
+      "description": "Create a real presentation (deck) and export a .pptx. The deck is stored as an editable, versioned artifact; the PowerPoint file is a derivative saved to the Artifact Center and Documents/Eclipse (or `saveTo`), and the result names its ABSOLUTE path. Provide a `title` and `slides` (or a full `deck`). Each slide has a `layout` (title/section/agenda/bullets/two_column/statement/quote/metric_row/table/chart/image_full/image_right/closing), a `title`, and the fields that layout uses: bullets, left/right {heading,bullets}, metrics [{label,value,delta,note,source}], table {headers,rows,caption}, chart {kind,categories,series,dataSource,valueFormat}, image {artifactId,alt,fit}, notes, source. Use `dataSources` for named market series: {\"aapl\": {\"kind\":\"price\",\"symbol\":\"AAPL\",\"range\":\"1y\",\"interval\":\"1d\"}} then chart.dataSource=\"aapl\". NEVER invent a number: a chart with no resolvable data is exported as an explicit UNAVAILABLE slide. Text that does not fit is reported in overflowSlides, never silently clipped.",
+      "effect": null,
+      "inputSchema": {
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "dataSources": {
+            "description": "Named market series, keyed by chart.dataSource.",
+            "type": "object"
+          },
+          "date": {
+            "type": "string"
+          },
+          "deck": {
+            "description": "A full DeckSpec; wins over title/slides.",
+            "type": "object"
+          },
+          "description": {
+            "type": "string"
+          },
+          "export": {
+            "description": "Export a .pptx immediately (default true).",
+            "type": "boolean"
+          },
+          "footer": {
+            "type": "string"
+          },
+          "name": {
+            "description": "Artifact name; defaults to the title.",
+            "type": "string"
+          },
+          "saveTo": {
+            "description": "Where the readable .pptx copy goes: 'documents' (default), 'downloads', 'desktop', or an absolute folder path.",
+            "type": "string"
+          },
+          "size": {
+            "enum": [
+              "16:9",
+              "4:3"
+            ],
+            "type": "string"
+          },
+          "slides": {
+            "description": "Slides in order.",
+            "items": {
+              "properties": {
+                "attribution": {
+                  "type": "string"
+                },
+                "body": {
+                  "type": "string"
+                },
+                "bullets": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "chart": {
+                  "type": "object"
+                },
+                "eyebrow": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "image": {
+                  "type": "object"
+                },
+                "layout": {
+                  "enum": [
+                    "title",
+                    "section",
+                    "agenda",
+                    "bullets",
+                    "two_column",
+                    "statement",
+                    "quote",
+                    "metric_row",
+                    "table",
+                    "chart",
+                    "image_full",
+                    "image_right",
+                    "closing"
+                  ],
+                  "type": "string"
+                },
+                "left": {
+                  "type": "object"
+                },
+                "metrics": {
+                  "items": {
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "notes": {
+                  "type": "string"
+                },
+                "right": {
+                  "type": "object"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "statement": {
+                  "type": "string"
+                },
+                "subtitle": {
+                  "type": "string"
+                },
+                "table": {
+                  "type": "object"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "layout"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "subtitle": {
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "theme": {
+            "enum": [
+              "eclipse",
+              "paper",
+              "midnight",
+              "slate"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "presentation_create",
+      "permission": "read",
+      "replacement": null,
+      "risk": "low",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
+      "description": "Edit a deck artifact with typed operations under a revision guard. Supply artifactId, baseVersion (the version you read) and operations. Ops: add_slide {at,slide}, delete_slide {slideId}, move_slide {slideId,to}, replace_slide {slideId,slide}, set_meta {field,value}, set_theme {preset,accent}, set_notes {slideId,text}, set_title {slideId,text}, set_bullets {slideId,bullets}, set_body {slideId,text}, set_source {slideId,text}, set_chart {slideId,chart}, set_table {slideId,table}, set_metrics {slideId,metrics}. A stale baseVersion is refused (409) rather than overwriting someone else's edit.",
+      "effect": null,
+      "inputSchema": {
+        "properties": {
+          "artifactId": {
+            "type": "string"
+          },
+          "baseVersion": {
+            "type": "integer"
+          },
+          "changeNote": {
+            "type": "string"
+          },
+          "operations": {
+            "items": {
+              "description": "A DeckOp object (see description).",
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "artifactId",
+          "baseVersion",
+          "operations"
+        ],
+        "type": "object"
+      },
+      "name": "presentation_edit",
+      "permission": "read",
+      "replacement": null,
+      "risk": "low",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
+      "description": "Export an existing deck artifact to a real PowerPoint file (format 'pptx'), a PDF ('pdf'), or a ZIP of per-slide PNG images ('png'). The file is registered in the Artifact Center and written to Documents/Eclipse (or `saveTo`); the result names its ABSOLUTE path. The source deck is never modified. A missing writer library is reported honestly, never replaced by a fake file.",
+      "effect": null,
+      "inputSchema": {
+        "properties": {
+          "artifactId": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "format": {
+            "enum": [
+              "pptx",
+              "pdf",
+              "png"
+            ],
+            "type": "string"
+          },
+          "saveTo": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifactId"
+        ],
+        "type": "object"
+      },
+      "name": "presentation_export",
+      "permission": "read",
+      "replacement": null,
+      "risk": "low",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
+      "description": "Import an existing PowerPoint file already in the Artifact Center as an editable deck OUTLINE. Supply its `artifactId` (and an optional `title`). Titles, text lines (as bullets), table rows (as text) and speaker notes are kept; design, masters, animations, charts and images are NOT carried over, and the result says so in its warnings. The new deck is an ordinary editable/presentable artifact.",
+      "effect": null,
+      "inputSchema": {
+        "properties": {
+          "artifactId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifactId"
+        ],
+        "type": "object"
+      },
+      "name": "presentation_import",
+      "permission": "read",
+      "replacement": null,
+      "risk": "low",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
+      "description": "Read a deck artifact's slides (id, layout, title, speaker notes present) and its canonical JSON. Read-only; use it before editing so operations address real slide ids.",
+      "effect": null,
+      "inputSchema": {
+        "properties": {
+          "artifactId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifactId"
+        ],
+        "type": "object"
+      },
+      "name": "presentation_outline",
       "permission": "read",
       "replacement": null,
       "risk": "low",

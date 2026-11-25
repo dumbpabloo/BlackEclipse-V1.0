@@ -26,6 +26,7 @@ class CanvasKind(str, Enum):
     DOCUMENT = "document"
     CODE = "code"
     VISUAL = "visual"
+    PRESENTATION = "presentation"
 
 
 class CanvasMode(str, Enum):
@@ -108,7 +109,10 @@ class SaveCanvasInput(BaseModel):
 
     base_version: int = Field(ge=1)
     content: Optional[str] = None
-    operations: Optional[list[EditOperation]] = None
+    # Text ops (EditOperation) for documents/code/visual, deck ops (DeckOp) for
+    # presentations. Validated by kind in CanvasService — a route cannot smuggle
+    # a text operation into a deck.
+    operations: Optional[list[Any]] = None
     change_note: str = Field(default="", max_length=1_000)
     idempotency_key: Optional[str] = Field(default=None, max_length=200)
 
@@ -179,6 +183,9 @@ class CanvasProposal(BaseModel):
     answer: str = ""
     summary: str = ""
     operations: list[EditOperation] = Field(default_factory=list)
+    # Deck ops (the `op` vocabulary in presentations/ops.py) for a presentation
+    # artifact. Exactly one of `operations` / `deck_operations` is non-empty.
+    deck_operations: list[dict[str, Any]] = Field(default_factory=list)
     result_content: Optional[str] = None
     notes: list[str] = Field(default_factory=list)
 

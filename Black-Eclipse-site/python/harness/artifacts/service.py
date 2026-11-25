@@ -625,6 +625,30 @@ class ArtifactService:
             self._store.add_event(artifact.id, "ARTIFACT_PREVIEW_READY", data={"kind": result.get("kind")})
         return self._store.get(artifact.id)
 
+    def set_preview_thumbnail(
+        self, artifact_id: str, data: bytes, *, owner_id: Optional[str] = None
+    ) -> bool:
+        """Attach a producer-rendered thumbnail (e.g. a deck's first slide).
+
+        Best-effort: a missing object or store row returns False; the artifact is
+        still valid and downloadable. The key follows the same
+        `<storage_key>.thumb.png` convention the preview engine uses.
+        """
+        if not data:
+            return False
+        try:
+            artifact = self.get(artifact_id, owner_id=owner_id)
+            if not artifact.storage_key:
+                return False
+            key = self._storage.thumbnail_key(artifact.storage_key)
+            self._storage.save_bytes_at(key, data)
+            self._store.update_fields(artifact_id, {"thumbnailKey": key})
+            self._store.add_event(artifact_id, "ARTIFACT_PREVIEW_READY", data={"kind": "thumbnail"})
+            return True
+        except Exception:  # noqa: BLE001 - a thumbnail never invalidates the artifact
+            log.warning("thumbnail write failed for %s", artifact_id, exc_info=True)
+            return False
+
     def preview(self, artifact_id: str, *, owner_id: Optional[str] = None) -> dict[str, Any]:
         """Return preview metadata, regenerating if it is pending or failed."""
         artifact = self.get(artifact_id, owner_id=owner_id)

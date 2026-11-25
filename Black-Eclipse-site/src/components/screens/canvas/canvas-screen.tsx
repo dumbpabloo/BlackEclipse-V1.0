@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState, type JSX, type MutableRefObje
 import { saveBlob } from '@/lib/desktop/download';
 import { confirmDialog, promptDialog } from '@/lib/ui/confirm-dialog';
 import { archiveArtifact, updateArtifact } from '@/lib/harness/clients/artifacts-browser';
+import { exportPresentation } from '@/lib/harness/clients/presentations-client';
 import {
   createCanvasArtifact, getCanvasArtifact, listCanvasArtifacts,
   proposeCanvasEdit, restoreCanvasVersion, saveCanvasArtifact,
@@ -17,7 +18,7 @@ import {
 } from '@/lib/harness/clients/canvas-client';
 import { CanvasWorkspace } from './canvas-workspace';
 import {
-  contentExtension, contentMime, describeCanvasError, kindLabel, starterContent,
+  contentExtension, contentMime, describeCanvasError, kindLabel, proposalOperations, starterContent,
   type CanvasEditorHandle, type CanvasErrorState, type CanvasSaveState, type CanvasSelection,
 } from './canvas-utils';
 
@@ -84,6 +85,7 @@ export function CanvasScreen({
   const [railCollapsed, setRailCollapsed] = useState(false);
   const [aiCollapsed, setAiCollapsed] = useState(inline);
   const [fullWidth, setFullWidth] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const editorHandleRef: MutableRefObject<CanvasEditorHandle | null> = useRef(null);
   const savingRef = useRef(false);
@@ -136,6 +138,7 @@ export function CanvasScreen({
     setConflictVersion(null);
     setSelection(null);
     setUseSelection(false);
+    setNotice(null);
     try {
       const snap = await getCanvasArtifact(id);
       setSnapshot(snap);
@@ -154,7 +157,10 @@ export function CanvasScreen({
 
   // ── Create / rename / archive ───────────────────────────────────────────────
   const createArtifact = useCallback(async (kind: CanvasKind) => {
-    const fallback = kind === 'code' ? 'Untitled code' : kind === 'visual' ? 'Untitled visual report' : 'Untitled document';
+    const fallback = kind === 'code' ? 'Untitled code'
+      : kind === 'visual' ? 'Untitled visual report'
+      : kind === 'presentation' ? 'Untitled deck'
+      : 'Untitled document';
     const name = await promptDialog({ title: `Name for new ${kindLabel(kind)}`, defaultValue: fallback });
     if (!name || !name.trim()) return;
     setListError(null);
@@ -341,9 +347,25 @@ export function CanvasScreen({
   }, []);
 
   // ── Export ──────────────────────────────────────────────────────────────────
-  const exportArtifact = useCallback(async (action: 'download' | 'copy' | 'print') => {
+  const exportArtifact = useCallback(async (action: 'download' | 'copy' | 'print' | 'pptx' | 'pdf' | 'png') => {
     const snap = snapshotRef.current;
     if (!snap) return;
+    if (action === 'pptx' || action === 'pdf' || action === 'png') {
+      const label = action === 'pptx' ? 'PowerPoint' : action === 'pdf' ? 'PDF' : 'PNG slides';
+      setNotice(`Exporting ${label}…`);
+      try {
+        const result = await exportPresentation(snap.artifactId, { format: action });
+        const overflow = result.overflowSlides.length
+          ? ` · overflow on slides ${result.overflowSlides.join(', ')}`
+          : '';
+        setNotice(`${label} saved to ${result.path}${overflow}`);
+      } catch (err) {
+        setSaveState('error');
+        setSaveError(err instanceof Error ? err.message : `The ${label} export failed.`);
+        setNotice(null);
+      }
+      return;
+    }
     if (action === 'print') { window.print(); return; }
     if (action === 'copy') {
       try {
@@ -387,8 +409,9 @@ export function CanvasScreen({
     setApplying(true);
     setProposalError(null);
     try {
-      const input = prop.operations.length > 0
-        ? { baseVersion: snap.version, operations: prop.operations }
+      const operations = proposalOperations(prop);
+      const input = operations.length > 0
+        ? { baseVersion: snap.version, operations }
         : { baseVersion: snap.version, content: prop.resultContent ?? snap.content };
       const result = await saveCanvasArtifact(snap.artifactId, input);
       setSnapshot(result);
@@ -431,7 +454,7 @@ export function CanvasScreen({
         onToggleCollapsed: () => setRailCollapsed((v) => !v),
       }}
       center={snapshot ? {
-        snapshot, content, dirty, saveState, saveError,
+        snapshot, content, dirty, saveState, saveError, notice,
         onContentChange: updateContent,
         onSelectionChange: handleSelectionChange,
         editorHandleRef,

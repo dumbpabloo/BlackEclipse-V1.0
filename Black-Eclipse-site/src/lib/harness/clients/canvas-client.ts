@@ -2,7 +2,7 @@
 // The typed front door to the Python canvas routes. Content is canonical
 // artifact bytes; saves are revision-guarded. Nothing here invents content.
 
-export type CanvasKind = "document" | "code" | "visual";
+export type CanvasKind = "document" | "code" | "visual" | "presentation";
 export type CanvasMode = "ask" | "edit" | "review" | "build";
 export type CanvasOp =
   | "append"
@@ -59,6 +59,25 @@ export interface EditOperation {
   explanation?: string;
 }
 
+/** A typed deck operation (the vocabulary in presentations/ops.py). */
+export interface DeckOp {
+  op: string;
+  slideId?: string;
+  slide?: unknown;
+  at?: number;
+  to?: number;
+  field?: string;
+  value?: string;
+  text?: string;
+  bullets?: string[];
+  chart?: unknown;
+  table?: unknown;
+  metrics?: unknown[];
+  preset?: string;
+  accent?: string;
+  explanation?: string;
+}
+
 export interface CanvasProposal {
   artifactId: string;
   baseVersion: number;
@@ -67,6 +86,8 @@ export interface CanvasProposal {
   answer: string;
   summary: string;
   operations: EditOperation[];
+  /** Deck ops for a presentation artifact; exactly one list is non-empty. */
+  deckOperations?: DeckOp[];
   resultContent?: string | null;
   notes: string[];
 }
@@ -146,7 +167,7 @@ export async function saveCanvasArtifact(
   input: {
     baseVersion: number;
     content?: string;
-    operations?: EditOperation[];
+    operations?: unknown[];
     changeNote?: string;
     idempotencyKey?: string;
   },
