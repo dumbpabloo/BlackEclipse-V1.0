@@ -5,6 +5,7 @@ import { getChoicesMode } from './choices-mode';
 import { getPlanMode } from './plan-mode';
 import { ingestHarnessFrame } from '@/lib/agent-workspace/ingest';
 import { getActiveProjectId } from '@/lib/projects/project-client';
+import { isTransientFetchError } from '@/lib/fetch-retry';
 
 export { unwrapEventPayload } from './events';
 
@@ -329,14 +330,96 @@ function createSseParser(onFrame: (event: string, data: Record<string, unknown>)
   };
 }
 
+/**
+ * How long a chat POST keeps retrying while the Python runtime cold-boots.
+ *
+ * A cold start imports the whole agent stack and legitimately takes up to a
+ * minute on a busy machine; the front door answers a request after ~3 s while
+ * that boot runs. Retrying here (with a visible "Starting Eclipse…" status)
+ * turns "your first message after a restart failed" into "the message was sent
+ * when the runtime was ready" — the failure mode this budget exists to prevent.
+ */
+const RUNTIME_START_RETRY_BUDGET_MS = 120_000;
+const RUNTIME_START_RETRY_BASE_MS = 500;
+const RUNTIME_START_RETRY_CAP_MS = 5_000;
+
+function retryDelayMs(attempt: number): number {
+  return Math.min(RUNTIME_START_RETRY_CAP_MS, RUNTIME_START_RETRY_BASE_MS * 2 ** attempt);
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function announceRuntimeStarting(options: ChatOptions | undefined, elapsedMs: number): void {
+  const seconds = Math.max(1, Math.round(elapsedMs / 1000));
+  options?.onStatus?.({
+    phase: 'starting',
+    label: seconds >= 5 ? `Starting Eclipse… (${seconds}s)` : 'Starting Eclipse…',
+    // Not a harness event: this is the client waiting on the runtime itself.
+    eventType: 'runtime.starting',
+  });
+}
+
+/**
+ * POST the chat turn, riding out a cold runtime boot and a server restart.
+ *
+ * Only two failures are repeated: a `503 RUNTIME_STARTING` (a boot, not a
+ * refusal) and a transport-level `Failed to fetch` (the server was mid-restart,
+ * so the request never reached it). Every other status is returned unchanged
+ * for the caller to turn into an error.
+ */
+async function postChatStream(
+  payload: ReturnType<typeof buildPayload>,
+  options?: ChatOptions,
+): Promise<Response> {
+  const startedAt = Date.now();
+  let attempt = 0;
+  for (;;) {
+    try {
+      const res = await fetch('/api/harness/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: options?.signal,
+      });
+      if (res.status !== 503) return res;
+      // Inspect a CLONE: the original body must survive for the caller's error.
+      const probe = res.clone();
+      const data = (await probe.json().catch(() => ({}))) as { code?: unknown };
+      if (data.code !== 'RUNTIME_STARTING') return res;
+      if (Date.now() - startedAt >= RUNTIME_START_RETRY_BUDGET_MS) return res;
+      announceRuntimeStarting(options, Date.now() - startedAt);
+      await sleep(retryDelayMs(attempt++), options?.signal);
+    } catch (err) {
+      // A transport failure means the request never got a response. The run id
+      // is client-owned and the runtime's lease guard ignores a duplicate
+      // submission, so re-POSTing the same turn cannot start a second run.
+      if (options?.signal?.aborted || !isTransientFetchError(err)) throw err;
+      if (Date.now() - startedAt >= RUNTIME_START_RETRY_BUDGET_MS) throw err;
+      announceRuntimeStarting(options, Date.now() - startedAt);
+      await sleep(retryDelayMs(attempt++), options?.signal);
+    }
+  }
+}
+
 async function chatStreaming(messages: ChatMessage[], options?: ChatOptions): Promise<string> {
   const payload = buildPayload(messages, options);
-  const res = await fetch('/api/harness/chat/stream', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-    signal: options?.signal,
-  });
+  const res = await postChatStream(payload, options);
   if (!res.ok) {
     // A missing streaming ENDPOINT (an older front door) still has the
     // one-shot path — fall back to it. Anything else means the REQUEST was

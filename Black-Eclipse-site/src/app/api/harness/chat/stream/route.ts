@@ -230,7 +230,14 @@ export async function POST(request: Request) {
       : err instanceof HarnessError && err.code === "PROVIDER_NOT_CONFIGURED" ? 503
       : err instanceof HarnessError && err.code === "INVALID_INPUT" ? 400
       : 500;
-    return Response.json({ error: error.message, code: error.code }, { status });
+    return Response.json(
+      { error: error.message, code: error.code },
+      {
+        status,
+        // A cold boot is retryable; say how long to wait.
+        ...(error.code === "RUNTIME_STARTING" ? { headers: { "Retry-After": "3" } } : {}),
+      },
+    );
   }
 
   // Relay the runtime stream and capture the final answer to persist on close.

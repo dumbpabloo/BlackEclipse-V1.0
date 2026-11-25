@@ -36,6 +36,14 @@ describe("toHarnessErrorJson", () => {
     expect(toHarnessErrorJson("plain string").code).toBe("INTERNAL_ERROR");
   });
 
+  it("keeps a cold-boot code distinct from an unavailable runtime", () => {
+    // A boot is transient and retryable; an install problem is not. Collapsing
+    // them into RUNTIME_UNAVAILABLE is what told people to install a runtime
+    // that was merely still starting.
+    const err = Object.assign(new Error("starting"), { code: "RUNTIME_STARTING" });
+    expect(toHarnessErrorJson(err)).toMatchObject({ code: "RUNTIME_STARTING" });
+  });
+
   it("isHarnessError identifies the type", () => {
     expect(isHarnessError(new HarnessError("INTERNAL_ERROR", "x"))).toBe(true);
     expect(isHarnessError(new Error("x"))).toBe(false);

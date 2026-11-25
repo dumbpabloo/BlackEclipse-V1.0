@@ -287,7 +287,8 @@ export async function POST(request: Request) {
             }
           : {}),
       },
-      { status },
+      // A boot is retryable: tell every client (not only ours) to come back.
+      { status, ...(error.code === "RUNTIME_STARTING" ? { headers: { "Retry-After": "3" } } : {}) },
     );
   }
 }

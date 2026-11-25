@@ -239,3 +239,84 @@ def test_the_context_builder_returns_the_map_and_its_digest() -> None:
     assert digest and len(digest) == 16
     # The build is observable.
     assert any(event == "code.repo_map_built" for event, _ in emitter.events)
+
+
+# ── the rule: the context step can never hold the event loop ──────────────
+
+
+def test_the_context_step_cannot_hold_the_event_loop(monkeypatch) -> None:
+    """Regression (measured 2026-11-24): the repo map ran ON the event loop.
+
+    A cold, disk-busy machine turned a 5 s budget into 137 s of wall clock, so
+    the first turn of the session produced no output and every health probe
+    timed out behind it. The step now runs in a worker thread under a hard
+    outer timeout: a stuck walk costs the turn its map, never its loop.
+    """
+    import harness.code.intel.repo_map as repo_map_module
+    from harness import graph_context
+    from harness.code.workspace import ResolvedWorkspace, WorkspaceBinding
+    from harness.schemas import ModelSettings, RunInput, RunRequest
+
+    original = repo_map_module.build_repo_map
+
+    def blocked_build(*args, **kwargs):
+        # Stands in for a cold disk / antivirus scan: 3 s of a worker's life,
+        # well past the 2.1 s hard cap (0.1 s budget + 2 s grace).
+        time.sleep(3)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(repo_map_module, "build_repo_map", blocked_build)
+    monkeypatch.setenv("BLACK_ECLIPSE_CODE_CONTEXT_BUDGET_S", "0.1")
+
+    root = _project(tempfile.mkdtemp(prefix="map-"))
+    real = os.path.realpath(root)
+    binding = WorkspaceBinding(id="ws_slow", root=real, base_revision="unknown", strategy="checkout")
+    workspace = ResolvedWorkspace(id="ws_slow", root=real, base_revision="unknown",
+                                  strategy="checkout", binding=binding)
+    request = RunRequest(
+        runId="map-slow",
+        input=RunInput(query="find the main entry point"),
+        autonomy="edit_verify",
+        modelSettings=ModelSettings(provider="ollama", model="llama3.1",
+                                    base_url="http://localhost:11434/v1"),
+        callbackBaseUrl="http://localhost:3000",
+    )
+
+    class _Emitter:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict]] = []
+
+        async def emit(self, event: str, data: dict) -> None:
+            self.events.append((event, data))
+
+    emitter = _Emitter()
+    started = time.monotonic()
+    block, digest = asyncio.run(
+        graph_context._repo_map_context(request, workspace=workspace, emitter=emitter)
+    )
+
+    elapsed = time.monotonic() - started
+    # The hard cap fired before the 3 s build finished, and the turn continued
+    # WITHOUT a map: no digest, and the timeout is observable in the trace.
+    assert digest is None
+    assert elapsed < 3.9, f"the build was not cut short ({elapsed:.1f}s)"
+    assert any(event == "code.repo_map_timeout" for event, _ in emitter.events)
+
+
+def test_an_oversized_file_is_skipped_rather_than_parsed() -> None:
+    """A single multi-MB file must not consume the whole context budget."""
+    from harness.code.intel.repo_map import MAX_OUTLINE_FILE_BYTES
+
+    root = tempfile.mkdtemp(prefix="map-")
+    os.makedirs(os.path.join(root, "src"), exist_ok=True)
+    with open(os.path.join(root, "src", "huge.py"), "w", encoding="utf-8") as handle:
+        handle.write("def first():\n    return 1\n")
+        handle.write("value = 1\n" * (MAX_OUTLINE_FILE_BYTES // 8))
+    with open(os.path.join(root, "src", "small.py"), "w", encoding="utf-8") as handle:
+        handle.write("def small():\n    return 1\n")
+
+    repo_map = build_repo_map(root)
+    outlined = [path for path, _ in repo_map.outlines]
+    assert "src/small.py" in outlined
+    assert "src/huge.py" not in outlined
+    assert repo_map.truncated is True

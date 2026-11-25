@@ -2,16 +2,36 @@
 // Thin typed wrapper over the Python service. This is the only place Next.js
 // talks to the runtime; it adds no agentic logic of its own.
 
-import { HARNESS_PY_URL, ensurePythonRuntime } from "../python-runtime";
+import { HARNESS_PY_URL, ensurePythonRuntime, pythonRuntimeIsStarting } from "../python-runtime";
 import { runtimeCallbackToken } from "../runtime-auth";
 import type { HarnessErrorJson, HarnessEvent, RunRecord, RunResult, UsageSummary } from "../types";
 import { redactSecrets, HarnessHttpError, isNotFoundError } from "../errors";
 
+/**
+ * A cold start is a BOOT, not a failure.
+ *
+ * The front door answers one request per ~3 s while uvicorn imports the agent
+ * stack, so the first message sent right after an app restart used to end in a
+ * hard "install the runtime" error even though the runtime was coming up
+ * normally. The two cases now carry different codes so the client can retry a
+ * boot and only report an install problem when it really is one.
+ */
+const RUNTIME_STARTING_MESSAGE =
+  "Eclipse is starting its agent runtime. This normally takes under a minute; " +
+  "your message will be sent automatically as soon as it is ready.";
+const RUNTIME_MISSING_MESSAGE =
+  "The Python agent runtime is not available. Install the runtime: npm run setup:python";
+
 export class HarnessRuntimeUnavailable extends Error {
-  readonly code = "RUNTIME_UNAVAILABLE" as const;
-  constructor(message: string) {
+  /** `RUNTIME_STARTING` = a cold boot in progress; `RUNTIME_UNAVAILABLE` = cannot start. */
+  readonly code: "RUNTIME_UNAVAILABLE" | "RUNTIME_STARTING";
+  constructor(
+    message: string,
+    code: "RUNTIME_UNAVAILABLE" | "RUNTIME_STARTING" = "RUNTIME_UNAVAILABLE"
+  ) {
     super(message);
     this.name = "HarnessRuntimeUnavailable";
+    this.code = code;
   }
 }
 
@@ -91,8 +111,12 @@ async function request<T>(
 ): Promise<T> {
   const healthy = await ensurePythonRuntime();
   if (!healthy) {
+    // Distinguish "still booting" from "will never boot": the first is retried
+    // by the client, the second is an install instruction.
+    const starting = pythonRuntimeIsStarting();
     throw new HarnessRuntimeUnavailable(
-      "The Python agent runtime is not available. Install the runtime: npm run setup:python"
+      starting ? RUNTIME_STARTING_MESSAGE : RUNTIME_MISSING_MESSAGE,
+      starting ? "RUNTIME_STARTING" : "RUNTIME_UNAVAILABLE",
     );
   }
   const { timeoutMs = 180_000, ...rest } = init;

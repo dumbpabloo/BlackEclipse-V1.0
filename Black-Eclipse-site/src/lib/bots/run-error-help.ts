@@ -161,6 +161,11 @@ const HELP: Record<string, RunErrorHelp> = {
     fix: 'Start/restart the agent runtime (or run Doctor), then retry. Runs fail honestly rather than faking a reply.',
     retryable: false,
   },
+  RUNTIME_STARTING: {
+    what: 'The Python agent runtime is still starting. Nothing has failed.',
+    fix: 'Wait a few seconds and retry — the message is kept. A cold start normally finishes in under a minute.',
+    retryable: true,
+  },
   GRAPH_RUN_FAILED: {
     what: 'The graph workflow ran but ended in a failure state.',
     fix: 'Open the workflow run to see the failing node, fix it in the graph, then retry.',

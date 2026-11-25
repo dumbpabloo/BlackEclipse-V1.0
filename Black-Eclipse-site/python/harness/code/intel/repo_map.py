@@ -63,6 +63,13 @@ MAX_MAP_CHARS = 8_000
 #: How many characters one file's path may cost in the render.
 MAX_PATH_CHARS = 120
 
+#: The largest file the outline will parse. A single multi-MB source file can
+#: take seconds to tokenise, and the deadline cannot interrupt a parse in
+#: progress — so an oversized file is skipped (and the map says truncated)
+#: rather than allowed to blow the whole context budget on its own.
+MAX_OUTLINE_FILE_BYTES = 1_000_000
+
+
 #: The files that are never worth outlining.
 SKIP_SUFFIXES = (
     ".min.js", ".map", ".lock", ".png", ".jpg", ".jpeg", ".gif", ".svg",
@@ -198,6 +205,12 @@ def build_repo_map(
                 keep.append(name)
             dirnames[:] = keep
             for name in filenames:
+                # Check the clock PER FILE, not only per directory: one
+                # directory can hold thousands of entries, and the deadline is
+                # the only thing stopping a cold disk from holding the caller.
+                if out_of_time():
+                    timed_out = True
+                    break
                 full = current / name
                 try:
                     rel = full.relative_to(base).as_posix()
@@ -230,6 +243,10 @@ def build_repo_map(
         try:
             size = (base / rel).stat().st_size
         except OSError:
+            continue
+        if size > MAX_OUTLINE_FILE_BYTES:
+            # Parsing a huge file cannot be interrupted; skip it and say so.
+            truncated = True
             continue
         if size > budget:
             truncated = True
@@ -307,6 +324,7 @@ __all__ = [
     "MAX_MAP_DIRS",
     "MAX_MAP_CHARS",
     "MAX_MAP_FILES",
+    "MAX_OUTLINE_FILE_BYTES",
     "MAX_SYMBOLS_PER_FILE",
     "RepoMap",
     "build_repo_map",

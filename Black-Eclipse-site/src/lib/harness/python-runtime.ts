@@ -551,6 +551,25 @@ async function waitWithinRequestBudget(work: Promise<boolean>, budgetMs: number)
 }
 
 /**
+ * Whether a cold Python start is genuinely STILL IN FLIGHT.
+ *
+ * `ensurePythonRuntime()` answers "not ready yet" both when a cold start is
+ * progressing and when the runtime can never start (no interpreter, missing
+ * deps). Those are different facts for the person waiting: one resolves itself
+ * in under a minute, the other needs an install. This tells the caller which
+ * one it is, so the chat can retry a boot instead of showing an install error.
+ *
+ * It is exact: the in-flight `__harnessPyEnsure` promise is cleared only when
+ * the start settles, so a pending promise IS a start in progress.
+ */
+export function pythonRuntimeIsStarting(): boolean {
+  if (g.__harnessPyHealthyAt && Date.now() - g.__harnessPyHealthyAt < HEALTH_TTL_MS) {
+    return false;
+  }
+  return g.__harnessPyEnsure !== undefined;
+}
+
+/**
  * Ensure the Python runtime is up. Returns true when healthy; false when it
  * could not be started (missing interpreter, dependencies) OR when it is still
  * starting past the request budget. Callers must treat `false` as "agent runtime

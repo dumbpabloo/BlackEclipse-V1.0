@@ -197,17 +197,27 @@ thousands of times on a real repo (94 s of blocked event loop).
 
 ### The pre-model wall-clock budget (invariant)
 
-The repo map and the seeded slice are assembled SYNCHRONOUSLY in a run's
-pre-model phase, before the first model call. Nothing there may hold the
-runtime's event loop unbounded — while it is blocked, every other route, the
-stall watchdog and the user's turn are frozen.
+The repo map and the seeded slice are assembled in a run's pre-model phase,
+before the first model call. Nothing there may hold the runtime's event loop
+unbounded — while it is blocked, every other route, the stall watchdog and the
+user's turn are frozen.
 
+- **The work runs on a worker thread, never the loop.**
+  `graph_context._repo_map_context` builds the map + seeded slice through
+  `_build_repo_context_sync` inside `asyncio.to_thread`, under
+  `asyncio.wait_for(…, budget + 2 s)`. A wall-clock budget alone was not enough:
+  a cold, disk-busy host turned a 5 s budget into **137 s** (measured
+  2026-11-24), because a blocking file read does not observe a deadline. The
+  outer timeout is the guarantee; the thread is abandoned on overrun and its
+  result discarded (`code.repo_map_timeout` is emitted).
 - `CodeContextEngine.select(..., budget_s=…)` checks a `time.monotonic()`
   deadline throughout its loops and returns what it has with `truncated: true`.
   Default `5 s`, env `BLACK_ECLIPSE_CODE_CONTEXT_BUDGET_S`.
-- `build_repo_map(..., deadline=…)` applies the same wall-clock cap to its walk;
-  the map gets at most half the budget, the seed the remainder
-  (`graph_context._repo_map_context`).
+- `build_repo_map(..., deadline=…)` applies the same wall-clock cap, checking it
+  **per file** (not only per directory: one directory can hold thousands of
+  entries) and skipping any single file larger than `MAX_OUTLINE_FILE_BYTES`
+  (1 MB), since a parse cannot be interrupted. The map gets at most half the
+  budget, the seed the remainder (`graph_context._repo_map_context`).
 - Opening a large workspace index (seconds; hundreds of MB on disk) happens at
   BOOT on a worker thread (`CodeIntelRuntime.warm`, called from
   `boot.py::_warm_code_index`) and NEVER inside a run. Indexing itself stays

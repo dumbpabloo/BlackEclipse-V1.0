@@ -15,6 +15,7 @@ only promotion gates).
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any, Optional
 
@@ -22,6 +23,13 @@ from .events import RunEmitter
 from .persistence import AgentMemoryStore
 from .schemas import AgentConfig, RunRequest
 from .tools import ToolRegistry
+
+#: How long past the context budget the WORKER THREAD is allowed to run before
+#: the run stops waiting for the repo map and continues without it. The inner
+#: deadline normally returns first; this is the backstop for a blocking syscall
+#: that cannot observe it. Never let a context convenience hold the event loop.
+_REPO_MAP_HARD_GRACE_S = 2.0
+
 
 
 async def _memory_context(
@@ -541,22 +549,36 @@ async def _repo_map_context(
         except Exception:  # noqa: BLE001
             pass
 
+    budget = 0.0
     try:
         from .code.intel.context import context_budget_s  # noqa: PLC0415
-        from .code.intel.repo_map import build_repo_map, render_repo_map  # noqa: PLC0415
 
-        # ONE wall-clock budget for the whole pre-model context step. It runs
-        # synchronously on the event loop, so an overrun freezes every route and
-        # delays (or silently loses) the turn's first model call. The budget is
-        # split: the map gets at most half, the seed the remainder.
+        # ONE wall-clock budget for the whole pre-model context step. The work
+        # runs in a WORKER THREAD under a hard outer timeout: it used to run
+        # synchronously on the event loop, so one slow walk (measured 137 s
+        # against a 5 s budget on a cold, disk-busy machine) froze EVERY route —
+        # health probes included — and the turn produced no output at all until
+        # the person gave up. A context block is a convenience; it must never be
+        # able to hold the loop.
         budget = context_budget_s()
-        started = time.monotonic()
-        deadline = started + budget
-        repo_map = build_repo_map(root, deadline=started + budget / 2)
-        block = render_repo_map(repo_map)
-        if block:
-            parts.append(block)
-        map_digest = repo_map.digest
+        block, map_digest, stats = await asyncio.wait_for(
+            asyncio.to_thread(
+                _build_repo_context_sync,
+                root=root,
+                query=request.input.query,
+                workspace=workspace,
+                code_intel_runtime=code_intel_runtime,
+                budget_s=budget,
+            ),
+            timeout=budget + _REPO_MAP_HARD_GRACE_S,
+        )
+    except (asyncio.TimeoutError, TimeoutError):
+        try:
+            await emitter.emit("code.repo_map_timeout", {"budgetSeconds": budget})
+        except Exception:  # noqa: BLE001 - telemetry must not break a run
+            pass
+        # The rules still made it into the turn; only the map is absent.
+        return "\n\n".join(parts), None
     except Exception as exc:  # noqa: BLE001 - a map must never break a run
         try:
             await emitter.emit("code.repo_map_failed", {"error": str(exc)[:200]})
@@ -564,38 +586,77 @@ async def _repo_map_context(
             pass
         # The rules still made it into the turn; only the map is absent.
         return "\n\n".join(parts), None
+
+    if block:
+        parts.append(block)
+    if stats.get("seedError"):
+        try:
+            await emitter.emit("code.repo_map_seed_failed", {"error": stats["seedError"]})
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        await emitter.emit("code.repo_map_built", {
+            "files": stats.get("files", 0),
+            "outlined": stats.get("outlined", 0),
+            "engine": stats.get("engine", "symbols"),
+            "digest": map_digest,
+            "truncated": bool(stats.get("truncated")),
+            "seeded": bool(stats.get("seeded")),
+            "budgetSeconds": budget,
+            "elapsedMs": stats.get("elapsedMs", 0.0),
+        })
+    except Exception:  # noqa: BLE001
+        pass
+    return "\n\n".join(parts), map_digest
+
+
+def _build_repo_context_sync(
+    *,
+    root: Any,
+    query: str,
+    workspace: Optional[Any],
+    code_intel_runtime: Optional[Any],
+    budget_s: float,
+) -> tuple[str, Optional[str], dict[str, Any]]:
+    """Build the repo map + seeded slice. Runs in a WORKER THREAD, never the loop.
+
+    The returned stats are what `code.repo_map_built` reports, so the diagnostic
+    shape is unchanged. Every step is deadline-bounded: the map gets at most
+    half the budget, the seeded slice the remainder, and a step that overruns is
+    simply absent (an absent map is a fact, not a failure).
+    """
+    from .code.intel.repo_map import build_repo_map, render_repo_map  # noqa: PLC0415
+
+    started = time.monotonic()
+    deadline = started + budget_s
+    repo_map = build_repo_map(root, deadline=started + budget_s / 2)
+    block = render_repo_map(repo_map)
     seeded = ""
     seed_truncated = False
+    seed_error: Optional[str] = None
     if code_intel_runtime is not None and time.monotonic() < deadline:
         try:
             manager = code_intel_runtime.manager_for(workspace)
             slice_ = manager.get_relevant_context(
-                request.input.query, max_files=6, max_symbols=20,
+                query, max_files=6, max_symbols=20,
                 budget_s=max(0.0, deadline - time.monotonic()),
             )
             seeded = _render_seeded_slice(slice_)
             seed_truncated = bool(slice_.get("truncated")) if isinstance(slice_, dict) else False
         except Exception as exc:  # noqa: BLE001 - a seeded slice is a convenience
-            try:
-                await emitter.emit("code.repo_map_seed_failed", {"error": str(exc)[:200]})
-            except Exception:  # noqa: BLE001
-                pass
+            seed_error = str(exc)[:200]
     if seeded:
-        parts.append(seeded)
-    try:
-        await emitter.emit("code.repo_map_built", {
-            "files": repo_map.total_files,
-            "outlined": repo_map.outlined_files,
-            "engine": repo_map.engine,
-            "digest": repo_map.digest,
-            "truncated": repo_map.truncated or seed_truncated,
-            "seeded": bool(seeded),
-            "budgetSeconds": budget,
-            "elapsedMs": round((time.monotonic() - started) * 1000.0, 1),
-        })
-    except Exception:  # noqa: BLE001
-        pass
-    return "\n\n".join(parts), map_digest
+        block = f"{block}\n\n{seeded}" if block else seeded
+    stats: dict[str, Any] = {
+        "files": repo_map.total_files,
+        "outlined": repo_map.outlined_files,
+        "engine": repo_map.engine,
+        "truncated": repo_map.truncated or seed_truncated,
+        "seeded": bool(seeded),
+        "elapsedMs": round((time.monotonic() - started) * 1000.0, 1),
+        "seedError": seed_error,
+    }
+    return block, repo_map.digest, stats
 
 
 def _render_seeded_slice(slice_: dict[str, Any]) -> str:

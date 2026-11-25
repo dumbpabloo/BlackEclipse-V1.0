@@ -7,6 +7,10 @@
 export type HarnessErrorCode =
   | "INVALID_INPUT"
   | "RUNTIME_UNAVAILABLE"
+  // A cold runtime boot is in progress. Transient by definition: the same
+  // request succeeds once the boot finishes, so the client retries it instead
+  // of telling the person to install anything.
+  | "RUNTIME_STARTING"
   | "PROVIDER_NOT_CONFIGURED"
   | "PROVIDER_ERROR"
   | "PROVIDER_TIMEOUT"
@@ -98,6 +102,9 @@ export function toHarnessErrorJson(err: unknown, fallbackCode: HarnessErrorCode 
     // module), so it is detected by its stable name/code rather than `instanceof`
     // to avoid a circular import. It must keep its own code so the UI can render
     // an honest "runtime unavailable" state instead of a generic error.
+    if ((err as { code?: unknown }).code === "RUNTIME_STARTING") {
+      return { code: "RUNTIME_STARTING", message: redactSecrets(err.message || "Runtime starting") };
+    }
     if (err.name === "HarnessRuntimeUnavailable" || (err as { code?: unknown }).code === "RUNTIME_UNAVAILABLE") {
       return { code: "RUNTIME_UNAVAILABLE", message: redactSecrets(err.message || "Agent runtime unavailable") };
     }

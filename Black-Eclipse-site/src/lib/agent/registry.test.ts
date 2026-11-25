@@ -95,6 +95,41 @@ describe("eclipseAgent chat — a refused request", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("rides out a cold runtime boot instead of failing the first message", async () => {
+    // A cold Python start answers 503 RUNTIME_STARTING for a few seconds after
+    // a restart. That is a boot, not a failure: the turn must be retried and
+    // sent once the runtime is ready, with a visible "starting" status.
+    const encoder = new TextEncoder();
+    const fetchMock = vi.fn(async () => {
+      if (fetchMock.mock.calls.length === 1) {
+        return new Response(JSON.stringify({ error: "starting", code: "RUNTIME_STARTING" }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode('event: client.final\ndata: {"output":"ready now","status":"completed"}\n\n'),
+          );
+          controller.close();
+        },
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const statuses: string[] = [];
+    const reply = await getAgentProvider().chat([{ role: "user", content: "hello" }], undefined, {
+      onEvent: () => {},
+      onStatus: (status) => statuses.push(status.label),
+    });
+
+    expect(reply).toBe("ready now");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(statuses.some((label) => label.includes("Starting Eclipse"))).toBe(true);
+  });
+
   it("falls back to the one-shot path when the streaming endpoint is missing", async () => {
     // An older front door has no /stream route: the one-shot path still works.
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {

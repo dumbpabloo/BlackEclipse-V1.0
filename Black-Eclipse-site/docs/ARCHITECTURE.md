@@ -774,11 +774,25 @@ completion flag (the reloaded app benefits within a couple of seconds).
 
 **A page request never joins that cold start for long.** `ensurePythonRuntime()`
 coalesces callers onto one background spawn, but a request waits at most
-`DEFAULT_REQUEST_WAIT_MS` (3 s) before returning its honest 503. The old 45 s
-budget was effectively a multi-minute boot: a browser allows six concurrent
-HTTP/1.1 connections, so six requests parked on the runtime held every socket
-and queued even Python-free routes (the chat transcript) behind them for
-45–55 s. `HARNESS_PY_REQUEST_WAIT_MS` overrides the budget per host.
+`DEFAULT_REQUEST_WAIT_MS` (3 s) before answering. Past that budget the response
+distinguishes two different facts:
+
+- `RUNTIME_STARTING` — the start is **still in flight** (`pythonRuntimeIsStarting()`
+  reports the pending ensure promise). This is a boot, not a failure, so the
+  chat client (`src/lib/agent/registry.ts::postChatStream`) retries the same
+  POST with backoff for up to 120 s and shows *"Starting Eclipse… (Ns)"*. The
+  run id is client-owned and the runtime's lease guard ignores a duplicate
+  submission, so a retry cannot start a second run.
+- `RUNTIME_UNAVAILABLE` — the start cannot succeed (no interpreter / missing
+  deps). Only this carries the "run `npm run setup:python`" instruction.
+
+A transport-level `Failed to fetch` (the window kept its page while the server
+restarted underneath it) is retried on the same budget and the same idempotent
+POST. The old 45 s request budget was effectively a multi-minute boot: a browser
+allows six concurrent HTTP/1.1 connections, so six requests parked on the
+runtime held every socket and queued even Python-free routes (the chat
+transcript) behind them for 45–55 s. `HARNESS_PY_REQUEST_WAIT_MS` overrides the
+wait per host.
 
 ### Alert delivery
 
