@@ -6,6 +6,13 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-25
 
+- **docs(updates): record the published v0.4.30 manifest.** Signed offline against
+  the CI build (`vg7kNYrOIlBSOn-VzBotG`, lockHash `c26e37a1…`) and the win32-x64
+  installer (`195,428,381` bytes, sha256 `086f42f8…`), uploaded `stable.json` to
+  the draft, published, and verified: `node scripts/update.js --check` reports
+  `latest signed release: v0.4.30 / already up to date`. docs updated:
+  `docs/UPDATES.md` (release state), `docs/CHANGELOG.md`.
+
 - **release: v0.4.30.** Version bumped in `package.json`, `package-lock.json`,
   `pyproject.toml`, `python/harness/__init__.py` and the README's current-version
   line; SBOM and published benchmarks regenerated. Ships the presentations
