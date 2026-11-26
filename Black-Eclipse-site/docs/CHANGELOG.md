@@ -6,6 +6,16 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-25
 
+- **release: v0.4.30.** Version bumped in `package.json`, `package-lock.json`,
+  `pyproject.toml`, `python/harness/__init__.py` and the README's current-version
+  line; SBOM and published benchmarks regenerated. Ships the presentations
+  subsystem (typed `DeckOp` copilot, PDF/PNG export, thumbnails, `.pptx` import),
+  the video player/type-system pass, serial transcript writes and the
+  cold-runtime boot fix. The `v0.4.30` tag drives `desktop-release.yml`; the
+  offline-signed `stable.json` is uploaded to the draft before publishing.
+  docs updated: `docs/UPDATES.md` (release state), `docs/CHANGELOG.md`.
+
+
 - **feat(presentations): deck copilot, PDF/PNG export, thumbnails and import.**
   Completes the presentation subsystem: (1) the Canvas AI panel now edits decks
   through typed `DeckOp` proposals (`canvas/edits.py` branches on
