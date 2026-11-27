@@ -23,7 +23,11 @@ def infer_asset_class(symbol: str) -> str:
     if any(x in text for x in ("USDT", "USDC", "BTC", "ETH", "SOL")) or text.endswith("-USD"):
         return "crypto"
     if text.endswith("=F") or text.startswith("GC") or text.startswith("CL"):
-        return "futures"
+        # `SUPPORTED_ASSET_CLASSES` spells this singular ("future"). Returning
+        # "futures" made every synthesized futures spec fail validation with
+        # UNSUPPORTED_ASSET_CLASS, so the compute path refused a gold Donchian
+        # built on GC=F even though the rule set was sound.
+        return "future"
     if len(text) == 6 and text.isalpha():
         return "fx"
     return "equity"

@@ -40,12 +40,14 @@ export function GroupSettingsDialog({ open, onOpenChange, group, bots }: GroupSe
   const setGroupImage = useBotGroupsStore((s) => s.setGroupImage);
   const setGroupMode = useBotGroupsStore((s) => s.setGroupMode);
   const setGroupLead = useBotGroupsStore((s) => s.setGroupLead);
+  const setGroupRouting = useBotGroupsStore((s) => s.setGroupRouting);
   const setMembers = useBotGroupsStore((s) => s.setMembers);
 
   const [name, setName] = useState(group.name);
   const [image, setImage] = useState<string | null>(group.image ?? null);
   const [mode, setMode] = useState<GroupMode>(group.mode === 'roundtable' ? 'roundtable' : 'parallel');
   const [leadId, setLeadId] = useState<string | null>(group.leadId ?? null);
+  const [routingMode, setRoutingMode] = useState<'all' | 'lead'>(group.routingMode === 'lead' ? 'lead' : 'all');
   const [selected, setSelected] = useState<string[]>(group.memberIds);
   const [query, setQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +61,7 @@ export function GroupSettingsDialog({ open, onOpenChange, group, bots }: GroupSe
     setImage(group.image ?? null);
     setMode(group.mode === 'roundtable' ? 'roundtable' : 'parallel');
     setLeadId(group.leadId ?? null);
+    setRoutingMode(group.routingMode === 'lead' ? 'lead' : 'all');
     setSelected(
       botsRef.current.length > 0
         ? group.memberIds.filter((id) => botsRef.current.some((b) => b.id === id))
@@ -112,6 +115,7 @@ export function GroupSettingsDialog({ open, onOpenChange, group, bots }: GroupSe
     setGroupMode(group.id, mode);
     setMembers(group.id, valid);
     setGroupLead(group.id, leadId && valid.includes(leadId) ? leadId : null);
+    setGroupRouting(group.id, routingMode);
     onOpenChange(false);
   };
 
@@ -226,6 +230,15 @@ export function GroupSettingsDialog({ open, onOpenChange, group, bots }: GroupSe
               })}
             </div>
             <p className="text-[10px] text-muted-foreground">{t('bots.groups.leadHint')}</p>
+            <label className="flex items-center gap-2 text-[10px] text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={routingMode === 'lead'}
+                onChange={(e) => setRoutingMode(e.target.checked ? 'lead' : 'all')}
+                className="h-3.5 w-3.5 accent-[var(--primary)]"
+              />
+              {t('bots.groups.leadRoutes')}
+            </label>
           </div>
         )}
 

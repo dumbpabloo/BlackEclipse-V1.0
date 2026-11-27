@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
-import { Archive, CalendarDays, Copy, MoreHorizontal, Pencil, Pin, PinOff, Plus, RefreshCw, Search, Trash2, Upload, Users } from '@/lib/icons';
+import { Archive, CalendarDays, Copy, Download, MoreHorizontal, Pencil, Pin, PinOff, Plus, RefreshCw, Search, Trash2, Upload, Users } from '@/lib/icons';
 import { BotAvatar } from '@/components/bots/bot-avatar';
 import { BotsTextSizeMenu } from '@/components/bots/bots-text-size';
 import { GhostAvatar } from '@/components/bots/ghost-avatar';
@@ -226,6 +226,25 @@ export function BotsSidebarPanel({ collapsed, onActivate }: BotsSidebarPanelProp
     }
   };
 
+  const downloadDiagnostics = async () => {
+    setActionError(null);
+    try {
+      const res = await fetch('/api/bots/diagnostics', { cache: 'no-store' });
+      if (!res.ok) throw new Error(`diagnostics failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'eclipse-bots-diagnostics.json';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'diagnostics failed');
+    }
+  };
+
   const importFile = async (file: File | undefined) => {
     if (!file) return;
     setActionError(null);
@@ -384,6 +403,15 @@ export function BotsSidebarPanel({ collapsed, onActivate }: BotsSidebarPanelProp
             className="hidden"
             onChange={(e) => void importFile(e.target.files?.[0])}
           />
+          <button
+            type="button"
+            onClick={() => void downloadDiagnostics()}
+            className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+            title={t('bots.diagnostics')}
+            aria-label={t('bots.diagnostics')}
+          >
+            <Download size={13} />
+          </button>
           <button
             type="button"
             onClick={() => void hydrate()}

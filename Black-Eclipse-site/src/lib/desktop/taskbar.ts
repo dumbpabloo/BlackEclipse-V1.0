@@ -33,7 +33,7 @@ export type TaskbarState = 'idle' | 'unread';
 
 export interface TaskbarSignal {
   state: TaskbarState;
-  /** Unread total; Rust ignores it on Windows (the badge is a dot, not a count). */
+  /** Unread total; Windows paints it as the count on the taskbar badge. */
   count: number;
   /** Request ONE attention flash. Rust clears it as soon as the window is focused. */
   flash: boolean;

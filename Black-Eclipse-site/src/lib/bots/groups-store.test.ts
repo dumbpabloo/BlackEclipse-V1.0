@@ -30,6 +30,20 @@ describe('group room mode', () => {
     expect(useBotGroupsStore.getState().groups[0].mode).toBe('roundtable');
   });
 
+  it('stores lead routing separately from the chair', () => {
+    const group = useBotGroupsStore.getState().createGroup({
+      name: 'Committee',
+      memberIds: ['a', 'b'],
+    });
+    expect(group.routingMode).toBe('all');
+    useBotGroupsStore.getState().setGroupLead(group.id, 'a');
+    useBotGroupsStore.getState().setGroupRouting(group.id, 'lead');
+    expect(useBotGroupsStore.getState().groups[0].routingMode).toBe('lead');
+    expect(useBotGroupsStore.getState().groups[0].leadId).toBe('a');
+    useBotGroupsStore.getState().setGroupRouting(group.id, 'all');
+    expect(useBotGroupsStore.getState().groups[0].routingMode).toBe('all');
+  });
+
   it('sets a chair only to a current member and clears it when removed', () => {
     const group = useBotGroupsStore.getState().createGroup({
       name: 'Committee',

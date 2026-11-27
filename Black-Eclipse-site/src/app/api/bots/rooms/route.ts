@@ -16,6 +16,7 @@ interface RoomInput {
   name: string;
   memberIds: string[];
   mode?: string;
+  routingMode?: string;
   leadId?: string | null;
   image?: string | null;
   createdAt?: string;
@@ -36,6 +37,7 @@ function parseRoom(value: unknown): RoomInput | null {
   const image = typeof room.image === "string" ? room.image : null;
   if (image && image.length > MAX_IMAGE) return null;
   const mode = room.mode === "roundtable" ? "roundtable" : "parallel";
+  const routingMode = room.routingMode === "lead" ? "lead" : "all";
   const leadId = typeof room.leadId === "string" && memberIds.includes(room.leadId)
     ? room.leadId
     : null;
@@ -44,6 +46,7 @@ function parseRoom(value: unknown): RoomInput | null {
     name: room.name.trim().slice(0, MAX_NAME),
     memberIds,
     mode,
+    routingMode,
     leadId,
     image,
     createdAt: typeof room.createdAt === "string" ? room.createdAt : new Date().toISOString(),
@@ -55,6 +58,7 @@ function toView(row: {
   name: string;
   memberIds: string;
   mode: string;
+  routingMode: string;
   leadId: string | null;
   image: string | null;
   createdAt: string;
@@ -72,6 +76,7 @@ function toView(row: {
     name: row.name,
     memberIds,
     mode: row.mode === "roundtable" ? "roundtable" : "parallel",
+    routingMode: row.routingMode === "lead" ? "lead" : "all",
     leadId: row.leadId,
     image: row.image,
     createdAt: row.createdAt,
@@ -110,6 +115,7 @@ export async function PUT(request: Request) {
         name: room.name,
         memberIds: JSON.stringify(room.memberIds),
         mode: room.mode ?? "parallel",
+        routingMode: room.routingMode ?? "all",
         leadId: room.leadId ?? null,
         image: room.image ?? null,
         createdAt: room.createdAt ?? new Date().toISOString(),
@@ -118,6 +124,7 @@ export async function PUT(request: Request) {
         name: room.name,
         memberIds: JSON.stringify(room.memberIds),
         mode: room.mode ?? "parallel",
+        routingMode: room.routingMode ?? "all",
         leadId: room.leadId ?? null,
         image: room.image ?? null,
       },

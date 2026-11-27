@@ -6,6 +6,49 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-26
 
+- **docs(readme): the public front door is rebuilt around one positioning
+  sentence, with Features / Use / Needs.** The README led with "the open-source
+  financial agentic harness that grows with you", buried automation as capability
+  #9, and spread requirements through a 40-line install block. The hero now states
+  *"Black Eclipse is an open-source agentic harness designed to help you automate
+  finance"*; six feature groups replace the nine-capability and seven-area tables;
+  six concrete recipes replace the workflow and persona tables; and one Needs
+  table absorbs the install requirements. The page now opens with an authored
+  **hero banner** (`.github/assets/readme-hero.svg` / `.png`), centred download
+  and badges, a three-shot "See it" gallery, and `<details>` blocks for
+  troubleshooting, methodology, sources and licensing. The benchmark block is
+  condensed, the legal data-source table now points at the generated doc, and the
+  page is 366 lines instead of 444. The GitHub Pages landing page
+  (`site/index.html`) mirrors the same hero and sections, and every
+  `dumbpabloo/black-eclipse` link (which 404s) is corrected to
+  `BlackEclipse-V1.0`. Social card regenerated with the new tagline and `v0.4.30`.
+  docs updated: `docs/public-readme.md` (§1 order, §2 claim evidence, §3 figures,
+  §4 rule 6, §6 L2, new §8 landing page), `docs/OVERVIEW.md` (product definition),
+  `docs/NAVIGATION.md` (public surface row), `docs/CHANGELOG.md`.
+
+- **fix(desktop): the taskbar badge shows the unread count, not a bare dot.**
+  Windows painted one red disc from `SetOverlayIcon`, so the operator could not
+  tell one waiting reply from twelve. `overlay_unread_image` now rasterizes the
+  count with a 3×5 bitmap font (3×/2× glyph scale for two digits and `99+`) on
+  the same red disc, sharing the supersampled circle and rim. The settings copy
+  and the emitted `count` are unchanged, and the count still survives hide/show
+  via `AppState`. Tests: `taskbar_icon_tests`.
+  docs updated: `desktop/README.md`, `docs/desktop-app-plan.md`; no change
+  needed in the canonical system docs (shell-internal rendering, same
+  `be-taskbar` contract).
+
+- **fix(quant): synthesized futures specs validate, and strategy builds get the
+  budget to finish.** `infer_asset_class()` returned `"futures"` while
+  `SUPPORTED_ASSET_CLASSES` spells the class `"future"`, so every method
+  synthesized on `GC=F`/`CL`/`=F` returned `valid=False
+  (UNSUPPORTED_ASSET_CLASS)` and the build stopped before a backtest. Separately,
+  a deep quant turn now floors at 32 steps (reported in `run.started`,
+  previously it under-reported 24) and raises the tool-call ceiling from 48 to
+  64; a strategy build had hit the 48-call limit at step 22 with steps still
+  left, so `validate_strategy`/`create_strategy`/`run_backtest` never ran.
+  Tests: `test_quant_discovery.py`, `test_chat_step_budget.py`.
+  docs updated: `docs/quant-engine.md`, `docs/harness/architecture.md`.
+
 - **test(harness): isolate each parallel pytest worker's SQLite files.** The
   sharded suite gave every worker the same `AGENT_MEMORY_DB_PATH` /
   `ECLIPSE_MEMORY_DB_PATH`, so concurrent startup migrations raced and a worker
@@ -48,11 +91,13 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 - **test(size): re-pin the shared-tree Python module budgets.** The accounting /
   portfolio work already in the tree pushed `main.py`, `service.py`,
-  `ledger/{service,store,tools}.py`, `portfolio/{service,tools}.py` and
-  `trade/service.py` past their pinned budgets. Re-pinned to the measured sizes
-  with split candidates named in `python/tests/test_size_budget.py`; no runtime
-  code was changed by this re-pin. `test_phase_s_stabilization.py` updated for
-  the new `main.py` measurement.
+  `ledger/{service,store,tools}.py`, `portfolio/{service,tools}.py`,
+  `trade/service.py` and `graph.py` past their pinned budgets. Re-pinned to the
+  measured sizes with split candidates named in
+  `python/tests/test_size_budget.py`; no runtime code was changed by this
+  re-pin. `test_phase_s_stabilization.py` updated for the new `main.py`
+  measurement. Also made the port-ownership child test inject the package root
+  into `sys.path` (the vendored interpreter ignores `PYTHONPATH`).
   no doc change — test-only.
 
 - **test(runner): make the port-ownership child see `harness` under the vendored
@@ -119,16 +164,20 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
   scheduler run without Electron/Next (loopback by default; the existing
   non-loopback secret guard is unchanged), giving scheduled bots an always-on
   host path.
+  Group rooms now have real orchestration: optional lead routing for
+  unaddressed requests, per-request task ownership/status with reassignment,
+  threaded member replies (quoted parent), and a bounded shared context packet.
+  Adds per-bot backup-model failover for provider-class failures and a
+  privacy-safe Bots diagnostics JSON (`/api/bots/diagnostics`, sidebar Download).
   Extends the ACP client with `session/load`, MCP server descriptors at session
   setup, and opt-in path-confined fs/terminal capability handling. Adds a bot
   audit trail (`AutomationAudit`, `/automations/audit`, Bots Audit section) and
   gives each bot chat the same server-owned `bot:<id>` workspace as its scheduled
   runs. Updates `docs/research/hermes-vs-eclipse/FEATURE-GAP-MATRIX.md` with the
   closed rows.
-  Verified: `npx tsc --noEmit` clean; full `npm run test` = Vitest 5,321
-  passed / 1 skipped, Python 3,633 passed / 11 skipped (1,218 files), eval
-  gates ALL PASS. New tests: `test_acp_client.py`, `room-log.test.ts`,
-  `transfer.test.ts`.
+  Verified: `npx tsc --noEmit` clean; full Vitest 5,338 passed / 1 skipped;
+  Python 14,091 passed / 70 skipped (1,224 files, exit 0); eval gates ALL PASS.
+  New tests: `test_acp_client.py`, `room-log.test.ts`, `transfer.test.ts`.
   Tests: `quiet.test.ts`, `groups-store.test.ts`, `bots-run-diff.test.ts`,
   `message-log.test.ts`, `test_automation_quiet_runs.py`,
   `test_task_budget_usage.py`; `npx tsc --noEmit` clean.

@@ -1,7 +1,7 @@
-'use client';
+﻿'use client';
 
-// ── Group chat room ───────────────────────────────────────────────────────────
-// A conversation shared by 2–6 bots. The user speaks to the room; the reply comes
+// â”€â”€ Group chat room â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// A conversation shared by 2â€“6 bots. The user speaks to the room; the reply comes
 // from the real harness with the room's member roster as standing context, and is
 // attributed to the room (never to a specific bot, which we cannot guarantee).
 
@@ -9,8 +9,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
 import {
-  ArrowUp, CalendarDays, CheckCircle2, ChevronDown, Copy, FileText, Loader2, Pause, Play,
-  Plus, RefreshCw, Settings, SquarePen, ThumbsDown, ThumbsUp, Trash2, Users, X,
+  ArrowUp, CalendarDays, CheckCircle2, ChevronDown, Copy, FileText, Loader2, MessageSquareText,
+  Pause, Play, Plus, RefreshCw, Settings, SquarePen, ThumbsDown, ThumbsUp, Trash2, Users, X,
 } from '@/lib/icons';
 import { Button } from '@/components/ui/button';
 import {
@@ -21,6 +21,7 @@ import { ParallelAgentsPanel } from '@/components/chat/parallel-agents-panel';
 import { ApprovalCard } from '@/components/chat/approval-card';
 import { ClarificationCard } from '@/components/chat/clarification-card';
 import { TradeApprovalBanner } from '@/components/chat/trade-approval-banner';
+import { GroupBubble } from '@/components/bots/group-bubble';
 import type { HarnessUiEvent } from '@/lib/agent/events';
 import type { DelegationView } from '@/lib/agent/response-model';
 import {
@@ -36,6 +37,7 @@ import type { SessionFile } from '@/lib/chat/session-types';
 import { useWorkspaceStore } from '@/lib/agent-workspace/store';
 import { listAutomationHistory, type ExecutionView } from '@/lib/harness/clients/automation-browser';
 import { mentionedTargets } from '@/lib/bots/mentions';
+import { buildContextPacket, replyOwner, routeGroupRequest } from '@/lib/bots/group-orchestration';
 import { isDesk } from '@/lib/bots/desk';
 import { forgetGroupMemory } from '@/lib/bots/purge';
 import { BotAvatar } from '@/components/bots/bot-avatar';
@@ -99,6 +101,7 @@ export function GroupChatRoom({ group, bots, active = true, onDeleted, onChanged
   const [audience, setAudience] = useState<string>('all');
   /** Active @mention token query (null = the mention menu is closed). */
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [replyToId, setReplyToId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const controllersRef = useRef<AbortController[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -385,11 +388,27 @@ export function GroupChatRoom({ group, bots, active = true, onDeleted, onChanged
    * share or merge a reply.
    */
   const runMember = useCallback(
-    async (bot: AutomationView, text: string, prior: GroupMessage[], controllers: AbortController[]): Promise<string> => {
+    async (
+      bot: AutomationView,
+      text: string,
+      prior: GroupMessage[],
+      controllers: AbortController[],
+      meta?: {
+        replyToId?: string;
+        threadId?: string;
+        taskId?: string;
+        kind?: GroupMessage['kind'];
+        contextPacket?: string;
+      },
+    ): Promise<string> => {
       const replyId = newId();
       append(group.id, {
         id: replyId, role: 'assistant', content: '', at: new Date().toISOString(),
         authorId: bot.id, authorName: bot.name,
+        ...(meta?.replyToId ? { replyToId: meta.replyToId } : {}),
+        ...(meta?.threadId ? { threadId: meta.threadId } : {}),
+        ...(meta?.taskId ? { taskId: meta.taskId, taskOwnerId: bot.id } : {}),
+        kind: meta?.kind ?? 'result',
       });
       const controller = new AbortController();
       controllers.push(controller);
@@ -426,6 +445,7 @@ export function GroupChatRoom({ group, bots, active = true, onDeleted, onChanged
           bot,
           text,
           prior,
+          contextPacket: meta?.contextPacket,
           signal: controller.signal,
           onEvent: (event) => {
             applyDelegation(event);
@@ -486,33 +506,82 @@ export function GroupChatRoom({ group, bots, active = true, onDeleted, onChanged
     const text = input.trim();
     if (!text || sending || attachBusy || members.length === 0) return;
     const prior = useBotGroupsStore.getState().byGroup[group.id] ?? [];
-    append(group.id, { id: newId(), role: 'user', content: text, at: new Date().toISOString() });
-    setInput('');
-    setMentionQuery(null);
-    setSending(true);
+    const requestId = newId();
+    const replyTarget = replyToId ? prior.find((message) => message.id === replyToId) : undefined;
+    const threadReplyAuthor = replyOwner(prior, replyToId);
     // @mentions win over the audience selector: naming bots routes the turn to
-    // exactly those members. Uses the SAME parser as the main composer (word
-    // boundaries, longest-name-first) instead of a per-name regex.
+    // exactly those members. Uses the SAME parser as the main composer.
     const memberTargets = members.map((b) => ({
       kind: 'bot' as const, id: b.id, name: b.name, description: '', memberIds: [],
     }));
     const mentionedIds = new Set(mentionedTargets(text, memberTargets).map((m) => m.id));
-    const targets = mentionedIds.size
-      ? members.filter((b) => mentionedIds.has(b.id))
-      : audience === 'all'
-        ? members
-        : members.filter((b) => b.id === audience);
+    let routedOwnerId: string | undefined;
+    let targets: AutomationView[];
+    if (threadReplyAuthor) {
+      // A threaded reply goes back to the member who wrote the quoted message.
+      targets = members.filter((member) => member.id === threadReplyAuthor);
+    } else if (mentionedIds.size) {
+      targets = members.filter((member) => mentionedIds.has(member.id));
+    } else if (group.routingMode === 'lead' && group.leadId) {
+      // Deterministic lead routing: the best-matching member owns the request;
+      // a tie or no signal goes to the chair, who can reassign.
+      const decision = routeGroupRequest(text, members.map((member) => ({
+        id: member.id,
+        name: member.name,
+        description: member.description ?? undefined,
+        objective: member.action.objective ?? undefined,
+      })), group.leadId);
+      routedOwnerId = decision.ownerId;
+      targets = decision.ownerId
+        ? members.filter((member) => member.id === decision.ownerId)
+        : members;
+    } else {
+      targets = audience === 'all' ? members : members.filter((b) => b.id === audience);
+    }
+    const taskOwnerId = threadReplyAuthor
+      ?? routedOwnerId
+      ?? (group.routingMode === 'lead' ? undefined : targets[0]?.id);
+    append(group.id, {
+      id: requestId,
+      role: 'user',
+      content: text,
+      at: new Date().toISOString(),
+      kind: 'request',
+      taskId: requestId,
+      taskOwnerId,
+      taskStatus: 'open',
+      threadId: requestId,
+      ...(replyToId ? { replyToId } : {}),
+    });
+    setInput('');
+    setMentionQuery(null);
+    setReplyToId(null);
+    setSending(true);
     const controllers: AbortController[] = [];
     controllersRef.current = controllers;
+    const packetFor = (roundPrior: GroupMessage[]) => buildContextPacket({
+      groupName: group.name,
+      members: members.map((member) => member.name),
+      request: text,
+      prior: roundPrior,
+      replyTo: replyTarget
+        ? { author: replyTarget.authorName, text: replyTarget.content }
+        : null,
+    });
     try {
       if (group.mode === 'roundtable') {
         // Roundtable: members answer in order, and each later member receives
         // the replies already produced in THIS round. That is the difference
-        // between three independent opinions and an actual discussion. The
-        // round is still one reply per member; nothing is merged or hidden.
+        // between three independent opinions and an actual discussion.
         let roundPrior: GroupMessage[] = prior;
         for (const bot of targets) {
-          const reply = await runMember(bot, text, roundPrior, controllers);
+          const reply = await runMember(bot, text, roundPrior, controllers, {
+            replyToId: requestId,
+            threadId: requestId,
+            taskId: requestId,
+            kind: 'reply',
+            contextPacket: packetFor(roundPrior),
+          });
           if (!reply.trim()) continue;
           roundPrior = [
             ...roundPrior,
@@ -526,9 +595,7 @@ export function GroupChatRoom({ group, bots, active = true, onDeleted, onChanged
             },
           ];
         }
-        // An optional chair turns independent replies into one decision. It is
-        // a normal member turn (same identity, tools and memory), not a hidden
-        // merge: its synthesis is visible in the room like any other reply.
+        // An optional chair turns independent replies into one decision.
         const lead = members.find((member) => member.id === group.leadId);
         const replies = roundPrior.slice(prior.length).filter((m) => m.role === 'assistant');
         if (lead && replies.length >= 2) {
@@ -541,18 +608,71 @@ export function GroupChatRoom({ group, bots, active = true, onDeleted, onChanged
             digest,
             'Write one decision-oriented synthesis: the recommendation, the strongest disagreement or risk, and what still needs the operator. Do not invent facts and do not hide a disagreement.',
           ].join('\n\n');
-          await runMember(lead, synthesis, roundPrior, controllers);
+          await runMember(lead, synthesis, roundPrior, controllers, {
+            replyToId: requestId,
+            threadId: requestId,
+            taskId: requestId,
+            kind: 'result',
+            contextPacket: packetFor(roundPrior),
+          });
         }
       } else {
-        // Independent takes: all targeted bots answer in parallel; each streams
-        // into its own message so no reply is combined.
-        await Promise.all(targets.map((bot) => runMember(bot, text, prior, controllers)));
+        // Independent takes: all targeted bots answer in parallel.
+        await Promise.all(targets.map((bot) => runMember(bot, text, prior, controllers, {
+          replyToId: requestId,
+          threadId: requestId,
+          taskId: requestId,
+          kind: 'reply',
+          contextPacket: packetFor(prior),
+        })));
       }
+      updateMessage(group.id, requestId, { taskStatus: 'done' });
     } finally {
       controllersRef.current = [];
       setSending(false);
     }
-  }, [input, sending, attachBusy, members, audience, append, group.id, runMember]);
+  }, [input, sending, attachBusy, members, audience, append, updateMessage, group.id, group.name, group.mode, group.routingMode, group.leadId, replyToId, runMember]);
+
+  /** Reassign an open task to another member and run that member on the request. */
+  const reassign = useCallback(async (message: GroupMessage, ownerId: string) => {
+    const owner = members.find((member) => member.id === ownerId);
+    if (!owner || sending) return;
+    const prior = useBotGroupsStore.getState().byGroup[group.id] ?? [];
+    const taskId = message.taskId ?? message.id;
+    updateMessage(group.id, message.id, { taskOwnerId: owner.id, taskStatus: 'running' });
+    append(group.id, {
+      id: newId(),
+      role: 'assistant',
+      content: `Reassigned to ${owner.name}.`,
+      at: new Date().toISOString(),
+      authorName: 'Room',
+      kind: 'note',
+      threadId: taskId,
+      replyToId: message.id,
+      taskId,
+    });
+    setSending(true);
+    const controllers: AbortController[] = [];
+    controllersRef.current = controllers;
+    try {
+      await runMember(owner, message.content, prior, controllers, {
+        replyToId: message.id,
+        threadId: taskId,
+        taskId,
+        kind: 'result',
+        contextPacket: buildContextPacket({
+          groupName: group.name,
+          members: members.map((member) => member.name),
+          request: message.content,
+          prior,
+        }),
+      });
+      updateMessage(group.id, message.id, { taskStatus: 'done' });
+    } finally {
+      controllersRef.current = [];
+      setSending(false);
+    }
+  }, [append, group.id, group.name, members, runMember, sending, updateMessage]);
 
   /** Stop every in-flight member reply, keeping whatever streamed so far. */
   const stop = useCallback(() => {
@@ -659,7 +779,7 @@ export function GroupChatRoom({ group, bots, active = true, onDeleted, onChanged
 
   return (
     <div className="glass-card flex h-full min-h-0 flex-col rounded-2xl">
-      {/* Header — group identity + members */}
+      {/* Header â€” group identity + members */}
       <div className="flex items-start gap-3 border-b border-border/10 p-4">
         {group.image ? (
           <img src={group.image} alt="" className="h-12 w-12 shrink-0 rounded-2xl object-cover" />
@@ -799,6 +919,10 @@ export function GroupChatRoom({ group, bots, active = true, onDeleted, onChanged
               groupSpec={groupSpec}
               groupImage={group.image}
               onEdit={editGroupMessage}
+              replyParent={m.replyToId ? messages.find((parent) => parent.id === m.replyToId) : undefined}
+              members={members}
+              onReply={(id) => setReplyToId(id)}
+              onReassign={(message, ownerId) => void reassign(message, ownerId)}
               onRegenerate={
                 i === messages.length - 1 && m.role === 'assistant' && !m.error && !m.scheduled
                   ? regenerateGroup
@@ -824,6 +948,27 @@ export function GroupChatRoom({ group, bots, active = true, onDeleted, onChanged
 
       {/* Composer */}
       <div ref={setComposerEl} className="border-t border-border/10 p-3">
+        {replyToId && (() => {
+          const parent = messages.find((message) => message.id === replyToId);
+          if (!parent) return null;
+          return (
+            <div className="mb-2 flex items-start gap-2 rounded-lg border border-primary/30 bg-primary/5 px-2 py-1.5 text-[10px] text-muted-foreground">
+              <span className="min-w-0 flex-1">
+                <span className="font-semibold text-foreground/80">
+                  {t('bots.groups.replyingTo')} {parent.authorName ?? group.name}
+                </span>
+                <span className="ml-1 line-clamp-2">{parent.content.slice(0, 180)}</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setReplyToId(null)}
+                className="shrink-0 rounded p-0.5 hover:bg-white/10 hover:text-foreground"
+                aria-label={t('bots.groups.cancelReply')}
+                title={t('bots.groups.cancelReply')}
+              ><X size={11} /></button>
+            </div>
+          );
+        })()}
         {/* A member can call `order_preview`; the exact order must be
             confirmable in the room that produced it, not only in a bot chat. */}
         <TradeApprovalBanner />
@@ -959,7 +1104,7 @@ export function GroupChatRoom({ group, bots, active = true, onDeleted, onChanged
           )}
         </div>
         <div className="mt-1.5 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
-          <span className="truncate">{t('bots.groups.membersTitle')}: {members.map((m) => m.name).join(', ') || '—'}</span>
+          <span className="truncate">{t('bots.groups.membersTitle')}: {members.map((m) => m.name).join(', ') || 'â€”'}</span>
           {messages.length > 0 && (
             <button type="button" onClick={() => clearMessages(group.id)} className="shrink-0 hover:text-foreground">
               {t('bots.groups.clear')}
@@ -969,145 +1114,6 @@ export function GroupChatRoom({ group, bots, active = true, onDeleted, onChanged
       </div>
 
       <GroupSettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} group={group} bots={bots} />
-    </div>
-  );
-}
-
-function GroupBubble({
-  message,
-  groupName,
-  groupSpec,
-  groupImage,
-  onEdit,
-  onRegenerate,
-  onRetry,
-  onFeedback,
-}: {
-  message: GroupMessage;
-  groupName: string;
-  groupSpec: import('@/lib/bots/ghost').GhostSpec;
-  groupImage?: string;
-  onEdit: (id: string) => void;
-  onRegenerate?: (id: string) => void;
-  onRetry?: (id: string) => void;
-  onFeedback?: (id: string, fb: 'up' | 'down') => void;
-}) {
-  const t = useT();
-  const avatars = useBotAvatarStore((s) => s.avatars);
-  const [copied, setCopied] = useState(false);
-  const isUser = message.role === 'user';
-  // Each reply is from a specific member now, so show ITS avatar; fall back to
-  // the room identity for older/user turns.
-  const avatar = message.authorId
-    ? <BotAvatar botId={message.authorId} spec={avatarFor(avatars, message.authorId)} size={28} className="mt-0.5 shrink-0" title={message.authorName} />
-    : groupImage
-      ? <img src={groupImage} alt="" className="mt-0.5 h-7 w-7 shrink-0 rounded-full object-cover" />
-      : <GhostAvatar spec={groupSpec} size={28} className="mt-0.5 shrink-0" />;
-  const btn = 'flex h-5 w-5 cursor-pointer items-center justify-center rounded-md hover:bg-white/10 hover:text-foreground';
-  const copy = () => {
-    if (typeof navigator === 'undefined' || !navigator.clipboard) return;
-    void navigator.clipboard.writeText(message.content).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    }).catch(() => { /* clipboard unavailable */ });
-  };
-  const timeRow = (
-    <div className="mt-1 flex items-center gap-0.5 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-      <span className="mr-1">{formatDateTime(message.at)}</span>
-      <button type="button" onClick={copy} className={btn} title={copied ? t('bots.chat.copied') : t('bots.chat.copy')} aria-label={t('bots.chat.copy')}>
-        {copied ? <CheckCircle2 size={12} /> : <Copy size={12} />}
-      </button>
-      {!isUser && onFeedback && (
-        <>
-          <button
-            type="button"
-            onClick={() => onFeedback(message.id, 'up')}
-            className={cn(btn, message.feedback === 'up' && 'text-emerald-300')}
-            title={t('bots.chat.good')}
-            aria-label={t('bots.chat.good')}
-            aria-pressed={message.feedback === 'up'}
-          >
-            <ThumbsUp size={12} weight={message.feedback === 'up' ? 'fill' : 'regular'} />
-          </button>
-          <button
-            type="button"
-            onClick={() => onFeedback(message.id, 'down')}
-            className={cn(btn, message.feedback === 'down' && 'text-rose-300')}
-            title={t('bots.chat.bad')}
-            aria-label={t('bots.chat.bad')}
-            aria-pressed={message.feedback === 'down'}
-          >
-            <ThumbsDown size={12} weight={message.feedback === 'down' ? 'fill' : 'regular'} />
-          </button>
-        </>
-      )}
-      {isUser && !message.error && (
-        <button type="button" onClick={() => onEdit(message.id)} className={btn} title={t('bots.edit')} aria-label={t('bots.edit')}>
-          <SquarePen size={12} />
-        </button>
-      )}
-      {!isUser && onRegenerate && (
-        <button type="button" onClick={() => onRegenerate(message.id)} className={btn} title={t('bots.chat.regenerate')} aria-label={t('bots.chat.regenerate')}>
-          <RefreshCw size={12} />
-        </button>
-      )}
-      {!isUser && onRetry && (
-        <button type="button" onClick={() => onRetry(message.id)} className={btn} title={t('bots.chat.retry')} aria-label={t('bots.chat.retry')}>
-          <RefreshCw size={12} />
-        </button>
-      )}
-    </div>
-  );
-  // A room reply reads as a full-width document with no glass surface; only the
-  // user's own turns (and honest error turns) are framed as bubbles.
-  if (!isUser && !message.error) {
-    return (
-      <div className="group flex gap-2.5">
-        {avatar}
-        <div className="min-w-0 flex-1">
-          <div className="mb-0.5 flex items-center gap-1.5 text-[10px] font-semibold text-muted-foreground">
-            <span>{message.authorName ?? groupName}</span>
-            {message.scheduled && (
-              <span className="rounded-full border border-border/40 px-1.5 py-px text-[9px] font-normal uppercase tracking-wide text-muted-foreground/70">
-                {t('bots.chat.autoRun')}
-              </span>
-            )}
-          </div>
-          {message.delegations && message.delegations.length > 0 && (
-            <ParallelAgentsPanel delegations={message.delegations} compact />
-          )}
-          <Markdown content={message.content} compact className="w-full" />
-          {timeRow}
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className={cn('group flex gap-2.5', isUser ? 'flex-row-reverse' : 'flex-row')}>
-      {!isUser && avatar}
-      <div className={cn('flex min-w-0 max-w-[80%] flex-col gap-1', isUser ? 'items-end' : 'items-start')}>
-        <div
-          className={cn(
-            'rounded-2xl px-3.5 py-2 text-sm',
-            isUser
-              ? 'chat-bubble text-foreground'
-              : 'border border-rose-500/30 bg-rose-500/5 text-rose-200',
-          )}
-        >
-          {!isUser && (
-            <div className="mb-0.5 flex items-center gap-1.5 text-[10px] font-semibold text-muted-foreground">
-              <span>{message.authorName ?? groupName}</span>
-              {message.scheduled && (
-                <span className="rounded-full border border-border/40 px-1.5 py-px text-[9px] font-normal uppercase tracking-wide text-muted-foreground/70">
-                  {t('bots.chat.autoRun')}
-                </span>
-              )}
-            </div>
-          )}
-          <div className="whitespace-pre-wrap break-words">{message.content}</div>
-        </div>
-        {timeRow}
-      </div>
     </div>
   );
 }

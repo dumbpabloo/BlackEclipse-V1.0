@@ -57,6 +57,22 @@ def is_quiet_answer(output: Optional[str]) -> bool:
     return (output or "").strip() in QUIET_MARKERS
 
 
+def _provider_failure(code: str) -> bool:
+    """Whether a failed run may be retried on the bot's backup model.
+
+    A permission/configuration/credential error is never retried on another
+    model: that would hide the real operator action.
+    """
+    upper = (code or "").upper()
+    if not upper:
+        return False
+    if any(word in upper for word in ("PERMISSION", "FORBIDDEN", "CREDENTIAL", "CONFIG")):
+        return False
+    return any(upper.startswith(prefix) for prefix in (
+        "PROVIDER_", "RATE_", "MODEL_", "CONNECTION", "TIMEOUT", "SERVICE_",
+    ))
+
+
 @dataclass
 class DispatchResult:
     state: str
@@ -235,7 +251,33 @@ class Dispatcher:
             "re-check anything you rely on):\n" + "\n".join(parts)
         )
 
-    def _run_request(self, definition: AutomationDefinition, run_id: str, objective: str) -> RunRequest:
+    def _backup_model_settings(self, definition: AutomationDefinition) -> Optional[ModelSettings]:
+        """An optional backup provider/model for provider-class failures.
+
+        A backup is only used when the primary model fails before producing an
+        answer for a provider/transport reason; permission/configuration errors
+        are never retried on another model.
+        """
+        config = definition.action.config if isinstance(definition.action.config, dict) else {}
+        override = config.get("backupModelSettings")
+        if not isinstance(override, dict) or not override.get("model"):
+            return None
+        base = self._model_settings()
+        return ModelSettings(
+            provider=str(override.get("provider") or base.provider),
+            model=str(override["model"]),
+            base_url=override.get("baseUrl") or base.base_url,
+            api_key=base.api_key,
+        )
+
+    def _run_request(
+        self,
+        definition: AutomationDefinition,
+        run_id: str,
+        objective: str,
+        *,
+        model_settings: Optional[ModelSettings] = None,
+    ) -> RunRequest:
         action = definition.action
         query = (objective or definition.name)[:4000]
         # A scheduled run is a continuation, not a cold start. Give the model the
@@ -283,7 +325,7 @@ class Dispatcher:
             # what the bot learns running in the background is recalled when the
             # user next talks to it — and never leaks into another bot or a chat.
             conversationId=f"bot-{definition.id}",
-            modelSettings=self._model_settings_for(definition),
+            modelSettings=model_settings or self._model_settings_for(definition),
             autonomy=action.autonomy,
             # Same read-only sandbox an interactive chat turn gets, so a bot can
             # COMPUTE a derived figure (`analysis_run`) instead of only narrating.
@@ -524,6 +566,34 @@ class Dispatcher:
         error = dumped.get("error")
         state = COMPLETED if dumped.get("status") == "completed" else FAILED
         agent_run_id = dumped.get("runId") or run_id
+        backup_used = False
+        backup = self._backup_model_settings(definition)
+        if state == FAILED and backup is not None:
+            code = str(error.get("code") or "") if isinstance(error, dict) else ""
+            if _provider_failure(code):
+                backup_request = self._run_request(
+                    definition, run_id, action.objective or definition.name,
+                    model_settings=backup,
+                )
+                backup_result = await self._service.run(backup_request)
+                backup_dumped = (
+                    backup_result.model_dump()
+                    if hasattr(backup_result, "model_dump") else dict(backup_result)
+                )
+                if backup_dumped.get("status") == "completed":
+                    dumped = backup_dumped
+                    error = None
+                    state = COMPLETED
+                    agent_run_id = dumped.get("runId") or agent_run_id
+                    backup_used = True
+                else:
+                    # Report the BACKUP's failure, not the primary's: the operator
+                    # needs to know the fallback also failed.
+                    dumped = backup_dumped
+                    error = backup_dumped.get("error")
+                    state = FAILED
+                    agent_run_id = backup_dumped.get("runId") or agent_run_id
+                    backup_used = True
         self._task_finish(task, state=state, run_id=agent_run_id,
                           error=error.get("message") if isinstance(error, dict) else None,
                           error_class=error.get("code") if isinstance(error, dict) else None)
@@ -540,6 +610,8 @@ class Dispatcher:
             detail["pendingApprovals"] = pending
         if quiet:
             detail["quiet"] = True
+        if backup_used:
+            detail["backupModelUsed"] = True
         return DispatchResult(
             state=state,
             run_id=agent_run_id,

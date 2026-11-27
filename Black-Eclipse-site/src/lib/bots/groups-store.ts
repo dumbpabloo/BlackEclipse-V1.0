@@ -59,6 +59,9 @@ export interface BotGroup {
   /** Optional chair for a roundtable: synthesizes the members' replies into one
    *  decision after the round. Must be a member; null/undefined means no chair. */
   leadId?: string | null;
+  /** `all` = every targeted member answers; `lead` = the lead routes an
+   *  unaddressed request to the best member (or handles it itself). */
+  routingMode?: 'all' | 'lead';
   createdAt: string;
   /** Server row's last write, used to resolve a local/server merge. */
   updatedAt?: string;
@@ -86,6 +89,16 @@ export interface GroupMessage {
   scheduled?: boolean;
   /** Execution id of the autonomous run — the idempotency key. */
   runId?: string;
+  /** The root request this message belongs to (its own id for a request). */
+  taskId?: string;
+  /** The member who currently owns the task. */
+  taskOwnerId?: string;
+  taskStatus?: 'open' | 'running' | 'done' | 'blocked' | 'cancelled';
+  /** Threaded reply target (a request or another reply). */
+  replyToId?: string;
+  /** The thread root a message belongs to (normally the request id). */
+  threadId?: string;
+  kind?: 'request' | 'reply' | 'result' | 'note';
 }
 
 interface Persisted {
@@ -103,6 +116,7 @@ interface BotGroupsStore {
   setGroupImage: (id: string, dataUrl: string | null) => void;
   setGroupMode: (id: string, mode: GroupMode) => void;
   setGroupLead: (id: string, leadId: string | null) => void;
+  setGroupRouting: (id: string, routingMode: 'all' | 'lead') => void;
   /** Replace the member set (clamped to 2–6). */
   setMembers: (id: string, memberIds: string[]) => void;
   /** Remove a deleted bot from every room (and drop rooms left with no members). */
@@ -127,6 +141,7 @@ function sanitizePersisted(input: unknown): Persisted {
       ...g,
       mode: g.mode === 'roundtable' ? 'roundtable' as const : 'parallel' as const,
       leadId: g.leadId && g.memberIds.includes(g.leadId) ? g.leadId : null,
+      routingMode: g.routingMode === 'lead' ? 'lead' as const : 'all' as const,
     }))
     : [];
   const byGroup: Record<string, GroupMessage[]> = {};
@@ -184,6 +199,7 @@ function roomOf(group: BotGroup): RoomLogEntry {
     name: group.name,
     memberIds: group.memberIds,
     mode: group.mode === 'roundtable' ? 'roundtable' : 'parallel',
+    routingMode: group.routingMode === 'lead' ? 'lead' : 'all',
     leadId: group.leadId ?? null,
     image: group.image ?? null,
     createdAt: group.createdAt,
@@ -306,6 +322,7 @@ export const useBotGroupsStore = create<BotGroupsStore>((set, get) => {
         memberIds: [...memberIds],
         image,
         mode: mode === 'roundtable' ? 'roundtable' : 'parallel',
+        routingMode: 'all',
         createdAt: new Date().toISOString(),
       });
       commit([group, ...get().groups], get().byGroup);
@@ -336,6 +353,15 @@ export const useBotGroupsStore = create<BotGroupsStore>((set, get) => {
     setGroupMode: (id, mode) => {
       const next = get().groups.map((g) => (
         g.id === id ? stamp({ ...g, mode: mode === 'roundtable' ? 'roundtable' : 'parallel' }) : g
+      ));
+      commit(next, get().byGroup);
+      const changed = next.find((g) => g.id === id);
+      if (changed) syncRoom(changed);
+    },
+
+    setGroupRouting: (id, routingMode) => {
+      const next = get().groups.map((g) => (
+        g.id === id ? stamp({ ...g, routingMode: routingMode === 'lead' ? 'lead' : 'all' }) : g
       ));
       commit(next, get().byGroup);
       const changed = next.find((g) => g.id === id);

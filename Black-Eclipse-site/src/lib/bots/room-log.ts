@@ -10,6 +10,7 @@ export interface RoomLogEntry {
   name: string;
   memberIds: string[];
   mode?: 'parallel' | 'roundtable';
+  routingMode?: 'all' | 'lead';
   leadId?: string | null;
   image?: string | null;
   createdAt: string;

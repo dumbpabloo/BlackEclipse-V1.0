@@ -126,10 +126,14 @@ export function buildGroupMemberMessages(
   text: string,
   prior: readonly PriorGroupTurn[],
   limit = 8,
+  contextPacket?: string,
 ): ChatMessage[] {
   const history: ChatMessage[] = [
     { role: 'user', content: groupMemberPersona(group, bot) },
     { role: 'assistant', content: `Understood — I am ${bot.name}.` },
+    ...(contextPacket
+      ? [{ role: 'system' as const, content: `Shared room context (bounded, unverified):\n${contextPacket}` }]
+      : []),
     ...prior
       .filter((m) => !m.error && m.content.trim().length > 0)
       .slice(-limit)
@@ -259,6 +263,8 @@ export interface RunGroupMemberTurnArgs {
   onDelta?: (chunk: string) => void;
   /** Typed harness events for this turn (approvals etc.), when the caller needs them. */
   onEvent?: (event: HarnessUiEvent) => void;
+  /** Bounded shared-room context packet (group name, request, recent replies). */
+  contextPacket?: string;
 }
 
 /**
@@ -266,13 +272,13 @@ export interface RunGroupMemberTurnArgs {
  * reply: each streams into its own message via `onDelta`.
  */
 export async function runGroupMemberTurn(args: RunGroupMemberTurnArgs): Promise<string> {
-  const { group, bot, text, prior, model, signal, onDelta, onEvent } = args;
+  const { group, bot, text, prior, model, signal, onDelta, onEvent, contextPacket } = args;
   if (bot.action.type === 'execute_workflow') {
     return runWorkflowTurn({ bot, text, signal, onDelta, extra: { group: group.name } });
   }
   const pin = botModelPin(bot);
   const images = referenceImages(bot);
-  return getAgentProvider().chat(buildGroupMemberMessages(group, bot, text, prior), undefined, {
+  return getAgentProvider().chat(buildGroupMemberMessages(group, bot, text, prior, 8, contextPacket), undefined, {
     agentId: bot.action.agentId || 'eclipse-agent',
     chatId: groupMemberChatId(group.id, bot.id),
     workspaceRootId: botWorkspaceRootId(bot.id),

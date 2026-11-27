@@ -3,38 +3,39 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Black Eclipse — open-source financial AI harness</title>
-<meta name="description" content="Black Eclipse is an open-source financial AI harness: LLM agents that research companies, backtest quantitative strategies, analyze portfolios, and automate trading workflows on your own machine. Python + Next.js, MIT licensed." />
-<meta name="keywords" content="open source financial AI, AI agents, agentic AI, financial analysis, quantitative finance, algorithmic trading, backtesting, portfolio analysis, LLM, LangGraph, Python, Next.js, stock research" />
-<link rel="canonical" href="https://dumbpabloo.github.io/black-eclipse/" />
+<title>Black Eclipse — an open-source agentic harness for finance</title>
+<meta name="description" content="Black Eclipse is an open-source agentic harness designed to help you automate finance. Deterministic math, cited sources, scheduled agents, backtesting and gated trading — on your own machine." />
+<meta name="keywords" content="open source finance, agentic harness, AI agents, financial analysis, quantitative finance, algorithmic trading, backtesting, portfolio analysis, LLM, Python, Next.js, stock research" />
+<link rel="canonical" href="https://dumbpabloo.github.io/BlackEclipse-V1.0/" />
 <meta property="og:type" content="website" />
-<meta property="og:title" content="Black Eclipse — open-source financial AI harness" />
-<meta property="og:description" content="Research, backtest, analyze portfolios and automate trading workflows with LLM agents. Deterministic math, cited sources, runs locally." />
-<meta property="og:url" content="https://dumbpabloo.github.io/black-eclipse/" />
-<meta property="og:image" content="https://raw.githubusercontent.com/dumbpabloo/black-eclipse/main/Black-Eclipse-site/docs/figures/readme/02-agent.png" />
+<meta property="og:title" content="Black Eclipse — an open-source agentic harness for finance" />
+<meta property="og:description" content="Automate finance with agents that plan, call tools, compute in Python and cite their sources. Local-first, MIT licensed." />
+<meta property="og:url" content="https://dumbpabloo.github.io/BlackEclipse-V1.0/" />
+<meta property="og:image" content="https://raw.githubusercontent.com/dumbpabloo/BlackEclipse-V1.0/main/Black-Eclipse-site/docs/figures/readme/02-agent.png" />
 <meta name="twitter:card" content="summary_large_image" />
 <style>
   :root {
     color-scheme: dark;
-    --bg: #0a0a0c;
-    --panel: #121216;
-    --line: #26262d;
-    --ink: #f2f2f4;
-    --muted: #9a9aa5;
-    --accent: #7c8cff;
+    --bg: #050607;
+    --panel: #0d0f10;
+    --line: #22262a;
+    --ink: #f4f5f2;
+    --muted: #8b918d;
+    --accent: #b4ff42;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
     background:
-      radial-gradient(60rem 30rem at 15% -10%, #1a1a2e 0%, transparent 60%),
-      radial-gradient(50rem 28rem at 90% 0%, #101a24 0%, transparent 55%),
+      radial-gradient(55rem 28rem at 12% -8%, #14200a 0%, transparent 62%),
+      radial-gradient(45rem 26rem at 92% 0%, #0d1418 0%, transparent 58%),
       var(--bg);
     color: var(--ink);
-    font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    font: 16px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
     -webkit-font-smoothing: antialiased;
   }
-  main { max-width: 960px; margin: 0 auto; padding: 72px 24px 96px; }
+  main { max-width: 980px; margin: 0 auto; padding: 72px 24px 96px; }
+  a { color: var(--accent); }
   .eyebrow {
     display: inline-flex; gap: 8px; align-items: center;
     border: 1px solid var(--line); background: var(--panel);
@@ -42,37 +43,62 @@
     padding: 6px 14px; font-size: 12px; letter-spacing: .08em;
     text-transform: uppercase;
   }
-  h1 { font-size: clamp(2.4rem, 7vw, 4rem); line-height: 1.05; margin: 24px 0 12px; letter-spacing: -0.03em; }
+  h1 { font-size: clamp(2.6rem, 7vw, 4.2rem); line-height: 1.02; margin: 24px 0 16px; letter-spacing: -0.035em; }
   h1 span { color: var(--accent); }
-  .lede { font-size: clamp(1.05rem, 2.4vw, 1.3rem); color: #d4d4dc; max-width: 44rem; margin: 0 0 28px; }
+  .lede { font-size: clamp(1.1rem, 2.6vw, 1.45rem); color: #e6e8e3; max-width: 48rem; margin: 0 0 18px; }
   .lede strong { color: var(--ink); font-weight: 600; }
+  .sub { color: var(--muted); max-width: 46rem; margin: 0 0 30px; }
   .cta { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
   .btn {
     display: inline-flex; align-items: center; gap: 8px;
     padding: 12px 20px; border-radius: 10px; text-decoration: none;
     font-weight: 600; font-size: 15px; border: 1px solid transparent;
   }
-  .btn-primary { background: var(--ink); color: #0a0a0c; }
-  .btn-primary:hover { background: #fff; }
+  .btn-primary { background: var(--accent); color: #0a0d05; }
+  .btn-primary:hover { background: #c6ff6e; }
   .btn-ghost { border-color: var(--line); background: var(--panel); color: var(--ink); }
-  .btn-ghost:hover { border-color: #3a3a45; }
+  .btn-ghost:hover { border-color: #3a3f45; }
   .note { color: var(--muted); font-size: 13px; margin: 0 0 48px; }
   .shot {
     width: 100%; border: 1px solid var(--line); border-radius: 14px;
     display: block; background: var(--panel);
   }
   .caption { color: var(--muted); font-size: 13px; margin: 10px 0 56px; }
-  h2 { font-size: 1.35rem; margin: 0 0 18px; letter-spacing: -0.01em; }
-  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); margin-bottom: 56px; }
+  h2 { font-size: 1.5rem; margin: 0 0 6px; letter-spacing: -0.015em; }
+  .section-lede { color: var(--muted); margin: 0 0 22px; max-width: 46rem; }
+  section { margin-bottom: 64px; }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
   .card {
     background: var(--panel); border: 1px solid var(--line);
     border-radius: 14px; padding: 18px 20px;
   }
-  .card h3 { margin: 0 0 6px; font-size: 15px; }
+  .card h3 { margin: 0 0 6px; font-size: 15px; letter-spacing: -0.01em; }
   .card p { margin: 0; color: var(--muted); font-size: 14px; }
+  .card a { font-size: 13px; text-decoration: none; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; vertical-align: top; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+  td:first-child { color: var(--ink); white-space: nowrap; }
+  td { color: #b9beb7; }
+  .wrap { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--panel); }
+  pre {
+    margin: 0; padding: 18px 20px; overflow-x: auto;
+    font: 13px/1.6 ui-monospace, "JetBrains Mono", Consolas, monospace; color: #cdd3c8;
+    background: #090b0c;
+  }
+  .loop {
+    display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    margin-bottom: 18px;
+  }
+  .step {
+    border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+    padding: 12px 14px; font-size: 13px;
+  }
+  .step b { display: block; color: var(--accent); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 2px; }
+  .step span { color: var(--muted); }
   footer { border-top: 1px solid var(--line); padding-top: 24px; color: var(--muted); font-size: 13px; }
-  footer a { color: #b9b9c6; }
-  a { color: var(--accent); }
+  footer a { color: #c9cfc3; }
+  code { font: 13px ui-monospace, Consolas, monospace; color: var(--accent); }
 </style>
 <script type="application/ld+json">
 {
@@ -81,10 +107,10 @@
   "name": "Black Eclipse",
   "applicationCategory": "FinanceApplication",
   "operatingSystem": "Windows, macOS, Linux",
-  "description": "Open-source financial AI harness: LLM agents for financial research, quantitative analysis, backtesting, portfolio analysis and automated trading workflows.",
+  "description": "Open-source agentic harness designed to help you automate finance: agents for financial research, deterministic analysis, backtesting, portfolio analysis and gated trading workflows.",
   "license": "https://opensource.org/licenses/MIT",
-  "codeRepository": "https://github.com/dumbpabloo/black-eclipse",
-  "downloadUrl": "https://github.com/dumbpabloo/black-eclipse/releases/latest",
+  "codeRepository": "https://github.com/dumbpabloo/BlackEclipse-V1.0",
+  "downloadUrl": "https://github.com/dumbpabloo/BlackEclipse-V1.0/releases/latest",
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
 }
 </script>
@@ -94,54 +120,128 @@
   <span class="eyebrow">Open source · MIT · local-first</span>
   <h1>Black <span>Eclipse</span></h1>
   <p class="lede">
-    <strong>The open-source financial AI harness.</strong>
-    LLM agents that research companies, backtest quantitative strategies,
-    analyze portfolios, and automate trading workflows — on your own machine.
+    <strong>Black Eclipse is an open-source agentic harness designed to help you
+    automate finance.</strong>
+  </p>
+  <p class="sub">
+    Agents that plan, call tools, run deterministic Python for the math, check
+    their own sources, and keep a durable record of what they did — on your
+    machine, with your own model.
   </p>
 
   <div class="cta">
-    <a class="btn btn-primary" href="https://github.com/dumbpabloo/black-eclipse/releases/latest">Download for Windows</a>
-    <a class="btn btn-ghost" href="https://github.com/dumbpabloo/black-eclipse">View on GitHub</a>
+    <a class="btn btn-primary" href="https://github.com/dumbpabloo/BlackEclipse-V1.0/releases/latest">Download for Windows</a>
+    <a class="btn btn-ghost" href="https://github.com/dumbpabloo/BlackEclipse-V1.0">View source</a>
+    <a class="btn btn-ghost" href="#features">What it does</a>
   </div>
   <p class="note">Windows 10/11 x64 installer, unsigned — verify the SHA-256 before running.</p>
 
-  <img class="shot" src="https://raw.githubusercontent.com/dumbpabloo/black-eclipse/main/Black-Eclipse-site/docs/figures/readme/02-agent.png" alt="The Eclipse Agent research surface, driven by slash commands and tools" loading="lazy" />
+  <img class="shot" src="https://raw.githubusercontent.com/dumbpabloo/BlackEclipse-V1.0/main/Black-Eclipse-site/docs/figures/readme/02-agent.png" alt="The Eclipse Agent research surface, driven by slash commands and tools" loading="eager" />
   <p class="caption">Eclipse Agent: the research surface, driven by slash commands and tools. A capture of the running app, not a mockup.</p>
 
-  <h2>What it does</h2>
-  <div class="grid">
-    <div class="card">
-      <h3>Financial research</h3>
-      <p>Companies, filings, fundamentals and news, with every claim tied to the source that produced it.</p>
+  <section id="features">
+    <h2>Features</h2>
+    <p class="section-lede">Six capabilities, one runtime. The model plans and explains; the engines compute.</p>
+    <div class="grid">
+      <div class="card">
+        <h3>Research with receipts</h3>
+        <p>Companies, filings, fundamentals and news. Every claim carries the handle of the source that produced it; conflicts are disclosed, not averaged.</p>
+      </div>
+      <div class="card">
+        <h3>Deterministic finance engine</h3>
+        <p>Metrics, ratios, valuation and risk run in Python with formula, inputs, assumptions and seed attached.</p>
+      </div>
+      <div class="card">
+        <h3>Strategy and backtesting</h3>
+        <p>Versioned IR, visual graphs or sandboxed Python — tested with anti-lookahead backtests, walk-forward, Deflated Sharpe and an overfitting check.</p>
+      </div>
+      <div class="card">
+        <h3>Portfolio and journal</h3>
+        <p>Holdings, performance, allocation, exposure, risk decomposition, a trading journal and broker reconciliation.</p>
+      </div>
+      <div class="card">
+        <h3>Agents, bots and automation</h3>
+        <p>Cron, event and condition triggers; durable runs with leases and retries; agent teams, persistent memory and reviewed skills.</p>
+      </div>
+      <div class="card">
+        <h3>Trading, gated</h3>
+        <p>MetaTrader 5 behind single-use approvals, demo mandates, margin caps and a kill switch — or a refusal naming the missing gate.</p>
+      </div>
     </div>
-    <div class="card">
-      <h3>Quantitative analysis</h3>
-      <p>Deterministic engines compute the numbers — formula, inputs and assumptions attached.</p>
-    </div>
-    <div class="card">
-      <h3>Backtesting</h3>
-      <p>Anti-lookahead backtests, walk-forward evaluation, Deflated Sharpe and overfitting checks.</p>
-    </div>
-    <div class="card">
-      <h3>Agent automation</h3>
-      <p>Scheduled agents, workflows and durable runs, with permissions and tool effects declared.</p>
-    </div>
-  </div>
+  </section>
 
-  <h2>Built as a harness, not a wrapper</h2>
-  <p class="lede">
-    Provider-agnostic model runtime, a local market-data vault, sandboxed Python,
-    persistent memory and a controlled trading boundary. The model plans and
-    explains; the engines compute. A number it cannot source reads
-    <code>UNAVAILABLE</code> instead of being guessed.
-  </p>
+  <section id="use">
+    <h2>Use</h2>
+    <p class="section-lede">Each one is a run you can inspect afterwards — plan, tool calls, sources and receipts included.</p>
+    <div class="wrap">
+      <table>
+        <thead><tr><th>Use it to…</th><th>Start with</th><th>What you get</th></tr></thead>
+        <tbody>
+          <tr><td>Value a company</td><td>Ask for a quarter, a valuation or a peer comparison</td><td>A cited report; the arithmetic shown with inputs and assumptions</td></tr>
+          <tr><td>Find setups</td><td>Screen global markets, then open Market Bubbles</td><td>A ranked shortlist of real instruments, sized by traded value</td></tr>
+          <tr><td>Test an idea</td><td>Write the strategy in Strategy Studio or sandboxed Python</td><td>An equity curve, a walk-forward result and a grade</td></tr>
+          <tr><td>Run a morning brief</td><td>Schedule a bot for 08:00</td><td>A delivered briefing that lists what each source returned and what it could not</td></tr>
+          <tr><td>Reconcile your book</td><td>Import broker trades into the journal</td><td>Allocation, risk and a discrepancy list</td></tr>
+          <tr><td>Paper-trade a mandate</td><td>Backtest, approve, connect a demo account</td><td>One order under a capped mandate — or a refusal naming the missing gate</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="needs">
+    <h2>Needs</h2>
+    <p class="section-lede">One download, nothing to install first. The installer is the application: Node, Python, SQLite, the agent stack and a seeded vault ship inside it.</p>
+    <div class="wrap">
+      <table>
+        <thead><tr><th>Need</th><th>Detail</th></tr></thead>
+        <tbody>
+          <tr><td>Operating system</td><td>Windows 10/11 (x64). macOS and Linux builds exist but are not published yet</td></tr>
+          <tr><td>Administrator rights</td><td>None — per-user install, no admin prompt</td></tr>
+          <tr><td>Node.js, Python, SQLite</td><td>Not required — all three ship inside the payload</td></tr>
+          <tr><td>Account, telemetry</td><td>None — the app runs entirely on your machine</td></tr>
+          <tr><td>A language model</td><td>A hosted provider key, or Ollama running locally</td></tr>
+          <tr><td>Internet</td><td>Needed for live prices and model calls; offline, unavailable data reads <code>UNAVAILABLE</code></td></tr>
+          <tr><td>A broker</td><td>Optional — only needed for execution</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="how">
+    <h2>How it works</h2>
+    <p class="section-lede">A harness, not a wrapper. The model plans and explains; deterministic engines compute; every effect is declared and recoverable.</p>
+    <div class="loop">
+      <div class="step"><b>1 · Plan</b><span>The agent chooses tools and states its intent</span></div>
+      <div class="step"><b>2 · Act</b><span>Tools run with declared permissions and effect classes</span></div>
+      <div class="step"><b>3 · Compute</b><span>Python returns numbers with formula, inputs and seed</span></div>
+      <div class="step"><b>4 · Verify</b><span>Claims carry source handles; gaps return UNAVAILABLE</span></div>
+      <div class="step"><b>5 · Record</b><span>The durable run keeps the plan, calls and receipts</span></div>
+    </div>
+
+    <img class="shot" src="https://raw.githubusercontent.com/dumbpabloo/BlackEclipse-V1.0/main/Black-Eclipse-site/docs/figures/readme/06-bots.png" alt="Scheduled bots, each reporting what it could and could not retrieve" loading="lazy" />
+    <p class="caption">Bots: scheduled agents that report what each source returned and mark the rest <code>UNAVAILABLE</code> instead of filling the gap.</p>
+  </section>
+
+  <section id="install">
+    <h2>Install</h2>
+    <p class="section-lede">Windows 10/11 x64. The installer is unsigned; verify the checksum before running.</p>
+    <div class="cta">
+      <a class="btn btn-primary" href="https://github.com/dumbpabloo/BlackEclipse-V1.0/releases/latest">Download for Windows</a>
+      <a class="btn btn-ghost" href="https://github.com/dumbpabloo/BlackEclipse-V1.0/releases">All releases</a>
+    </div>
+    <p class="note" style="margin-bottom:20px">Or from a terminal — the same artifact, verified and installed:</p>
+    <div class="wrap">
+      <pre>irm https://raw.githubusercontent.com/dumbpabloo/BlackEclipse-V1.0/main/Black-Eclipse-site/scripts/install-release.ps1 -OutFile install-release.ps1
+./install-release.ps1</pre>
+    </div>
+  </section>
 
   <footer>
     <p>
-      <a href="https://github.com/dumbpabloo/black-eclipse">GitHub</a> ·
-      <a href="https://github.com/dumbpabloo/black-eclipse/blob/main/README.md">README</a> ·
-      <a href="https://github.com/dumbpabloo/black-eclipse/blob/main/Black-Eclipse-site/docs/QUICKSTART.md">Quickstart</a> ·
-      <a href="https://github.com/dumbpabloo/black-eclipse/blob/main/Black-Eclipse-site/docs/ARCHITECTURE.md">Architecture</a>
+      <a href="https://github.com/dumbpabloo/BlackEclipse-V1.0">GitHub</a> ·
+      <a href="https://github.com/dumbpabloo/BlackEclipse-V1.0/blob/main/README.md">README</a> ·
+      <a href="https://github.com/dumbpabloo/BlackEclipse-V1.0/blob/main/Black-Eclipse-site/docs/QUICKSTART.md">Quickstart</a> ·
+      <a href="https://github.com/dumbpabloo/BlackEclipse-V1.0/blob/main/Black-Eclipse-site/docs/ARCHITECTURE.md">Architecture</a>
     </p>
     <p>Research and analysis software, not investment advice. Code is MIT licensed; the name and logo are not.</p>
   </footer>

@@ -1,7 +1,7 @@
 ---
 title: Overview & Mental Model
 status: Current
-last-verified: 2026-10-21
+last-verified: 2026-11-26
 ---
 
 # Overview & Mental Model
@@ -11,10 +11,12 @@ want to understand what the thing does.
 
 ## What BlackEclipse is
 
-An open-source, agentic investment-research platform with a Bloomberg-inspired
-terminal UI. You screen stocks across 25+ world markets, watch a portfolio,
-follow news, explore market bubbles, keep a trading journal, and talk to a
-research agent — all in one dark, dense, glassmorphic SPA.
+**Black Eclipse is an open-source agentic harness designed to help you automate
+finance.** It pairs a Bloomberg-inspired terminal UI with a Python agent runtime:
+you screen stocks across 25+ world markets, watch a portfolio, follow news,
+explore market bubbles, keep a trading journal, and talk to a research agent —
+all in one dark, dense, glassmorphic SPA. The same harness runs scheduled agents,
+backtests strategies and gates trading behind explicit approvals.
 
 The defining constraint: **it must run with zero configuration.** Clone it, run
 it, and there is market data on screen. Everything paid or keyed is an opt-in.

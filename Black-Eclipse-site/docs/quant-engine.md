@@ -876,6 +876,9 @@ method card -> structure scan -> falsifiable hypothesis -> spec
 - **Synthesis** (`synthesize.py`) — method → valid `StrategySpec` (with explicit
   costs/sizing/risk); non-single-asset methods refuse with their `requires`.
   `build_combination` composes two methods into a new validated conjunction.
+  `infer_asset_class` must emit the validator's own spelling (`future`, not
+  `futures`) or every `=F` / GC / CL symbol is rejected as
+  `UNSUPPORTED_ASSET_CLASS` before any backtest.
 - **Mining** (`miner.py`) — bounded parameter grid, chronological IS/OOS split,
   the REAL trial count and a Deflated Sharpe; candidates are `candidate | weak |
   rejected`, never "validated".

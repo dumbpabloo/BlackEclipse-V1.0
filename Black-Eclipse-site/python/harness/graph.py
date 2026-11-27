@@ -216,6 +216,13 @@ def resolve_agent(request: RunRequest) -> AgentConfig:
 
 DEFAULT_CHAT_MAX_STEPS = 24
 CHAT_MAX_STEPS_CEILING = 32
+#: A deep quantitative cycle (catalog -> data -> build -> validate -> robustness
+#: -> artifact) needs more than the ordinary chat navigation budget. The step
+#: ceiling is the same; the TOOL-CALL budget is the real bind: a strategy build
+#: reached the 48-call chat limit at step 22 with steps still available, so it
+#: never called validate/create/backtest.
+DEEP_QUANT_MAX_STEPS = 32
+DEEP_QUANT_MAX_TOOL_CALLS = 64
 #: The ordinary chat turn's WALL CLOCK. The preset's `runTimeoutMs` is the
 #: per-MODEL-CALL budget; using it as the whole-run deadline made every real
 #: research turn (8-20 steps, multi-second tools) exceed 120s and fail with
@@ -242,16 +249,28 @@ def chat_step_budget(agent: AgentConfig, request: Any) -> int:
     """
     base = int(agent.maxSteps or 8)
     explicit = getattr(request, "agent", None) is not None
+    parsed: Optional[int] = None
     if agent.id == "eclipse-agent" and not explicit:
         raw = (os.environ.get("ECLIPSE_CHAT_MAX_STEPS") or "").strip()
-        parsed: Optional[int] = None
         if raw:
             try:
                 parsed = int(raw)
             except ValueError:
                 parsed = None
         base = parsed if parsed is not None else max(base, DEFAULT_CHAT_MAX_STEPS)
-    return max(1, min(CHAT_MAX_STEPS_CEILING, base))
+    steps = max(1, min(CHAT_MAX_STEPS_CEILING, base))
+    # A strategy/model build is a deep research cycle, not navigation. Raise the
+    # step floor for it here (not only at the graph call site) so `run.started`
+    # reports the budget the run actually uses. An explicit per-run agent config
+    # and an operator's `ECLIPSE_CHAT_MAX_STEPS` both remain authoritative.
+    if agent.id == "eclipse-agent" and not explicit and parsed is None:
+        from .quant_intent import is_deep_quant_turn  # noqa: PLC0415
+
+        query = str(getattr(getattr(request, "input", None), "query", "") or "")
+        history = getattr(getattr(request, "input", None), "history", None)
+        if is_deep_quant_turn(query, history):
+            steps = max(steps, DEEP_QUANT_MAX_STEPS)
+    return steps
 
 
 def chat_run_budget(agent: AgentConfig, request: Any) -> float:
@@ -563,10 +582,16 @@ def build_graph(spec: RunSpec, scope: RunScope) -> Any:
     # Phase 22 / S2: a build session's budget, clamped to the hard caps.
     max_steps, run_timeout_s = requested_budget(max_steps, run_timeout_s, request)
     # A deep quant cycle (catalog -> data -> build -> validate -> robustness ->
-    # artifact) needs more than the ordinary chat navigation budget.
+    # artifact) gets the chat's step floor from `chat_step_budget` and a wider
+    # tool-call budget here: 48 calls ran out at step 22 of a strategy build, so
+    # the run never reached validate/create/backtest.
     from .quant_intent import is_deep_quant_turn  # noqa: PLC0415
-    if is_deep_quant_turn(request.input.query, getattr(request.input, "history", None)):
-        max_steps = max(max_steps, 32); run_timeout_s = max(run_timeout_s, 600.0)
+
+    deep_quant = is_deep_quant_turn(
+        request.input.query, getattr(request.input, "history", None)
+    )
+    if deep_quant:
+        run_timeout_s = max(run_timeout_s, 600.0)
     # Round 5 / C1: `run_timeout_s` is the RUN's wall clock. A single model call
     # gets its own, smaller ceiling, so one dead provider cannot consume the
     # whole budget and the retry policy has room to act.
@@ -576,6 +601,8 @@ def build_graph(spec: RunSpec, scope: RunScope) -> Any:
     # `limits.maxToolCalls`; this ENFORCES it in the loop (a skill cannot exceed
     # its declared budget by prompting or by looping). None = unbounded (chat).
     max_tool_calls: Optional[int] = agent.maxToolCalls
+    if deep_quant and max_tool_calls:
+        max_tool_calls = max(int(max_tool_calls), DEEP_QUANT_MAX_TOOL_CALLS)
     # W3: tool execution flags resolved ONCE per run/attempt. A guardrail ledger
     # is per attempt (a resume starts clean); parallel planning is read-only and
     # can never widen the surface.

@@ -39,6 +39,21 @@ def test_invalid_env_is_ignored(monkeypatch):
     assert chat_step_budget(ECLIPSE_AGENT, _req()) == 24
 
 
+def test_deep_quant_turn_gets_the_strategy_build_floor(monkeypatch):
+    """A strategy/model build is a research cycle, not chat navigation."""
+    monkeypatch.delenv("ECLIPSE_CHAT_MAX_STEPS", raising=False)
+    request = SimpleNamespace(
+        agent=None,
+        input=SimpleNamespace(
+            query="build me a strategy and backtest it", history=None,
+        ),
+    )
+    assert chat_step_budget(ECLIPSE_AGENT, request) == 32
+    # The operator's explicit budget still wins over the deep-quant floor.
+    monkeypatch.setenv("ECLIPSE_CHAT_MAX_STEPS", "20")
+    assert chat_step_budget(ECLIPSE_AGENT, request) == 20
+
+
 def test_explicit_agent_config_wins(monkeypatch):
     monkeypatch.setenv("ECLIPSE_CHAT_MAX_STEPS", "20")
     explicit = ECLIPSE_AGENT.model_copy(update={"maxSteps": 6})

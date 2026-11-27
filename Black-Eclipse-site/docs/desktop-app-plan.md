@@ -690,7 +690,8 @@ Status: **implemented 2026-11-12.** Contract and rationale:
 
 Shipped:
 
-1. **Unread badge + attention flash (M1).** Red overlay dot (`SetOverlayIcon`)
+1. **Unread badge + attention flash (M1).** Red overlay count badge
+   (`SetOverlayIcon`; the shell paints the number, `99+` past a hundred)
    and one `FlashWindowEx` per new arrival while unfocused; macOS/Linux use
    `set_badge_count`. Driven by the notification ledger through the `be-taskbar`
    core event.

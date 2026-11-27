@@ -219,6 +219,20 @@ the same `bot-<id>` conversation. The digest is labelled as unverified prior
 output and exists to bridge a compaction/provider reset, not to replace the
 conversation. `test_automation_quiet_runs.py` pins the contract.
 
+## Backup model and diagnostics
+
+A bot may set `action.config.backupModelSettings = {provider, model}`. A
+provider/transport-class failure (timeout, rate limit, model/provider error)
+retries the SAME request once on the backup and reports
+`detail.backupModelUsed`; permission, credential and configuration failures are
+never retried on another model. The primary conversation and memory scope are
+unchanged.
+
+The Bots sidebar can download a **privacy-safe diagnostics JSON** from
+`/api/bots/diagnostics`: bot configuration shape, counts, room sizes/modes and
+audit actions — never transcripts, workspace paths, webhook tokens, credential
+references or provider keys.
+
 ## Audit trail
 
 Every bot create/update/lifecycle/run/delete appends an `AutomationAudit` row on
@@ -241,6 +255,21 @@ A group room has two ways to turn one message into answers:
   recommendation, the strongest disagreement and what still needs the operator.
   The chair is a normal member turn with the same identity/tools/memory. A desk
   remains the surface for a dependency-aware pipeline.
+
+**Lead routing and task ownership.** With `routingMode = "lead"`, an
+unaddressed request is routed deterministically to the member whose
+name/title/description best matches it; a tie or no signal goes to the chair,
+who can reassign. Every user request is a task (`taskId`, `taskOwnerId`,
+`taskStatus`), shown in the room with its owner and a **Reassign** control. A
+reassignment updates the owner and runs the new member on the original request.
+Explicit `@mentions` and threaded replies win over lead routing.
+
+**Threaded replies and shared context.** Member replies carry `replyToId` and
+`threadId`; the room renders the quoted parent. The composer can reply to a
+message, which routes the turn back to that author. Each member turn receives a
+**bounded shared context packet** (room, members, current request, newest prior
+replies, explicit omission marker) built by `group-orchestration.ts`; it is
+labelled unverified.
 
 ## When a bot runs
 

@@ -240,8 +240,9 @@ export function GeneralSettingsPanel({
                 <div className="min-w-0">
                   <p className="text-sm font-medium">Taskbar activity</p>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">
-                    A red dot when something arrives while you are elsewhere, and a progress bar
-                    while Eclipse is working. Closing the window keeps Eclipse in the taskbar.
+                    A red badge with the unread count when something arrives while you are
+                    elsewhere, and a progress bar while Eclipse is working. Closing the window
+                    keeps Eclipse in the taskbar.
                   </p>
                 </div>
                 <Toggle checked={taskbarBadge.enabled} onChange={taskbarBadge.setEnabled} />

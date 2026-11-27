@@ -1698,44 +1698,119 @@ fn desktop_notify(app: AppHandle, title: String, body: String) {
 // an overlay badge on the icon (`SetOverlayIcon`) and a one-shot attention
 // flash (`FlashWindowEx`) when the operator is elsewhere.
 //
-// The overlay is drawn, not decoded: one dot does not justify the PNG decoder
-// dependency, and nothing from the page crosses the IPC bridge.
+// The overlay is drawn, not decoded: a handful of digits does not justify the
+// PNG decoder dependency, and nothing from the page crosses the IPC bridge.
 //
 // Focus deliberately does NOT clear the badge. The page re-emits on focus, and
 // a Rust-side clear would race that emit and win often enough to leave a stale
 // badge on a page that still considers the item unread. `markTabRead` in the
 // notification ledger is the single place unread goes down.
 
-/// A filled dot with a darker rim, drawn here instead of shipped as a PNG.
-/// Rasterising one 32px asset avoids pulling Tauri's `image-png` decoder into
+/// The badge text for a count. Anything past two digits collapses to `99+` so
+/// the glyphs stay legible at taskbar size.
+#[cfg(target_os = "windows")]
+fn overlay_badge_text(count: i64) -> String {
+    let count = count.max(0);
+    if count > 99 {
+        "99+".to_string()
+    } else {
+        count.to_string()
+    }
+}
+
+/// One glyph in a 3×5 bitmap font (`1` = ink, bit 2 is the leftmost column).
+/// Antialiasing is handled by the caller's supersampling, so the glyph only
+/// needs to answer "is this sample inside a stroke".
+#[cfg(target_os = "windows")]
+fn overlay_glyph(ch: u8) -> [u8; 5] {
+    match ch {
+        b'0' => [0b111, 0b101, 0b101, 0b101, 0b111],
+        b'1' => [0b010, 0b110, 0b010, 0b010, 0b111],
+        b'2' => [0b111, 0b001, 0b111, 0b100, 0b111],
+        b'3' => [0b111, 0b001, 0b111, 0b001, 0b111],
+        b'4' => [0b101, 0b101, 0b111, 0b001, 0b001],
+        b'5' => [0b111, 0b100, 0b111, 0b001, 0b111],
+        b'6' => [0b111, 0b100, 0b111, 0b101, 0b111],
+        b'7' => [0b111, 0b001, 0b001, 0b001, 0b001],
+        b'8' => [0b111, 0b101, 0b111, 0b101, 0b111],
+        b'9' => [0b111, 0b101, 0b111, 0b001, 0b111],
+        b'+' => [0b000, 0b010, 0b111, 0b010, 0b000],
+        _ => [0; 5],
+    }
+}
+
+/// A red disc with a darker rim and the unread count painted in white. The
+/// glyph scale shrinks as digits are added so one to three characters always
+/// fit: 4× for one digit, 3× for two, 2× for `99+`.
+///
+/// Rasterising a 32px asset avoids pulling Tauri's `image-png` decoder into
 /// the shell, and supersampling makes it crisp at any taskbar scale.
 #[cfg(target_os = "windows")]
-fn overlay_unread_image() -> tauri::image::Image<'static> {
+fn overlay_unread_image(count: i64) -> tauri::image::Image<'static> {
     const SIZE: u32 = 32;
     const SAMPLES: u32 = 4;
+    const HEIGHT: u32 = 5; // glyph rows
+    const WIDTH: u32 = 3; // glyph columns
     const DOT: [f32; 3] = [239.0, 68.0, 68.0]; // red-500
     const RIM: [f32; 3] = [127.0, 29.0, 29.0]; // red-800
+    const INK: [f32; 3] = [255.0, 255.0, 255.0];
+
+    let text = overlay_badge_text(count);
+    let glyphs: Vec<[u8; 5]> = text.bytes().map(overlay_glyph).collect();
+    let scale = match glyphs.len() {
+        0 | 1 => 4,
+        2 => 3,
+        _ => 2,
+    };
+    let gap = scale;
+    let text_width = (glyphs.len() as u32) * WIDTH * scale
+        + gap.saturating_mul(glyphs.len().saturating_sub(1) as u32);
+    let text_height = HEIGHT * scale;
+    let text_left = ((SIZE - text_width) as f32) / 2.0;
+    let text_top = ((SIZE - text_height) as f32) / 2.0;
 
     let mut rgba = vec![0u8; (SIZE * SIZE * 4) as usize];
     let center = (SIZE as f32 - 1.0) / 2.0;
-    let outer = 11.0_f32;
-    let inner = 9.0_f32;
+    let outer = 14.5_f32;
+    let inner = 12.5_f32;
     let samples = (SAMPLES * SAMPLES) as f32;
 
     for y in 0..SIZE {
         for x in 0..SIZE {
-            let (mut covered, mut dot, mut rim) = (0.0_f32, 0.0_f32, 0.0_f32);
+            let (mut covered, mut dot, mut rim, mut ink) = (0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32);
             for sy in 0..SAMPLES {
                 for sx in 0..SAMPLES {
                     let px = x as f32 + (sx as f32 + 0.5) / SAMPLES as f32;
                     let py = y as f32 + (sy as f32 + 0.5) / SAMPLES as f32;
                     let dist = ((px - center).powi(2) + (py - center).powi(2)).sqrt();
-                    if dist <= outer {
-                        covered += 1.0;
-                        if dist <= inner {
-                            dot += 1.0;
-                        } else {
-                            rim += 1.0;
+                    if dist > outer {
+                        continue;
+                    }
+                    covered += 1.0;
+                    if dist <= inner {
+                        dot += 1.0;
+                    } else {
+                        rim += 1.0;
+                    }
+                    // Sample the glyph bitmap in glyph space, then check the bit
+                    // for that column. Gaps between glyphs have no ink.
+                    let gx = px - text_left;
+                    let gy = py - text_top;
+                    if gx < 0.0 || gy < 0.0 || gx >= text_width as f32 || gy >= text_height as f32 {
+                        continue;
+                    }
+                    let cell = (gx / scale as f32) as u32;
+                    let row = (gy / scale as f32) as u32;
+                    let cell_width = WIDTH + gap / scale;
+                    let glyph_index = (cell / cell_width) as usize;
+                    let column = cell % cell_width;
+                    if column >= WIDTH {
+                        continue;
+                    }
+                    if let Some(glyph) = glyphs.get(glyph_index) {
+                        let bit = 1u8 << (WIDTH - 1 - column);
+                        if glyph[row as usize] & bit != 0 {
+                            ink += 1.0;
                         }
                     }
                 }
@@ -1743,18 +1818,25 @@ fn overlay_unread_image() -> tauri::image::Image<'static> {
             if covered <= 0.0 {
                 continue;
             }
+            // Blend the white glyph over the red disc. Both use the same
+            // coverage, so the rim stays visible around the text.
+            let ink_ratio = ink / covered;
+            let base = |channel: usize, dot: f32, rim: f32| {
+                (dot * DOT[channel] + rim * RIM[channel]) / covered
+            };
             let idx = ((y * SIZE + x) * 4) as usize;
-            rgba[idx] = ((dot * DOT[0] + rim * RIM[0]) / covered) as u8;
-            rgba[idx + 1] = ((dot * DOT[1] + rim * RIM[1]) / covered) as u8;
-            rgba[idx + 2] = ((dot * DOT[2] + rim * RIM[2]) / covered) as u8;
+            for channel in 0..3 {
+                let red = base(channel, dot, rim);
+                rgba[idx + channel] = (red * (1.0 - ink_ratio) + INK[channel] * ink_ratio) as u8;
+            }
             rgba[idx + 3] = (covered / samples * 255.0).round() as u8;
         }
     }
     tauri::image::Image::new_owned(rgba, SIZE, SIZE)
 }
 
-/// `count == 0` removes the badge. On Windows it is a dot, so only zero/non-zero
-/// matters; macOS and Linux show the number itself where the DE supports it.
+/// `count == 0` removes the badge. Windows paints the number itself on the
+/// overlay icon; macOS and Linux use the native count where supported.
 fn set_taskbar_badge(app: &AppHandle, count: i64) {
     let count = count.max(0);
     app.state::<AppState>()
@@ -1768,7 +1850,7 @@ fn set_taskbar_badge(app: &AppHandle, count: i64) {
     #[cfg(target_os = "windows")]
     {
         let icon = if count > 0 {
-            Some(overlay_unread_image())
+            Some(overlay_unread_image(count))
         } else {
             None
         };
@@ -2790,10 +2872,11 @@ mod navigation_tests {
 }
 
 /// The badge is pure geometry, so it can be checked without a window or a
-/// taskbar. Shape regressions here would otherwise only show up by eye.
+/// taskbar. Shape and glyph regressions here would otherwise only show up by
+/// eye.
 #[cfg(all(test, target_os = "windows"))]
 mod taskbar_icon_tests {
-    use super::overlay_unread_image;
+    use super::{overlay_badge_text, overlay_unread_image};
 
     fn pixel(img: &tauri::image::Image<'_>, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let i = ((y * 32 + x) * 4) as usize;
@@ -2802,25 +2885,59 @@ mod taskbar_icon_tests {
     }
 
     #[test]
+    fn large_counts_collapse_to_a_legible_cap() {
+        assert_eq!(overlay_badge_text(0), "0");
+        assert_eq!(overlay_badge_text(7), "7");
+        assert_eq!(overlay_badge_text(42), "42");
+        assert_eq!(overlay_badge_text(99), "99");
+        assert_eq!(overlay_badge_text(100), "99+");
+        assert_eq!(overlay_badge_text(1200), "99+");
+        assert_eq!(overlay_badge_text(-3), "0");
+    }
+
+    #[test]
     fn badge_is_a_centered_disc_with_a_darker_rim_on_transparency() {
-        let img = overlay_unread_image();
+        let img = overlay_unread_image(3);
         assert_eq!((img.width(), img.height()), (32, 32));
 
         let centre = pixel(&img, 16, 16);
         assert_eq!(centre.3, 255, "centre must be fully opaque");
         assert!(
-            centre.0 > 200 && centre.1 < 100 && centre.2 < 100,
-            "centre must be the app red, got {centre:?}"
+            centre.0 > 200 && centre.1 > 200 && centre.2 > 200,
+            "centre must be the white count, got {centre:?}"
         );
 
         assert_eq!(pixel(&img, 0, 0).3, 0, "corner must stay transparent");
         assert_eq!(pixel(&img, 31, 31).3, 0, "corner must stay transparent");
         assert_eq!(pixel(&img, 0, 16).3, 0, "left edge must stay clear of the disc");
 
-        // 9.5px above centre: inside the outer radius, outside the inner one.
-        let rim = pixel(&img, 16, 6);
+        // 9.5px up/left of centre: inside the outer radius, outside the inner
+        // one, and outside the glyph box for a single digit.
+        let rim = pixel(&img, 6, 6);
         assert!(rim.3 > 0, "rim must be drawn, not a hole");
-        assert!(rim.0 < centre.0, "rim must be darker than the dot");
+        let disc = pixel(&img, 4, 16);
+        assert!(
+            rim.0 < disc.0 && disc.0 > 200 && disc.1 < 100,
+            "rim must be darker than the red disc, got rim={rim:?} disc={disc:?}"
+        );
+    }
+
+    #[test]
+    fn badge_paints_the_number_as_white_ink() {
+        for count in [1_i64, 9, 12, 99, 100, 12345] {
+            let img = overlay_unread_image(count);
+            let white = (0..32)
+                .flat_map(|y| (0..32).map(move |x| (x, y)))
+                .filter(|&(x, y)| {
+                    let (r, g, b, a) = pixel(&img, x, y);
+                    a > 200 && r > 230 && g > 230 && b > 230
+                })
+                .count();
+            assert!(
+                white > 20,
+                "count {count} must paint visible digits, only {white} white pixels"
+            );
+        }
     }
 }
 

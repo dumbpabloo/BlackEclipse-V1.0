@@ -62,6 +62,18 @@ def test_synthesize_each_supported_builder_is_valid():
         assert result["valid"], (method_id, result["issues"])
 
 
+def test_synthesized_futures_symbol_is_valid():
+    """A gold futures symbol must not fail on its asset class.
+
+    `infer_asset_class` used to return "futures" while the validator's
+    SUPPORTED_ASSET_CLASSES spells it "future", so every GC=F synthesis came
+    back valid=False and the build stopped before a backtest.
+    """
+    result = synthesize_method("trend_donchian_breakout", symbol="GC=F")
+    assert result["valid"], result["issues"]
+    assert result["spec"]["asset_class"] == "future"
+
+
 def test_non_spec_methods_refuse_honestly():
     with pytest.raises(QuantError):
         build_strategy("momentum_cross_sectional", symbol="AAPL")

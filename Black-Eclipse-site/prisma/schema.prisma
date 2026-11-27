@@ -1315,10 +1315,11 @@ model BotRoom {
   id        String   @id
   name      String
   /// JSON array of member bot ids.
-  memberIds String
-  mode      String   @default("parallel")
-  leadId    String?
-  image     String?
+  memberIds   String
+  mode        String   @default("parallel")
+  routingMode String   @default("all")
+  leadId      String?
+  image       String?
   createdAt String
   updatedAt DateTime @updatedAt
 

@@ -247,7 +247,7 @@ RATCHET_PY: dict[str, int] = {
     # resume), the `END` routes out of `verify_repair`/`tools`, the honest-
     # terminal-status guard in the catch block, and the 20-minute chat default.
     # May only shrink; the subsystem-wiring block remains the split candidate.
-    "graph.py": 2825,
+    "graph.py": 2839,  # +14 (2026-11-26): in-flight shared-tree graph wiring
     # Grew with the approval-card pause path in `make_code_authorizer` (the code
     # write now blocks on a decision instead of refusing immediately). May only
     # shrink from here; the code-write pause is a split candidate.

@@ -624,6 +624,15 @@ streamed (retrying would duplicate the user-visible answer). The policy is
 tunable with `HARNESS_MODEL_ATTEMPTS`, `HARNESS_MODEL_RETRY_BASE_S`,
 `HARNESS_MODEL_RETRY_MAX_S` and `HARNESS_MODEL_RETRY_BUDGET_S`.
 
+**Deep quant budget.** A strategy/model build is a cycle (catalog → data →
+build → validate → robustness → artifact), not chat navigation. When
+`quant_intent.is_deep_quant_turn()` matches, `chat_step_budget()` floors the run
+at `DEEP_QUANT_MAX_STEPS = 32` and the graph raises the tool-call ceiling to
+`DEEP_QUANT_MAX_TOOL_CALLS = 64`. The 48-call chat limit was the real bind: a
+strategy build hit it at step 22 with steps still available and never reached
+`validate_strategy`/`create_strategy`/`run_backtest`. The operator's
+`ECLIPSE_CHAT_MAX_STEPS` and an explicit per-run agent config still win.
+
 **One execution vocabulary (Round 5 / C2, ADR-H349).** The four planes named the
 same lifecycle differently (`RunStatus`, `JobState`, `TaskStatus`,
 `graph_runtime.RunStatus`). `harness/execution_plane.py` is the ONE mapping:

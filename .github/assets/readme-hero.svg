@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="560" viewBox="0 0 1600 560" role="img" aria-label="Black Eclipse — an open-source agentic harness designed to help you automate finance">
+  <title>Black Eclipse hero</title>
+  <!-- Brand banner for the public README. Real <text> so an export renders it
+       with the local font stack; no external references. Export the PNG with
+       sharp, do not hand-edit the bitmap. -->
+  <defs>
+    <radialGradient id="glowA" cx="18%" cy="-10%" r="70%">
+      <stop offset="0%" stop-color="#8fd12a" stop-opacity=".20"/>
+      <stop offset="100%" stop-color="#050607" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="92%" cy="8%" r="60%">
+      <stop offset="0%" stop-color="#1d3a12" stop-opacity=".55"/>
+      <stop offset="100%" stop-color="#050607" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="fadeLine" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#f4f5f2" stop-opacity=".18"/>
+      <stop offset="100%" stop-color="#f4f5f2" stop-opacity="0"/>
+    </linearGradient>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0H0V48" fill="none" stroke="#f4f5f2" stroke-opacity=".035" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1600" height="560" fill="#050607"/>
+  <rect width="1600" height="560" fill="url(#glowA)"/>
+  <rect width="1600" height="560" fill="url(#glowB)"/>
+  <rect width="1600" height="560" fill="url(#grid)"/>
+  <rect x="40" y="40" width="1520" height="480" fill="none" stroke="#f4f5f2" stroke-opacity=".10"/>
+
+  <!-- Decorative eclipse: a light disc occluded by the background. -->
+  <g transform="translate(1424 300)" opacity=".9">
+    <circle cx="0" cy="0" r="148" fill="none" stroke="#b4ff42" stroke-opacity=".18" stroke-width="1"/>
+    <circle cx="0" cy="0" r="112" fill="none" stroke="#b4ff42" stroke-opacity=".10" stroke-width="1"/>
+    <circle cx="0" cy="0" r="74" fill="#f4f5f2" fill-opacity=".92"/>
+    <circle cx="30" cy="-6" r="70" fill="#050607"/>
+  </g>
+
+  <!-- Brand lockup -->
+  <g transform="translate(96 96)">
+    <circle cx="22" cy="22" r="22" fill="#f4f5f2"/>
+    <circle cx="34" cy="22" r="20" fill="#050607"/>
+  </g>
+  <text x="156" y="125" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="26" font-weight="700" letter-spacing="-.4" fill="#f4f5f2">Black Eclipse</text>
+  <text x="157" y="150" font-family="'JetBrains Mono', ui-monospace, Consolas, monospace" font-size="12" letter-spacing="3.2" fill="#8b918d">AGENTIC HARNESS FOR FINANCE</text>
+
+  <!-- Headline -->
+  <text x="96" y="268" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="66" font-weight="700" letter-spacing="-2.4" fill="#f4f5f2">An open-source agentic harness</text>
+  <text x="96" y="344" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="66" font-weight="700" letter-spacing="-2.4" fill="#f4f5f2">designed to help you</text>
+  <text x="96" y="420" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="66" font-weight="700" letter-spacing="-2.4" fill="#b4ff42">automate finance.</text>
+
+  <line x1="96" y1="466" x2="760" y2="466" stroke="url(#fadeLine)"/>
+
+  <text x="96" y="500" font-family="'JetBrains Mono', ui-monospace, Consolas, monospace" font-size="13" letter-spacing="2.6" fill="#8b918d">RESEARCH · ANALYZE · BUILD · AUTOMATE · TRADE</text>
+  <text x="1504" y="500" text-anchor="end" font-family="'JetBrains Mono', ui-monospace, Consolas, monospace" font-size="13" letter-spacing="2.4" fill="#8b918d">LOCAL-FIRST · MIT · WINDOWS</text>
+</svg>

@@ -113,7 +113,7 @@ Hermes repository root.
 |---|---|---|
 | Status | ✅ | ✅ |
 | Evidence | `delegate_task`, `agent/subagent_lifecycle.py`; batch 10 | `BE/team/review.py`, `BE/institution/preset.py`, `BE/orchestration/`, `BE/spawn/board.py` |
-| Strength | Ease of fan-out, lifecycle API | Independence, conflict blocking, claim merge, institution roles |
+| Strength | Ease of fan-out, lifecycle API | Independence, conflict blocking, claim merge, institution roles; room lead routing, task ownership/reassign and threaded replies (`group-orchestration.ts`) |
 | Gap | **I** — Eclipse ergonomics | **A** — Hermes merge is prose |
 | Priority | — | P2 |
 
@@ -203,7 +203,7 @@ Hermes repository root.
 |---|---|---|
 | Status | ✅ | ◐ |
 | Evidence | `runtime_provider.py`, `error_classifier.py`, `credential_pool.py`, fallback | `BE/model_runtime/runtime.py:454`, `routing.py:191`; graph bypasses `invoke` |
-| Strength | Failover, 18+ providers, 3 modes, aux routing | Capability/quality scoring, cost, health |
+| Strength | Failover, 18+ providers, 3 modes, aux routing | Capability/quality scoring, cost, health, per-bot backup model (`backupModelSettings`) for provider-class failures |
 | Gap | **I** — Eclipse router unused on live path | **I** — Hermes less scoring |
 | Priority | — | **P0** |
 
