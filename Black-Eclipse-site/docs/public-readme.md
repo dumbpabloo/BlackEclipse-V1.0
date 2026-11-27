@@ -94,9 +94,10 @@ longer exists, the claim comes off the README.
 - Captures live in `Black-Eclipse-site/docs/figures/readme/`, 1600px wide,
   PNG, ≤ 200 KB each.
 - **The hero banner is not a capture.** `.github/assets/readme-hero.svg` +
-  `readme-hero.png` is authored brand art (the positioning sentence, the mark,
-  four-tone lime-on-black). Edit the SVG and re-export the PNG with `sharp`; never
-  hand-edit the bitmap.
+  `readme-hero.png` is authored brand art: the positioning sentence in
+  four-tone lime-on-black, deliberately **without a logo lockup** (the repository
+  name already sits above the README). Edit the SVG and re-export the PNG with
+  `sharp`; never hand-edit the bitmap.
 - **The gallery images are real captures of the running app.** No mockups, no stock
   imagery, no invented dashboards. A screenshot that shows a state the product
   cannot reach is a fabricated benchmark with better lighting. The Bots and

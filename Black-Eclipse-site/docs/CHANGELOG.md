@@ -6,6 +6,14 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-26
 
+- **docs(readme): the hero banner drops its logo lockup.** The first version repeated
+  the eclipse mark and wordmark inside the banner, directly under the repository name
+  GitHub already renders. The banner is now purely typographic — eyebrow, the
+  positioning sentence, and the scope/version strip — so the headline carries the
+  page and the artwork no longer competes with the page chrome. Regenerated
+  `.github/assets/readme-hero.png` from the SVG.
+  docs updated: `docs/public-readme.md` (§3 banner rule).
+
 - **docs(readme): the public front door is rebuilt around one positioning
   sentence, with Features / Use / Needs.** The README led with "the open-source
   financial agentic harness that grows with you", buried automation as capability
