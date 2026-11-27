@@ -24,6 +24,15 @@ from .autonomy import (
 from .cmp import CMPConfig, descendant_lift, metaproductivity
 from .config import DEFAULT_MODE, MODES, RSLConfig
 from .hillclimb import HillClimbConfig, run_hillclimb
+from .improvement_memory import (
+    Attempt,
+    ImprovementMemory,
+    MemoryConfig,
+    Problem,
+    Provenance,
+    load_memory,
+    score_prediction,
+)
 from .lesson_contract import (
     Lesson,
     NoLearningVerdict,
@@ -63,19 +72,24 @@ from .utility import UtilityWeights, acceptance, utility
 
 __all__ = [
     "ArchiveConfig",
+    "Attempt",
     "AutonomyKillSwitch",
     "CMPConfig",
     "DEFAULT_MODE",
     "HarnessSnapshot",
     "HarnessStateStore",
     "HillClimbConfig",
+    "ImprovementMemory",
     "Lesson",
     "LessonOutcomeStore",
     "LessonStats",
     "MODES",
+    "MemoryConfig",
     "NoLearningVerdict",
     "OPERATORS",
     "Observation",
+    "Problem",
+    "Provenance",
     "RSLConfig",
     "RSL_DENY_GLOBS",
     "RSLTargetError",
@@ -98,6 +112,7 @@ __all__ = [
     "expire_stale_candidates",
     "gate_report",
     "jaccard_novelty",
+    "load_memory",
     "loop_metrics",
     "metaproductivity",
     "model_settings_from_env",
@@ -107,6 +122,7 @@ __all__ = [
     "replay_gate",
     "retire_unhelpful",
     "run_hillclimb",
+    "score_prediction",
     "tokens_for_ops",
     "utility",
 ]

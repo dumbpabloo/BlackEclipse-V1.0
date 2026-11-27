@@ -238,6 +238,43 @@ def _accepted_rsl_run(store: AgentMemoryStore, candidate_id: str, run_id: str) -
     return run_id
 
 
+def test_rsl_memory_route_is_explicit_off_and_reports_the_ledger(store, tmp_path):
+    from harness.self_improvement.config import RSLConfig
+    from harness.self_improvement.improvement_memory import Provenance
+    from harness.self_improvement.loop import RSLLoop
+    import harness.routers.evolution_memory as memory_router
+
+    service = evolution_router.service
+    memory_router.service = service
+    service._rsl_loop = RSLLoop(
+        service=None, config=RSLConfig(mode="observe"), run_store=store,
+    )
+    assert memory_router.rsl_memory(_=True)["enabled"] is False
+
+    path = tmp_path / "memory.json"
+    loop = RSLLoop(
+        service=None,
+        config=RSLConfig(
+            mode="observe", memory=True, memory_path=str(path),
+        ),
+        run_store=store,
+    )
+    loop.improvement_memory().record_result(
+        "Completion accepted without execution evidence",
+        edit="added an execution interlock",
+        provenance=Provenance(domain="coding", round=6),
+        passed=5, total=5, score_before=0.2, score_after=0.5, accepted=True,
+    )
+    assert loop._save_memory()
+    service._rsl_loop = loop
+
+    payload = memory_router.rsl_memory(_=True)
+    assert payload["enabled"] is True
+    assert payload["stats"]["attempts"] == 1
+    assert payload["memory"]["problems"][0]["id"] == "P1"
+    assert "P1 Completion accepted" in payload["rendered"]
+
+
 def test_model_experiment_queues_a_trial_only_identity_change(store, monkeypatch):
     _use_surface_base(monkeypatch, "eclipse-agent")
 
@@ -705,6 +742,7 @@ def test_every_rsl_route_refuses_a_remote_caller():
         ("post", "/evolution/candidates/evo_x/model-propose"),
         ("post", "/evolution/surface-experiments"),
         ("get", "/evolution/rsl"),
+        ("get", "/evolution/rsl/memory"),
         ("post", "/evolution/rsl/tick"),
         ("get", "/evolution/drift"),
         ("get", "/evolution/drift/alerts"),

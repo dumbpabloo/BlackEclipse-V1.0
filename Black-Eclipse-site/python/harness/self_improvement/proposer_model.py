@@ -22,6 +22,7 @@ from ..models import build_chat_model
 from ..model_runtime import get_runtime
 from ..model_runtime.structured import StructuredOutputManager
 from ..schemas import ModelSettings
+from ..evaluation.verdict_guard import assert_text_has_no_verdict_leaks
 from .proposer import CandidateProposal, ProposalRefused, propose_many
 
 MAX_VARIANTS = 4
@@ -106,11 +107,42 @@ def model_settings_from_env(environ: Optional[Mapping[str, str]] = None) -> Mode
     )
 
 
+def _memory_text(memory: Any) -> str:
+    """The rendered SIM block, or "".
+
+    A `str` is accepted as-is (a caller may already have rendered it); anything
+    with `render()` is rendered at its own budget. A render failure degrades to
+    no memory: the proposal must still be possible without it. The block passes
+    the same verdict tripwire as a lesson, so a grader verdict captured in an
+    attempt rationale can never enter the proposal prompt.
+    """
+    if not memory:
+        return ""
+    if isinstance(memory, str):
+        text = memory.strip()
+    else:
+        render = getattr(memory, "render", None)
+        if not callable(render):
+            return ""
+        try:
+            text = str(render() or "").strip()
+        except Exception:  # noqa: BLE001 - memory is advice, never a blocker
+            return ""
+    if not text:
+        return ""
+    try:
+        assert_text_has_no_verdict_leaks(text, label="self-improvement memory")
+    except Exception:  # noqa: BLE001 - a leak is dropped, never widened around
+        return ""
+    return text
+
+
 def _prompt(
     candidate: Mapping[str, Any],
     *,
     k: int,
     context: Optional[Mapping[str, Any]] = None,
+    memory: Any = None,
 ) -> str:
     payload = {
         "problem": str(candidate.get("problemStatement") or "")[:1500],
@@ -120,6 +152,16 @@ def _prompt(
         "fileExcerpt": str((context or {}).get("fileExcerpt") or "")[:MAX_FILE_EXCERPT],
         "evidence": list((context or {}).get("evidence") or [])[:MAX_EVIDENCE],
     }
+    experience = _memory_text(memory)
+    memory_section = (
+        f"\n\n{experience}\n\n"
+        "Before proposing, check whether an existing problem already explains "
+        "this failure; cite its id in `rationale` (for example \"P3: ...\") or "
+        "name a new root cause. Do not repeat an attempt that the record shows "
+        "already failed in this setting without new evidence.\n"
+        if experience
+        else ""
+    )
     return (
         "You propose a bounded, reviewable change to the Eclipse harness.\n"
         "Return STRICT JSON only, no prose and no code fences, with this shape:\n"
@@ -132,7 +174,8 @@ def _prompt(
         "tests, the evaluator, policy, approvals, security, datasets, .env or "
         "jdds.db. Do not claim a test result, a score or an approval. If the "
         "evidence is insufficient, return a single `domain` variant with the "
-        "smallest defensible change.\n\n"
+        "smallest defensible change."
+        f"{memory_section}\n\n"
         f"Observation:\n{json.dumps(payload, indent=2, sort_keys=True, default=str)}"
     )
 
@@ -176,16 +219,18 @@ async def propose_variants(
     actor: Any = None,
     settings: Optional[ModelSettings] = None,
     invoke: Optional[InvokeFn] = None,
+    memory: Any = None,
 ) -> list[CandidateProposal]:
     """Ask the model for typed variants, then validate them like any proposal.
 
     `invoke` is the test seam: it receives the prompt and returns text (or an
     awaitable). In production the runtime-wide model is used. Any malformed
     variant refuses the whole set: a partial, silently dropped proposal would be
-    a fabricated comparison.
+    a fabricated comparison. `memory` is an optional `ImprovementMemory` (or its
+    rendered text): prior attempts with their rationale and outcomes.
     """
     want = max(1, min(int(k), MAX_VARIANTS))
-    prompt = _prompt(candidate, k=want, context=context)
+    prompt = _prompt(candidate, k=want, context=context, memory=memory)
     try:
         if invoke is not None:
             raw = invoke(prompt)

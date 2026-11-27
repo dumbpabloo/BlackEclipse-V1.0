@@ -63,6 +63,11 @@ _FIELD_ENV: dict[str, str] = {
     # Paired significance: a measured lift must clear the noise floor.
     "significance": "HARNESS_RSL_SIGNIFICANCE",
     "significanceMinTasks": "HARNESS_RSL_SIGNIFICANCE_MIN_TASKS",
+    # Self-Improvement Memory: a portable, problem-keyed ledger of harness
+    # attempts with predictions and observed outcomes (arXiv:2611.18856).
+    "memory": "HARNESS_RSL_MEMORY",
+    "memoryPath": "HARNESS_RSL_MEMORY_PATH",
+    "memoryChars": "HARNESS_RSL_MEMORY_CHARS",
     # Supervised autonomy: what (if anything) may close without an operator.
     "autonomy": "HARNESS_RSL_AUTONOMY",
     "autoMinLift": "HARNESS_RSL_AUTO_MIN_LIFT",
@@ -173,6 +178,11 @@ class RSLConfig:
     island_migration_every: int = 5
     significance: bool = False
     significance_min_tasks: int = 5
+    # Self-Improvement Memory (opt-in). A problem-keyed, append-only ledger of
+    # harness attempts read by the proposer; it never decides anything.
+    memory: bool = False
+    memory_path: str = ""
+    memory_chars: int = 6000
     # Supervised autonomy. `auto_risk` is the ceiling: only L1 (bounded surface)
     # changes are eligible, and the kill switch can stop every decision.
     autonomy: str = "off"
@@ -261,6 +271,9 @@ class RSLConfig:
             significance_min_tasks=_env_int(
                 env, "HARNESS_RSL_SIGNIFICANCE_MIN_TASKS", 5, 2, 200,
             ),
+            memory=_env_bool(env, "HARNESS_RSL_MEMORY", False),
+            memory_path=str(env.get("HARNESS_RSL_MEMORY_PATH") or "").strip(),
+            memory_chars=_env_int(env, "HARNESS_RSL_MEMORY_CHARS", 6000, 800, 20000),
             autonomy=autonomy,
             auto_min_lift=_env_float(
                 env, "HARNESS_RSL_AUTO_MIN_LIFT", 0.02, 0.0, 1.0,
@@ -340,6 +353,9 @@ class RSLConfig:
             "islandMigration": self.island_migration_every,
             "significance": self.significance,
             "significanceMinTasks": self.significance_min_tasks,
+            "memory": self.memory,
+            "memoryPath": self.memory_path,
+            "memoryChars": self.memory_chars,
             "autonomy": self.autonomy,
             "autoMinLift": self.auto_min_lift,
             "autoMaxPerDay": self.auto_max_per_day,

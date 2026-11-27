@@ -37,6 +37,11 @@ from .autonomy import (
     decide as autonomy_decide,
 )
 from .config import RSLConfig
+from .improvement_memory import (
+    ImprovementMemory,
+    MemoryConfig,
+    record_hillclimb_attempts,
+)
 from .models import HarnessSnapshot
 from .runtime_settings import RuntimeSettingsStore
 from .state import HarnessStateStore
@@ -127,10 +132,92 @@ class RSLLoop:
         # time; a tick still owns the global `_busy` flag.
         self._busy_scopes: set[str] = set()
         self._stopping = False
+        # Self-Improvement Memory. Loaded lazily, only when the operator opts in;
+        # a read or write failure degrades to "no memory" and never blocks a run.
+        self._memory: Optional[ImprovementMemory] = None
+        self._memory_loaded = False
+        self._memory_error = ""
 
     # -- lifecycle ---------------------------------------------------------
     def _actor(self) -> Actor:
         return Actor(id="rsl", operator=False, autonomy="edit_verify")
+
+    # -- Self-Improvement Memory ------------------------------------------
+    def memory_config(self) -> MemoryConfig:
+        return MemoryConfig(
+            enabled=bool(self.config.memory),
+            path=str(self.config.memory_path or ""),
+            max_chars=int(self.config.memory_chars or 6000),
+        )
+
+    def improvement_memory(self) -> Optional[ImprovementMemory]:
+        """The ledger, or `None`. A corrupt file is reported, never repaired."""
+        if not self.config.memory:
+            return None
+        if not self._memory_loaded:
+            self._memory_loaded = True
+            try:
+                self._memory = ImprovementMemory.load(
+                    self.memory_config().resolved_path,
+                )
+                self._memory_error = ""
+            except Exception as exc:  # noqa: BLE001 - memory is never a blocker
+                self._memory = None
+                self._memory_error = f"{type(exc).__name__}: {exc}"[:300]
+        return self._memory
+
+    def memory_block(self) -> str:
+        """The bounded prompt block handed to the proposer ("" when off)."""
+        memory = self.improvement_memory()
+        if memory is None:
+            return ""
+        return memory.render(max_chars=self.memory_config().max_chars)
+
+    def memory_status(self) -> dict[str, Any]:
+        if not self.config.memory:
+            return {"enabled": False}
+        memory = self.improvement_memory()
+        return {
+            "enabled": True,
+            "path": self.memory_config().resolved_path,
+            "error": self._memory_error or None,
+            "stats": memory.stats() if memory is not None else None,
+        }
+
+    def _save_memory(self) -> str:
+        memory = self.improvement_memory()
+        if memory is None:
+            return ""
+        try:
+            path = memory.save(self.memory_config().resolved_path)
+            self._memory_error = ""
+            return path
+        except Exception as exc:  # noqa: BLE001 - a failed write is reported
+            self._memory_error = f"{type(exc).__name__}: {exc}"[:300]
+            return ""
+
+    def _record_memory_attempts(
+        self, result: dict[str, Any], scope: str,
+    ) -> dict[str, Any]:
+        """Append one attempt per evaluated neighbor, accepted or not.
+
+        The mapping lives in `improvement_memory` so the conductor stays a
+        conductor. A read/write failure is reported, never raised.
+        """
+        memory = self.improvement_memory()
+        if memory is None:
+            return {
+                "enabled": True, "recorded": 0,
+                "error": self._memory_error or None,
+            }
+        outcome = record_hillclimb_attempts(memory, result, scope=scope)
+        path = self._save_memory() if outcome["recorded"] else ""
+        return {
+            "enabled": True,
+            **outcome,
+            "path": path or None,
+            "error": self._memory_error or None,
+        }
 
     async def start(self) -> None:
         if self.config.is_off:
@@ -386,6 +473,7 @@ class RSLLoop:
             "modelProposer": self.config.model_proposer,
             "codeBenchmark": self.config.code_benchmark,
             "autonomy": self.config.autonomy,
+            "memory": self.config.memory,
         }
 
     def status(self) -> dict[str, Any]:
@@ -424,6 +512,7 @@ class RSLLoop:
             "surfaceLab": self.config.surface_lab,
             "maxSurfaceExperimentsPerDay": self.config.max_surface_experiments_per_day,
             "autonomyStatus": self.autonomy_status(),
+            "memory": self.memory_status(),
         }
 
     async def set_config(
@@ -442,6 +531,15 @@ class RSLLoop:
                 RuntimeSettingsStore(self.run_store).save_rsl_config(updated)
             self.config = updated
             self._config_source = "env+persisted" if persist else "explicit"
+            if (
+                updated.memory != previous.memory
+                or updated.memory_path != previous.memory_path
+                or updated.memory_chars != previous.memory_chars
+            ):
+                # A settings change is a new ledger view, not a merge.
+                self._memory = None
+                self._memory_loaded = False
+                self._memory_error = ""
 
             if updated.is_off:
                 if self._task is not None and not self._task.done():
@@ -611,6 +709,8 @@ class RSLLoop:
             )
             if persist:
                 self._record_hillclimb_attempts(result, state, scope)
+            if persist and self.config.memory:
+                result["memory"] = self._record_memory_attempts(result, scope)
             result["refused"] = False
             result["strategy"] = "hillclimb"
             result["persisted"] = bool(persist)
@@ -821,7 +921,7 @@ class RSLLoop:
                 result = await result
         else:
             result = await proposer_model.propose_variants(
-                candidate, k=k, actor=self._actor(),
+                candidate, k=k, actor=self._actor(), memory=self.memory_block(),
             )
         proposals = list(result or [])
         if not proposals:
