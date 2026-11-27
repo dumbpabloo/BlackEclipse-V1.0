@@ -112,9 +112,21 @@ export async function POST(request: Request) {
     // Phase 23: this conversation's approved project folder. Read SERVER-SIDE
     // (the browser never supplies it), so a chat is bound to a folder the user
     // chose in the picker. An absent binding keeps the existing default.
-    const workspaceRootId = chatId
+    let workspaceRootId = chatId
       ? await readSessionWorkspaceRootId(chatId).catch(() => undefined)
       : undefined;
+    // A bot/group-member chat turn uses the SAME server-owned per-bot folder as
+    // its scheduled runs. The runtime creates/sanitizes `bot:<id>` inside
+    // `.black-eclipse/bots/`; it is never a caller-supplied path.
+    const rawWorkspaceRootId = (body as Record<string, unknown>).workspaceRootId;
+    if (
+      typeof rawWorkspaceRootId === "string"
+      && /^bot:[A-Za-z0-9._:-]{1,160}$/.test(rawWorkspaceRootId.trim())
+    ) {
+      workspaceRootId = rawWorkspaceRootId.trim();
+    } else if (!workspaceRootId && chatId?.startsWith("bot-")) {
+      workspaceRootId = `bot:${chatId.slice(4)}`;
+    }
     // Bot chats and group-member turns opt into private per-conversation memory.
     const memoryScope = (body as Record<string, unknown>).memoryScope === "conversation"
       ? ("conversation" as const)

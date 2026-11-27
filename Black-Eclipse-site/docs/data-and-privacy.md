@@ -188,7 +188,10 @@ keep this machine's state out of the payload:
 - `scripts/desktop-payload.js` prunes the compiled server tree and **refuses**
   (`exit 3`) to hand over a payload containing `.env*`, `mcp-servers.json`,
   `.connector-key`, `jdds.db`, `agent-memory.db`, `eclipse-memory.db` or
-  `.black-eclipse/`.
+  `.black-eclipse/`. It also prunes local build/release/runtime trees that Next's
+  standalone tracing copies from the checkout root (`releases/`, `.runtime/`,
+  `.next-desktop-dev/`, `dist/`, `release/`) — they are not read at run time and
+  made the payload multiple gigabytes.
 - `scripts/lib/scrub-app-state.js` does the same for the trees copied after that
   (`.black-eclipse/`, `csess_*/` session trajectories, `__pycache__`,
   `.pytest_cache`, `*.egg-info`, `*.db*`, `*.log`), then

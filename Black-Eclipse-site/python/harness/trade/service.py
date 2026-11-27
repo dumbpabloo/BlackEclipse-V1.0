@@ -645,6 +645,7 @@ class BrokerService:
         self, connection_id: str, payload: dict[str, Any], *,
         record_approval: bool = True,
         run_id: str = "",
+        automation_id: str = "",
     ) -> dict[str, Any]:
         """Validate, price-check and request a single-use approval. Sends nothing.
 
@@ -660,6 +661,7 @@ class BrokerService:
         return preview_order(
             self, connection_id, payload,
             record_approval=record_approval, run_id=run_id,
+            automation_id=automation_id,
         )
 
     def submit_order(

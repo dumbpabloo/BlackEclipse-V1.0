@@ -200,6 +200,7 @@ export function triggerKindLabel(kind: TriggerKind): string {
     cron: 'Recurring',
     event: 'On an event',
     condition: 'When a condition is met',
+    webhook: 'On an external webhook',
   };
   return map[kind] ?? kind;
 }
@@ -286,8 +287,10 @@ export function scheduleSummary(trigger: TriggerView): string {
       return `When ${trigger.eventType ?? 'an event'} occurs`;
     case 'condition':
       return 'When a condition is met';
+    case 'webhook':
+      return 'When an external service calls its webhook';
     default:
-      return 'On demand — runs only when you start it';
+      return 'On demand - runs only when you start it';
   }
 }
 
@@ -360,7 +363,7 @@ export function localTimezone(): string {
 
 export type ScheduleChoice =
   | 'manual' | 'once' | 'daily' | 'weekdays' | 'weekly' | 'monthly' | 'interval' | 'cron'
-  | 'event' | 'condition';
+  | 'event' | 'condition' | 'webhook';
 
 export interface BotDraft {
   name: string;
@@ -550,6 +553,11 @@ export function buildTrigger(draft: BotDraft): CreateAutomationInput['trigger'] 
         endAt: draft.endAt,
         timezone,
       };
+    case 'webhook':
+      // The runtime generates and preserves the bearer token. A create from the
+      // UI therefore sends no secret; an edit preserves the existing one
+      // because the PATCH never includes a trigger unless the schedule changed.
+      return { type: 'webhook', timezone };
     default:
       return { type: 'manual', timezone };
   }
@@ -848,6 +856,8 @@ export function draftFromBot(bot: AutomationView): BotDraft {
     draft.condition = trig.condition ?? bot.condition ?? { expression: '', edge: true, variables: [] };
     draft.startAt = trig.startAt;
     draft.endAt = trig.endAt;
+  } else if (trig.type === 'webhook') {
+    draft.schedule = 'webhook';
   } else {
     draft.schedule = 'manual';
   }

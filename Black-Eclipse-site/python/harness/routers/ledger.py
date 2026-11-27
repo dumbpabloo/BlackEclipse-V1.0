@@ -35,6 +35,11 @@ _STATUS = {
     "PARTY_NOT_FOUND": 404,
     "TAX_CODE_NOT_FOUND": 404,
     "DOCUMENT_NOT_FOUND": 404,
+    "ARTIFACT_NOT_FOUND": 404,
+    "ATTACHMENT_NOT_FOUND": 404,
+    "ATTACHMENT_EXISTS": 409,
+    "ARTIFACT_UNHASHED": 422,
+    "ARTIFACT_STORE_UNAVAILABLE": 503,
     "LEDGER_FORBIDDEN": 403,
     "LEDGER_UNAVAILABLE": 503,
     "PERIOD_CLOSED": 409,
@@ -45,6 +50,12 @@ _STATUS = {
     "ACCOUNT_EXISTS": 409,
     "DUPLICATE_ENTRY": 409,
     "UNBALANCED_ENTRY": 422,
+    "INVALID_STATEMENT_METHOD": 422,
+    "YEAR_END_NOT_READY": 409,
+    "RETAINED_EARNINGS_MISSING": 422,
+    "BUDGET_NOT_FOUND": 404,
+    "BUDGET_INVALID": 422,
+    "DIMENSION_REQUIRED": 422,
     "INVALID_MAPPING": 422,
     "INVALID_STATEMENT": 422,
     "IMPORT_ROW_INVALID": 422,
@@ -339,9 +350,109 @@ async def ledger_income_statement(ledger_id: str, request: Request,
 @router.get("/ledger/{ledger_id}/cash-flow")
 async def ledger_cash_flow(ledger_id: str, request: Request,
                            start: Optional[str] = None, end: Optional[str] = None,
+                           method: str = "direct",
                            _: bool = Depends(require_operator)) -> dict[str, Any]:
     try:
+        if method == "indirect":
+            return _engine().cash_flow_indirect(ledger_id, start=start, end=end,
+                                                 actor_id=_actor(request))
+        if method != "direct":
+            raise HTTPException(status_code=422,
+                                detail="`method` must be `direct` or `indirect`")
         return _engine().cash_flow(ledger_id, start=start, end=end, actor_id=_actor(request))
+    except LedgerError as exc:
+        _raise(exc)
+
+
+# ── Budgets, dimensions, runway ──────────────────────────────────────────────
+
+
+@router.get("/ledger/{ledger_id}/budgets")
+async def ledger_budgets(ledger_id: str, request: Request, limit: int = 100,
+                         _: bool = Depends(require_operator)) -> dict[str, Any]:
+    try:
+        return {"budgets": _engine().list_budgets(ledger_id, limit=limit,
+                                                  actor_id=_actor(request))}
+    except LedgerError as exc:
+        _raise(exc)
+
+
+@router.post("/ledger/{ledger_id}/budgets")
+async def ledger_budget_create_route(ledger_id: str, request: Request,
+                                     body: dict[str, Any] = Body(...),
+                                     _: bool = Depends(require_operator)) -> dict[str, Any]:
+    try:
+        return _engine().create_budget(
+            ledger_id,
+            name=body.get("name") or "Budget",
+            start=body.get("start"),
+            end=body.get("end"),
+            lines=body.get("lines") or [],
+            note=body.get("note"),
+            currency=body.get("currency"),
+            actor_id=_actor(request, body),
+        )
+    except LedgerError as exc:
+        _raise(exc)
+
+
+@router.get("/ledger/{ledger_id}/budgets/{budget_id}/variance")
+async def ledger_budget_variance_route(ledger_id: str, budget_id: str, request: Request,
+                                       _: bool = Depends(require_operator)) -> dict[str, Any]:
+    try:
+        return _engine().budget_vs_actual(ledger_id, budget_id, actor_id=_actor(request))
+    except LedgerError as exc:
+        _raise(exc)
+
+
+@router.get("/ledger/{ledger_id}/dimensions/{dimension}")
+async def ledger_dimension_summary_route(ledger_id: str, dimension: str, request: Request,
+                                         start: Optional[str] = None,
+                                         end: Optional[str] = None,
+                                         _: bool = Depends(require_operator)) -> dict[str, Any]:
+    try:
+        return _engine().dimension_summary(ledger_id, dimension, start=start, end=end,
+                                           actor_id=_actor(request))
+    except LedgerError as exc:
+        _raise(exc)
+
+
+@router.get("/ledger/{ledger_id}/runway")
+async def ledger_runway_route(ledger_id: str, request: Request,
+                              as_of: Optional[str] = None,
+                              history_days: int = 90, horizon_days: int = 90,
+                              _: bool = Depends(require_operator)) -> dict[str, Any]:
+    try:
+        return _engine().cash_runway(ledger_id, as_of=as_of, history_days=history_days,
+                                     horizon_days=horizon_days, actor_id=_actor(request))
+    except LedgerError as exc:
+        _raise(exc)
+
+
+# ── Year-end close ───────────────────────────────────────────────────────────
+
+
+@router.get("/ledger/{ledger_id}/year-end/preview")
+async def ledger_year_end_preview_route(ledger_id: str, request: Request,
+                                        fiscal_year: Optional[int] = None,
+                                        _: bool = Depends(require_operator)) -> dict[str, Any]:
+    try:
+        return _engine().preview_fiscal_year_close(
+            ledger_id, fiscal_year=fiscal_year, actor_id=_actor(request))
+    except LedgerError as exc:
+        _raise(exc)
+
+
+@router.post("/ledger/{ledger_id}/year-end/close")
+async def ledger_year_end_close_route(ledger_id: str, request: Request,
+                                      body: dict[str, Any] = Body(default={}),
+                                      _: bool = Depends(require_operator)) -> dict[str, Any]:
+    try:
+        return _engine().close_fiscal_year(
+            ledger_id,
+            fiscal_year=body.get("fiscal_year") or body.get("fiscalYear"),
+            actor_id=_actor(request, body),
+        )
     except LedgerError as exc:
         _raise(exc)
 
@@ -392,6 +503,69 @@ async def ledger_audit(ledger_id: str, request: Request, limit: int = 100,
     try:
         return {"events": _engine().audit_log(ledger_id, limit=limit,
                                               actor_id=_actor(request))}
+    except LedgerError as exc:
+        _raise(exc)
+
+
+@router.get("/ledger/{ledger_id}/audit/verify")
+async def ledger_audit_verify_route(ledger_id: str, request: Request,
+                                    _: bool = Depends(require_operator)) -> dict[str, Any]:
+    try:
+        return _engine().verify_audit(ledger_id, actor_id=_actor(request))
+    except LedgerError as exc:
+        _raise(exc)
+
+
+# ── Source-document attachments ───────────────────────────────────────────────
+
+
+@router.get("/ledger/{ledger_id}/attachments")
+async def ledger_attachments(ledger_id: str, request: Request,
+                             entry_id: Optional[str] = None, limit: int = 200,
+                             _: bool = Depends(require_operator)) -> dict[str, Any]:
+    try:
+        return {"attachments": _engine().list_attachments(
+            ledger_id, entry_id=entry_id, limit=limit, actor_id=_actor(request))}
+    except LedgerError as exc:
+        _raise(exc)
+
+
+@router.post("/ledger/{ledger_id}/attachments")
+async def ledger_attach(ledger_id: str, request: Request,
+                        body: dict[str, Any] = Body(...),
+                        _: bool = Depends(require_operator)) -> dict[str, Any]:
+    try:
+        return _engine().attach_document(
+            ledger_id,
+            str(body.get("entry_id") or body.get("entryId") or ""),
+            str(body.get("artifact_id") or body.get("artifactId") or ""),
+            artifact_service=getattr(service, "artifacts", None),
+            note=body.get("note"),
+            actor_id=_actor(request, body),
+        )
+    except LedgerError as exc:
+        _raise(exc)
+
+
+@router.delete("/ledger/{ledger_id}/attachments/{attachment_id}")
+async def ledger_detach(ledger_id: str, attachment_id: str, request: Request,
+                        _: bool = Depends(require_operator)) -> dict[str, Any]:
+    try:
+        return _engine().detach_document(ledger_id, attachment_id,
+                                         actor_id=_actor(request))
+    except LedgerError as exc:
+        _raise(exc)
+
+
+@router.get("/ledger/{ledger_id}/attachments/{attachment_id}/verify")
+async def ledger_verify_attachment_route(ledger_id: str, attachment_id: str,
+                                         request: Request,
+                                         _: bool = Depends(require_operator)) -> dict[str, Any]:
+    try:
+        return _engine().verify_attachment(
+            ledger_id, attachment_id,
+            artifact_service=getattr(service, "artifacts", None),
+            actor_id=_actor(request))
     except LedgerError as exc:
         _raise(exc)
 

@@ -7,12 +7,15 @@
 // top-bar Agent Workspace toggle and this panel are all one control. Mounted by
 // `stock-chat.tsx` in place of `<AgentWorkspace />` while the Bots tab is active.
 
+import { useState } from 'react';
 import { CalendarDays, X } from '@/lib/icons';
 import { useT } from '@/lib/i18n';
 import { useWorkspaceStore } from '@/lib/agent-workspace/store';
 import { useBotsStore } from '@/lib/bots/bots-store';
 import { ScheduledJobsPanel } from '@/components/bots/scheduled-jobs-panel';
 import { MonitorPanel } from '@/components/bots/monitor-panel';
+import { MCPApprovalsPanel } from '@/components/screens/mcp/approvals-panel';
+import { BotsTeamPanel } from '@/components/bots/bots-team-panel';
 
 export function BotSchedulerDock() {
   const t = useT();
@@ -21,6 +24,7 @@ export function BotSchedulerDock() {
   const openCreate = useBotsStore((s) => s.openCreate);
   const select = useBotsStore((s) => s.select);
   const hydrate = useBotsStore((s) => s.hydrate);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
 
   if (!open) return null;
 
@@ -47,6 +51,15 @@ export function BotSchedulerDock() {
       </header>
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3 pt-1">
+        {/* Bot mode keeps a real approvals surface: scheduled/manual runs can
+            block on an effectful tool while the operator is elsewhere. */}
+        {approvalError && (
+          <p className="rounded-lg border border-rose-500/30 bg-rose-500/5 px-2 py-1.5 text-[11px] text-rose-300">
+            {approvalError}
+          </p>
+        )}
+        <MCPApprovalsPanel busy={false} onError={setApprovalError} />
+        <BotsTeamPanel />
         <MonitorPanel onArmed={() => void hydrate()} />
         <ScheduledJobsPanel
           bare

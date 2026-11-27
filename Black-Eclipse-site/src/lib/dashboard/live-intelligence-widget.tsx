@@ -147,6 +147,23 @@ export function LiveIntelligenceWidget({ placement }: { placement: WidgetPlaceme
   const [errored, setErrored] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
 
+  // A remote iframe that cannot load is replaced by WebView2's OWN error page
+  // inside the card — Microsoft/Edge branding the app cannot restyle. So the
+  // player is never mounted while the machine is offline; the branded card
+  // below says why, and the `online` event mounts the player again. `null`
+  // means "not measured yet": never mount on an unknown connection state.
+  const [online, setOnline] = useState<boolean | null>(null);
+  useEffect(() => {
+    const sync = () => setOnline(typeof navigator === 'undefined' || navigator.onLine !== false);
+    sync();
+    window.addEventListener('online', sync);
+    window.addEventListener('offline', sync);
+    return () => {
+      window.removeEventListener('online', sync);
+      window.removeEventListener('offline', sync);
+    };
+  }, []);
+
   const chooseChannel = (id: string) => {
     setInstanced(id);
     setPlaying(true);
@@ -177,7 +194,7 @@ export function LiveIntelligenceWidget({ placement }: { placement: WidgetPlaceme
     return () => document.removeEventListener('visibilitychange', onVisibility);
   }, []);
 
-  const streaming = playing && inView && tabVisible && !errored && !!active;
+  const streaming = online === true && playing && inView && tabVisible && !errored && !!active;
 
   const embedUrl = useMemo(() => {
     if (!active || !streaming) return null;
@@ -202,6 +219,7 @@ export function LiveIntelligenceWidget({ placement }: { placement: WidgetPlaceme
   }, [embedUrl]);
 
   const retry = () => {
+    if (typeof navigator !== 'undefined') setOnline(navigator.onLine !== false);
     setErrored(false);
     setLoadState('idle');
     setResolveNonce(n => n + 1);
@@ -214,7 +232,9 @@ export function LiveIntelligenceWidget({ placement }: { placement: WidgetPlaceme
   // The status chip is honest: LIVE only when the resolver confirmed a live,
   // embeddable stream; OFFLINE when the provider has no live broadcast; and
   // CHECKING while the resolver is in flight.
-  const statusChip = resolvePending || (resolving && !activeStream)
+  const statusChip = online === false
+    ? { label: 'OFFLINE', dot: 'bg-amber-400', text: 'text-amber-400/90' }
+    : resolvePending || (resolving && !activeStream)
     ? { label: 'CHECKING', dot: 'bg-muted-foreground/50 animate-pulse', text: 'text-muted-foreground/70' }
     : activeOffline || resolveFailed
       ? { label: 'OFFLINE', dot: 'bg-amber-400', text: 'text-amber-400/90' }
@@ -313,6 +333,25 @@ export function LiveIntelligenceWidget({ placement }: { placement: WidgetPlaceme
         message="Configure financial and news sources to start monitoring live intelligence."
         action={{ label: 'Configure Channels', icon: Settings2, onClick: () => setManagerOpen(true) }}
       />
+    );
+  } else if (online === false) {
+    // Do not mount a remote iframe when there is no network: its failure would
+    // render the webview's own error page inside the card (Edge/Bing branded).
+    body = (
+      <StatePanel
+        title="NO CONNECTION"
+        message="You’re offline. Live streams need an internet connection — the rest of Black Eclipse keeps working."
+        actions={[{ label: 'Check Again', icon: RotateCcw, onClick: retry }]}
+      />
+    );
+  } else if (online === null) {
+    // The connection state is measured on mount. Never start a remote iframe
+    // before that measurement lands.
+    body = (
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 rounded-xl border border-border/10 bg-black/40 text-center">
+        <Loader2 size={18} className="animate-spin text-primary" />
+        <p className="font-mono text-[10px] text-muted-foreground/80">Checking connection…</p>
+      </div>
     );
   } else if (errored || resolveFailed) {
     body = (

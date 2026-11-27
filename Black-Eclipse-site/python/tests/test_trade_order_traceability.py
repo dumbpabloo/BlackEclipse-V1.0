@@ -9,9 +9,11 @@ found by run id — no new write path is needed for that half.
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 from types import SimpleNamespace
 
+from harness.trade.authorizer import approval_view
 from harness.trade.store import BrokerConnectionStore
 from harness.trade.tools import _bot_from_conversation, order_ledger
 from harness.trade.authority import bot_version as _bot_version
@@ -68,6 +70,21 @@ def test_a_bot_conversation_yields_its_automation_id():
     assert _bot_from_conversation(SimpleNamespace(conversation_id="bot-auto_1")) == "auto_1"
     assert _bot_from_conversation(SimpleNamespace(conversation_id=None)) == ""
     assert _bot_from_conversation(SimpleNamespace()) == ""
+
+
+def test_an_approval_remembers_the_bot_that_proposed_it():
+    view = approval_view({
+        "id": "appr_1",
+        "kind": "trade",
+        "status": "pending",
+        "serverId": "trade:brk_1",
+        "affectedData": json.dumps({
+            "automationId": "auto_1",
+            "order": {"symbol": "EURUSD"},
+        }),
+    })
+    assert view["automationId"] == "auto_1"
+    assert view["connectionId"] == "brk_1"
 
 
 def test_the_version_lookup_is_best_effort():

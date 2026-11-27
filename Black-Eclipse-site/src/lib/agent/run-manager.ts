@@ -113,8 +113,12 @@ const EMPTY_SNAPSHOT: RunSnapshot = {
 
 type Listener = () => void;
 
-function keyFor(chatId: string | null | undefined): string {
-  return chatId && chatId.length > 0 ? chatId : NEW_CHAT;
+function keyFor(chatId: string | null | undefined, tabId = ''): string {
+  if (chatId && chatId.length > 0) return chatId;
+  // A brand-new, unsaved chat has no id yet. It must still be unique PER TAB:
+  // one shared '__new__' key made a second tab's fresh chat attach to the first
+  // tab's run (and believe it was busy), so only one of them ever ran.
+  return tabId ? `${NEW_CHAT}:${tabId}` : NEW_CHAT;
 }
 
 function announceCompletedRun(
@@ -187,12 +191,12 @@ class RunManager {
 
   /** Stable snapshot for `useSyncExternalStore`. */
   get(chatId: string | null | undefined): RunSnapshot {
-    const run = this.runs.get(keyFor(chatId));
+    const run = this.runs.get(keyFor(chatId, this.tabId));
     return run ? run.snapshot : EMPTY_SNAPSHOT;
   }
 
   hasActive(chatId: string | null | undefined): boolean {
-    const run = this.runs.get(keyFor(chatId));
+    const run = this.runs.get(keyFor(chatId, this.tabId));
     return Boolean(run?.active);
   }
 
@@ -305,8 +309,14 @@ class RunManager {
       }
       case 'delta': {
         if (t.status !== 'streaming') t.status = 'streaming';
+        t.statusNote = undefined;
         t.text += event.text;
         this.emit(run, false);
+        break;
+      }
+      case 'notice': {
+        t.statusNote = event.text;
+        this.emit(run, true);
         break;
       }
       case 'activity_start': {
@@ -364,6 +374,7 @@ class RunManager {
         if (event.ui) t.ui = event.ui;
         t.pendingApproval = undefined;
         t.pendingClarification = undefined;
+        t.statusNote = undefined;
         if (event.error) {
           t.error = { code: event.errorCode, message: event.error };
           t.status = 'error';
@@ -388,6 +399,7 @@ class RunManager {
         t.status = 'error';
         t.pendingApproval = undefined;
         t.pendingClarification = undefined;
+        t.statusNote = undefined;
         t.done = true;
         this.emit(run, true);
         break;
@@ -492,8 +504,8 @@ class RunManager {
   }
 
   async start(args: StartRunArgs): Promise<AssistantTurn> {
-    const chatId = args.chatId && args.chatId.length > 0 ? args.chatId : keyFor(args.chatId);
-    const key = keyFor(chatId);
+    const chatId = args.chatId && args.chatId.length > 0 ? args.chatId : keyFor(args.chatId, this.tabId);
+    const key = keyFor(chatId, this.tabId);
     const existing = this.runs.get(key);
     if (existing?.active) return existing.turn;
 
@@ -516,7 +528,7 @@ class RunManager {
   }
 
   private async startOwned(args: StartRunArgs, chatId: string): Promise<AssistantTurn> {
-    const key = keyFor(chatId);
+    const key = keyFor(chatId, this.tabId);
     const controller = new AbortController();
     const run: LiveRun = {
       chatId,
@@ -657,7 +669,7 @@ class RunManager {
     onTurn?: (turn: AssistantTurn) => void,
     onDone?: (turn: AssistantTurn) => void,
   ): Promise<AssistantTurn> {
-    const key = keyFor(chatId);
+    const key = keyFor(chatId, this.tabId);
     const existing = this.runs.get(key);
     if (existing?.active) return Promise.resolve(existing.turn);
 
@@ -729,7 +741,7 @@ class RunManager {
 
   private onTabEvent(event: TabEvent): void {
     if (event.ownerTabId === this.tabId) return;
-    const key = keyFor(event.chatId);
+    const key = keyFor(event.chatId, this.tabId);
     const run = this.runs.get(key);
     if (event.type === 'run.started') {
       if (!run && event.chatId === this.focusedChatId) {
@@ -752,7 +764,7 @@ class RunManager {
   }
 
   cancel(chatId: string | null | undefined): void {
-    const run = this.runs.get(keyFor(chatId));
+    const run = this.runs.get(keyFor(chatId, this.tabId));
     const shared = getSharedRun(chatId);
     const runId = run?.runId ?? shared?.runId;
     if (run?.active && !run.owner) {
@@ -785,7 +797,7 @@ class RunManager {
     approve: boolean,
     remember = false,
   ): Promise<void> {
-    const run = this.runs.get(keyFor(chatId));
+    const run = this.runs.get(keyFor(chatId, this.tabId));
     const pending: PendingApproval | undefined = run?.turn.pendingApproval;
     if (!run || !pending) return;
     run.turn.pendingApproval = undefined;
@@ -811,7 +823,7 @@ class RunManager {
   }
 
   async answer(chatId: string | null | undefined, value: string): Promise<void> {
-    const run = this.runs.get(keyFor(chatId));
+    const run = this.runs.get(keyFor(chatId, this.tabId));
     const pending: PendingClarification | undefined = run?.turn.pendingClarification;
     if (!run || !pending) return;
     run.turn.pendingClarification = undefined;
@@ -837,7 +849,7 @@ class RunManager {
   }
 
   reset(chatId: string | null | undefined): void {
-    const key = keyFor(chatId);
+    const key = keyFor(chatId, this.tabId);
     const run = this.runs.get(key);
     if (run) {
       run.controller.abort();
@@ -859,7 +871,7 @@ class RunManager {
    */
   reattach(chatId: string | null | undefined): void {
     if (!chatId) return;
-    const key = keyFor(chatId);
+    const key = keyFor(chatId, this.tabId);
     if (this.runs.has(key)) return;
     const record = loadActiveRun(chatId);
     if (!record || Date.now() - record.at > 10 * 60_000) return;

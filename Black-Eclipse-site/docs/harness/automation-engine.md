@@ -1,7 +1,7 @@
 ---
 title: Native Automation Engine
 status: Current
-last-verified: 2026-11-18
+last-verified: 2026-11-26
 ---
 
 # Native Automation Engine
@@ -78,6 +78,15 @@ webhook, fabric) still requires `active`, so a paused bot cannot be woken by
 anything except the operator.
 
 ## Trigger types
+
+`webhook` is a first-class trigger: the runtime generates a per-bot bearer
+token at create time and `POST /automations/webhook/{id}` fires the bot only
+when the token matches in constant time and the bot is `active`. The route is
+deliberately outside `require_operator` because the caller is an external
+service; the token is the authorization. A webhook never advances a schedule.
+See `python/harness/routers/automation.py` and
+`src/app/api/automations/webhook/[id]/route.ts`.
+
 
 - **Cron** — 5-field expression, evaluated in the trigger's IANA timezone, with
   optional `startAt`/`endAt`. DST is deterministic: a nonexistent wall time
@@ -171,6 +180,45 @@ be woken, because the event launch requires `active`.
 - `create_task` → registers work in the Task System (no execution).
 - An agent action with `config.tasks` runs through the Orchestration layer
   (`parallel_execute`) — the existing parallel primitive.
+
+### External ACP agents
+
+`action.type = "run_external_agent"` runs the objective through an external
+[Agent Client Protocol](https://agentclientprotocol.com/) process instead of the
+native loop. The executable and argv are separate (never a shell), and the
+client in `python/harness/acp_client.py` performs
+`initialize → session/new | session/load → session/prompt`, collects
+`session/update` text and answers `session/request_permission` with **deny**
+unless `config.externalAgent.permissionPolicy == "allow"` (then only an
+`allow_once` option is selected). `session/load` is used when the agent
+advertises `loadSession` and a `sessionId` is configured; a failed resume falls
+back to a new session rather than silently using the wrong history.
+
+MCP server descriptors (`mcpServers`) are passed through to `session/new` and
+`session/load`. Filesystem and terminal client methods are negotiated ONLY when
+`fsRead`, `fsWrite` or `terminal` is explicitly true; path arguments are confined
+to the bot workspace, writes cannot escape it, and terminal commands are argv (no
+shell). With the defaults (all false) those methods are refused. Timeouts,
+malformed JSON, a missing session id and an abnormal exit are typed failures,
+never a fabricated answer.
+
+Config:
+`action.config.externalAgent = {command, args, cwd?, permissionPolicy?, timeoutS?,
+sessionId?, mcpServers?, fsRead?, fsWrite?, terminal?}`.
+The Bots detail page exposes the command/args/allow fields and switches the
+action type on save. It is deliberately **not** on `bot_create` / `bot_update`:
+an agent must not be able to turn a bot into an arbitrary executable. Only the
+operator UI or an operator-gated API edit can set it.
+This remains a small ACP client, not the full SDK (no MCP tool-call bridging
+beyond session setup, no editor integration).
+
+A `messaging` delivery target is now a REAL send through the channel gateway:
+`destination` is `<kind>:<external chat>` (for example `telegram:12345` or
+`slack:C123`), and `deliver_automation` calls the one
+`ChannelService.send_outbound(kind, chat, report)` with the same rendered run
+report. A missing channel or a failed send is recorded per target
+(`DELIVERY_FAILED`), never raised into the run. A destination without the
+`kind:chat` shape keeps the legacy template event as a compatibility fallback.
 
 ## Prompts name capabilities, not tools
 
@@ -379,6 +427,18 @@ automation:
   default. Duplicate event delivery is deduplicated by `eventId`.
 - **"Why did it behave that way?"** Open the execution and read its snapshot and
   timeline.
+
+## Headless host (always-on bots)
+
+`npm run bots:headless` starts ONLY the Python runtime (no Electron, no Next),
+with the same scheduler, stores and bot definitions. It is the supported
+always-on path for a VPS or spare machine: scheduled/event/condition/webhook
+bots keep firing while the desktop is closed. It binds `127.0.0.1:8765` by
+default (`BOTS_HOST` / `BOTS_PORT` to change it); the runtime's existing
+non-loopback guard still requires `CRON_SECRET` and, in multi-tenant mode,
+`HARNESS_AUTH_SECRET`. There is no UI in this process, and graph-workflow bots
+that call back into the Next front door need that front door on the same host.
+`scripts/bots-headless.js`.
 
 ## Operational notes
 

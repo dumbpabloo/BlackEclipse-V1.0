@@ -235,6 +235,15 @@ export function clientKey(request: Request): string {
   if (forwarded) return forwarded.split(",")[0].trim();
   const realIp = request.headers.get("x-real-ip");
   if (realIp) return realIp.trim();
+  // Desktop tabs share one loopback host, so a host-only key made the limiter
+  // GLOBAL across every chat tab: one busy tab could 429 the other. The client
+  // sends a per-tab id; it is combined with the host so the bucket stays scoped
+  // to this app (a caller rotating the header only affects its own local bucket,
+  // and this app is single-operator/loopback by default).
+  const tab = request.headers.get("x-be-client");
+  if (tab && /^[A-Za-z0-9_-]{8,64}$/.test(tab)) {
+    return `${requestHost(request)}:${tab}`;
+  }
   return requestHost(request) || "unknown";
 }
 

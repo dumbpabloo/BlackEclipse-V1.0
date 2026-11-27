@@ -355,6 +355,10 @@ export interface TradeApproval {
   risk: string | null;
   expiresAt: string | null;
   createdAt: string | null;
+  /** The run that requested this exact order. */
+  requestedByRunId?: string | null;
+  /** The bot/automation that proposed the order (bot conversations only). */
+  automationId?: string | null;
   /**
    * Present when the approval came from the broker service: the exact order the
    * operator is approving, so the chat card can submit it without a re-entry.

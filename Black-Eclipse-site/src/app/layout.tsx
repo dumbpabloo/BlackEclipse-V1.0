@@ -21,6 +21,7 @@ import { NewsAlertWatcher } from "@/lib/notifications/news-watcher";
 import { BrowserTabIndicator } from "@/lib/notifications/tab-indicator";
 import { DesktopTaskbarBadge } from "@/lib/notifications/desktop-taskbar-badge";
 import { UpdateBanner } from "@/components/layout/update-banner";
+import { OfflineBanner } from "@/components/layout/offline-banner";
 import { DesktopSession } from "@/components/layout/desktop-session";
 import { DesktopShellGuards } from "@/components/layout/desktop-shell-guards";
 import { SoundProvider } from "@/lib/sounds";
@@ -107,6 +108,9 @@ export default async function RootLayout({children}: {children: React.ReactNode}
           <DesktopSession />
           <DesktopShellGuards />
         </AppActivity>
+        {/* Always mounted: a connection loss is not a poller and must show
+         * during onboarding and every tab, not only when AppActivity is live. */}
+        <OfflineBanner />
         <OnboardingGate setupPending={setupPending} />
         {children}
       </body>

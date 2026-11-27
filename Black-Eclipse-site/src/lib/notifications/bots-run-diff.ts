@@ -13,6 +13,8 @@
 //
 // Kept framework-free and pure so it can be unit-tested without a DOM.
 
+import { isQuietAnswer } from '@/lib/bots/quiet';
+
 /** The subset of a bot's latest execution this module reads. */
 export interface WatchedBotRun {
   automationId: string;
@@ -76,6 +78,9 @@ export function selectBotRunTransitions(
 
     const terminal = NOTIFIABLE_TERMINAL[v.state];
     if (!terminal) continue;
+    // A quiet completion said "nothing changed". It still advances the tracked
+    // run, but it must not toast, sound, or mark the bot unread.
+    if (v.state === 'completed' && isQuietAnswer(v.output)) continue;
 
     // Prefer the run's actual answer so a completed bot shows WHAT it produced,
     // not just that it finished; fall back to the outcome/error detail.

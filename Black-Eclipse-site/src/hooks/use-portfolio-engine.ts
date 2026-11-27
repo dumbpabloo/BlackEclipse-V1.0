@@ -51,8 +51,8 @@ export interface PortfolioStats {
   roiPercent: number;
   dailyChangeValue: number;
   dailyChangePercent: number;
-  /** Reporting currency. Fixed to USD — all aggregates are USD-equivalents. */
-  base: 'USD';
+  /** Reporting currency of the values above (engine base, else USD). */
+  base: string;
   holdings: Array<{
     symbol: string;
     name: string;
@@ -78,6 +78,8 @@ export interface PortfolioStats {
     dayPct: number;
     /** True when a non-USD position had no FX rate and was converted 1:1. */
     fxMissing: boolean;
+    /** False when the engine has no usable mark for this position. */
+    priced?: boolean;
   }>;
 }
 

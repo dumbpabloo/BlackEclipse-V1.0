@@ -35,7 +35,10 @@ function volumeText(volume?: number): string {
   return String(Number(volume));
 }
 
-export function TradeApprovalBanner({ onCancel }: { onCancel?: () => void } = {}) {
+export function TradeApprovalBanner({
+  onCancel,
+  automationId,
+}: { onCancel?: () => void; automationId?: string } = {}) {
   const [approvals, setApprovals] = useState<TradeApproval[]>([]);
   const [connections, setConnections] = useState<BrokerConnection[]>([]);
   const [phrases, setPhrases] = useState<Record<string, string>>({});
@@ -58,20 +61,25 @@ export function TradeApprovalBanner({ onCancel }: { onCancel?: () => void } = {}
       ]);
       setApprovals(
         nextApprovals.filter(
-          (a) => LIVE_ORDER_STATUSES.has(a.status) && !dismissed.current.has(a.id),
+          (a) => LIVE_ORDER_STATUSES.has(a.status)
+            && !dismissed.current.has(a.id)
+            // Scoped to the bot whose chat is open. Rows from before the
+            // attribution existed have no automationId and stay visible; a row
+            // that names a different bot never leaks into this chat.
+            && (!automationId || !a.automationId || a.automationId === automationId),
         ),
       );
       setConnections(nextConnections);
     } catch {
       // The trading runtime may be down; the composer must keep working.
     }
-  }, []);
+  }, [automationId]);
 
   useEffect(() => {
     void load();
     const timer = setInterval(() => void load(), POLL_MS);
     return () => clearInterval(timer);
-  }, [load]);
+  }, [load, automationId]);
 
   // A filled order consumes its approval, so the card unmounts. Keep the
   // success line on screen briefly instead of silently disappearing - the

@@ -30,6 +30,8 @@ import { refusalKey } from '@/lib/i18n/refusal-copy';
 
 export type HarnessUiEvent =
   | { kind: 'status'; status: ResponseStatus }
+  /** A transient explanation for the working indicator (waiting/reconnecting). */
+  | { kind: 'notice'; text: string }
   | { kind: 'delta'; text: string }
   | { kind: 'activity_start'; item: ActivityItem }
   | {
@@ -335,6 +337,24 @@ export function normalizeHarnessEvent(
   rawPayload: Record<string, unknown>,
 ): HarnessUiEvent | null {
   const payload = unwrapEventPayload(rawPayload);
+
+  if (event === 'model.queued') {
+    const reason = str(payload.reason) ?? '';
+    return {
+      kind: 'notice',
+      text: reason === 'concurrency'
+        ? 'Waiting for provider capacity…'
+        : reason === 'credential_cooldown' || reason === 'rate_limit'
+          ? 'Waiting for the provider rate limit to reset…'
+          : 'Waiting for the provider…',
+    };
+  }
+  if (event === 'model.rate_limited') {
+    return { kind: 'notice', text: 'Provider capacity is exhausted — retrying…' };
+  }
+  if (event === 'model.stalled') {
+    return { kind: 'notice', text: 'The provider stopped streaming — recovering…' };
+  }
 
   if (event === 'model.delta') {
     const text = str(payload.text) ?? '';

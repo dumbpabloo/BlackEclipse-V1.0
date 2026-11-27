@@ -9,7 +9,7 @@ import { runtimeCallbackToken } from "../runtime-auth";
 import { HarnessRuntimeUnavailable } from "./python-client";
 import { redactSecrets } from "../errors";
 
-export type CostBasisMethod = "FIFO" | "LIFO" | "AVERAGE_COST";
+export type CostBasisMethod = "FIFO" | "LIFO" | "AVERAGE_COST" | "HIFO" | "SPECIFIC_ID";
 export type Freshness = "FRESH" | "STALE" | "VERY_STALE" | "MISSING";
 export type DataQualityStatus = "OK" | "PARTIAL" | "UNAVAILABLE";
 
@@ -132,11 +132,28 @@ export interface TaxLotView {
   costPerUnit: string;
   costBasis: string;
   openedAt: string;
+  currency?: string;
+}
+
+export interface TaxLotMatchView {
+  id: string;
+  sellTransactionId: string;
+  lotId: string;
+  symbol: string;
+  quantity: string;
+  costBasis: string;
+  proceeds: string;
+  realizedPnl: string;
+  acquiredAt: string;
+  disposedAt: string;
+  /** null when the engine cannot determine the holding period honestly. */
+  holdingDays: number | null;
 }
 
 export interface TaxLotsResult {
   portfolioId: string;
   method: CostBasisMethod;
+  totalRealizedPnl?: string;
   symbols: Array<{
     symbol: string;
     remainingQuantity: string;
@@ -144,7 +161,7 @@ export interface TaxLotsResult {
     averageCost: string | null;
     realizedPnl: string;
     openLots: TaxLotView[];
-    matches: Array<Record<string, unknown>>;
+    matches: TaxLotMatchView[];
   }>;
 }
 

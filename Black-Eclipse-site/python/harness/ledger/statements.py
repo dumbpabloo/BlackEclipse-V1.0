@@ -17,9 +17,14 @@ from decimal import Decimal
 from typing import Any, Iterable, Sequence
 
 from .models import Account, money
-from .money import ZERO, q_money
+from .money import D, ZERO, q_money
 
 Posting = dict[str, Any]
+
+#: The source tag on a year-end closing entry. Closing moves are not economic
+#: activity of the new year, so the P&L and indirect cash-flow statements omit
+#: them while the trial balance / balance sheet include them.
+YEAR_END_CLOSE_SOURCE = "year_end_close"
 
 
 @dataclass
@@ -238,7 +243,12 @@ def income_statement(
     start: str = "",
     end: str = "",
 ) -> dict[str, Any]:
-    balances = build_balances(accounts, (), postings)
+    # A closing entry belongs to the new fiscal year's opening date but moves the
+    # PRIOR year's income. Showing it as revenue/expense in the new year's P&L
+    # would report the same activity twice; the balance sheet still includes it.
+    rows = [row for row in postings
+            if str(row.get("source") or "") != YEAR_END_CLOSE_SOURCE]
+    balances = build_balances(accounts, (), rows)
     revenue_bals = [b for b in balances.values() if b.account.type == "REVENUE"]
     expense_bals = [b for b in balances.values() if b.account.type == "EXPENSE"]
 
@@ -373,11 +383,120 @@ def cash_flow(
     }
 
 
+def cash_flow_indirect(
+    accounts: Sequence[Account],
+    postings: Iterable[Posting],
+    *,
+    opening: Iterable[Posting] = (),
+    start: str = "",
+    end: str = "",
+) -> dict[str, Any]:
+    """Indirect-method operating cash flow, reconciled to the direct statement.
+
+    Starts with net income, adds back depreciation/amortisation, then adjusts for
+    the movement in every non-cash ASSET/LIABILITY account whose declared
+    `cash_flow_category` is OPERATING (receivables, inventory, prepaid, payables,
+    tax, accruals, payroll, intercompany, suspense). Investing/financing lines
+    come from the direct statement; only the operating section is derived twice.
+
+    The direct-vs-indirect difference is a **check**, not a plug. A non-cash
+    investing/financing entry (e.g. equipment bought on credit) is not modelled
+    by this simple working-capital adjustment, so the difference is reported
+    with the amount that did not reconcile rather than hidden.
+    """
+    movement = [row for row in postings
+                if str(row.get("source") or "") != YEAR_END_CLOSE_SOURCE]
+    opening_rows = list(opening)
+    direct = cash_flow(accounts, movement, opening=opening_rows, start=start, end=end)
+    balances = build_balances(accounts, (), movement)
+
+    revenue_total = sum(
+        (-b.net for b in balances.values() if b.account.type == "REVENUE"), ZERO
+    )
+    expense_total = sum(
+        (b.net for b in balances.values() if b.account.type == "EXPENSE"), ZERO
+    )
+    net_income = revenue_total - expense_total
+
+    depreciation = sum(
+        (
+            b.movement_net for b in balances.values()
+            if b.account.type == "EXPENSE"
+            and b.account.subtype in ("DEPRECIATION", "AMORTISATION")
+        ),
+        ZERO,
+    )
+
+    wc_rows: list[dict[str, Any]] = []
+    wc_total = ZERO
+    for balance in balances.values():
+        account = balance.account
+        if account.is_cash or account.type not in ("ASSET", "LIABILITY"):
+            continue
+        if (account.cash_flow_category or "") != "OPERATING":
+            continue
+        # A debit movement in an operating asset uses cash; a credit movement in
+        # an operating liability provides cash. Negating the debit-positive net
+        # gives the cash effect for both sides.
+        amount = -balance.movement_net
+        if amount == ZERO:
+            continue
+        wc_rows.append({
+            "code": account.code,
+            "name": account.name,
+            "subtype": account.subtype,
+            "amount": money(q_money(amount)),
+        })
+        wc_total += amount
+
+    indirect_operating = net_income + depreciation + wc_total
+    direct_operating = D(direct["operating"])
+    difference = direct_operating - indirect_operating
+    checks = [
+        _check(
+            "indirect-operating-reconciles-to-direct",
+            difference == ZERO,
+            f"direct {money(direct_operating)} vs indirect {money(indirect_operating)} "
+            f"(difference {money(difference)})",
+        ),
+        _check(
+            "every-cash-movement-is-classified",
+            bool(direct["complete"]),
+            f"unclassified {direct['unclassified']}",
+        ),
+    ]
+    return {
+        "kind": "cash_flow_indirect",
+        "startDate": start or None,
+        "endDate": end or None,
+        "netIncome": money(q_money(net_income)),
+        "depreciation": money(q_money(depreciation)),
+        "workingCapital": {
+            "rows": wc_rows,
+            "total": money(q_money(wc_total)),
+        },
+        "operatingCashFlow": money(q_money(indirect_operating)),
+        "directOperatingCashFlow": direct["operating"],
+        "difference": money(q_money(difference)),
+        "reconciled": difference == ZERO and bool(direct["complete"]),
+        "investing": direct["investing"],
+        "financing": direct["financing"],
+        "unclassified": direct["unclassified"],
+        "netChange": direct["netChange"],
+        "openingCash": direct["openingCash"],
+        "closingCash": direct["closingCash"],
+        "complete": bool(direct["complete"]),
+        "checks": checks,
+        "balanced": all(check["ok"] for check in checks),
+    }
+
+
 __all__ = [
     "AccountBalance",
     "balance_sheet",
     "build_balances",
     "cash_flow",
+    "cash_flow_indirect",
     "income_statement",
     "trial_balance",
 ]

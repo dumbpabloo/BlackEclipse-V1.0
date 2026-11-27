@@ -336,7 +336,9 @@ async def order_preview(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
             "status": "INVALID_ORDER"
         }
     result = service.preview_order(
-        connection_id, intent, run_id=str(getattr(ctx, "run_id", "") or "")
+        connection_id, intent,
+        run_id=str(getattr(ctx, "run_id", "") or ""),
+        automation_id=_bot_from_conversation(ctx),
     )
     if result.get("allowed"):
         approval = result.get("approval") or {}

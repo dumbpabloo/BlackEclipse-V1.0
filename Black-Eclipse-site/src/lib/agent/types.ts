@@ -51,6 +51,12 @@ export interface ChatOptions {
    */
   chatId?: string;
   /**
+   * Server-owned workspace root id for this turn. `bot:<id>` is the one
+   * server-derived form (the runtime creates it under `.black-eclipse/bots/`);
+   * an approved root id is also accepted. Never a raw path.
+   */
+  workspaceRootId?: string;
+  /**
    * Opt this conversation into PRIVATE per-conversation long-term memory. Set
    * by bot chats and group-room member turns, where each conversation keeps its
    * own durable memory isolated from every other. Absent for ordinary chat.

@@ -11,6 +11,7 @@ import type {
   AutomationStatusSummaryView,
   AutomationStatusView,
   AutomationView,
+  BotAuditEventView,
   BreakerState,
   ConditionView,
   CreateAutomationInput,
@@ -30,6 +31,7 @@ export type {
   AutomationStatusSummaryView,
   AutomationStatusView,
   AutomationView,
+  BotAuditEventView,
   BreakerState,
   ConditionView,
   CreateAutomationInput,
@@ -232,6 +234,16 @@ export async function listAutomationHistory(id: string): Promise<ExecutionView[]
     `/api/automations/${encodeURIComponent(id)}/history`,
   );
   return body.executions ?? [];
+}
+
+export async function listAutomationAudit(
+  automationId?: string,
+  limit = 100,
+): Promise<BotAuditEventView[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (automationId) params.set("automationId", automationId);
+  const body = await api<{ events: BotAuditEventView[] }>(`/api/automations/audit?${params.toString()}`);
+  return body.events ?? [];
 }
 
 export async function listAutomationVersions(id: string): Promise<Array<{ version: number; createdAt: string; createdBy: string | null }>> {

@@ -91,6 +91,8 @@ export interface Message {
   shell?: ShellRun;
   /** Lifecycle of an assistant turn (absent on user turns and legacy rows). */
   status?: ResponseStatus;
+  /** Transient working-indicator explanation (waiting/reconnecting). */
+  statusNote?: string;
   /** Tools/retrieval the agent used while producing this turn. */
   activities?: ActivityItem[];
   /**

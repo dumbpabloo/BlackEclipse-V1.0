@@ -57,6 +57,8 @@
     "test:fast": "node scripts/test-fast.js",
     "verify": "node scripts/verify.js",
     "test:py": "node scripts/test-python.js",
+    "memory:prune": "node scripts/prune-agent-memory.js",
+    "bots:headless": "node scripts/bots-headless.js",
     "test:quant-bench": "node scripts/quant-bench.js",
     "rotate:changelog": "node scripts/rotate-changelog.js",
     "eval:registry": "node scripts/generate-tool-registry.js",

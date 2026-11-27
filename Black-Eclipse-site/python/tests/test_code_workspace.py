@@ -103,6 +103,35 @@ def test_resolve_workspace_refuses_a_mismatched_request_root(monkeypatch, tmp_pa
     assert resolve_workspace(Req()) is None
 
 
+def test_resolve_bot_workspace_is_server_owned_and_sanitized(monkeypatch, tmp_path):
+    monkeypatch.setenv("BLACK_ECLIPSE_CODE_ROOT", str(tmp_path))
+    ws = resolve_workspace(None, root_id="bot:auto_1")
+    assert ws is not None
+    expected = tmp_path / ".black-eclipse" / "bots" / "auto_1"
+    assert expected.is_dir()
+    assert ws.root == expected.resolve()
+    # A hostile id can never escape the bot root.
+    ws = resolve_workspace(None, root_id="bot:../../outside")
+    assert ws is not None
+    assert ws.root.parent == (tmp_path / ".black-eclipse" / "bots").resolve()
+
+
+def test_resolve_workspace_allows_a_real_subdirectory(monkeypatch):
+    """A request may NARROW the server root, never widen it."""
+    monkeypatch.delenv("BLACK_ECLIPSE_CODE_ROOT", raising=False)
+    base = resolve_workspace(None)
+    assert base is not None
+    child = base.root / ".black-eclipse" / "bots" / "auto_test"
+    child.mkdir(parents=True, exist_ok=True)
+
+    class Req:
+        root = str(child)
+
+    narrowed = resolve_workspace(Req())
+    assert narrowed is not None
+    assert narrowed.root == child.resolve()
+
+
 # ── confine: the three escape vectors, distinct codes ───────────────────────
 
 

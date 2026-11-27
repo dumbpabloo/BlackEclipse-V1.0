@@ -47,7 +47,7 @@ budget, not the diagnostic `/health` document — under load the latter measured
 | `src-tauri/tauri.conf.json` | Bundle/app config; `frontendDist` is `../ui` |
 | `src-tauri/capabilities/default.json` | Grants the splash page core window/event access only |
 | `src-tauri/icons/` | Copies of `public/branding` so the binary carries the app icon |
-| `ui/index.html` | The boot screen, embedded into the binary at compile time |
+| `ui/index.html` | The boot and offline screen, embedded into the binary at compile time (brand mark inlined; renders with no network) |
 | `../scripts/desktop-server.js` | Server bootstrap; prints `@@BE:*@@` markers the shell reads |
 
 ## How it boots
@@ -436,6 +436,27 @@ Decisions worth keeping:
 - **Failure is visible.** A server that dies after readiness swaps the page for
   a failure panel with Reload. A missing WebView2 runtime gets a message box with
   the download link and the browser fallback.
+- **A failed navigation never shows the webview's own error page.** WebView2
+  would otherwise paint its Edge/Bing-branded "can't reach this page" document,
+  which the shell cannot restyle (the app document is already gone). On Windows
+  the shell subscribes to `NavigationCompleted` through `webview2-com` and, on an
+  unsuccessful navigation, navigates back to the bundled splash with an
+  `#offline=<reason>` fragment; the splash renders the Black Eclipse mark and
+  copy for "local service stopped", "offline", "timed out" or "unavailable".
+  The splash's primary action (`desktop_reopen`) probes the loopback port and
+  only restarts the supervisor when the service is actually down.
+- **A wedged server is caught mid-session.** The bootstrap reports a child that
+  exits, but a Next server whose event loop is stuck keeps the socket open and
+  the last document on screen. Once the window is on the app origin, a watchdog
+  probes `/api/updates` every 15 s and, after three unanswered probes (45 s),
+  replaces the page with the same branded offline screen. It ignores the splash,
+  so booting and the fallback are never mistaken for a hang.
+- **The window never leaves the app origin.** `on_navigation` allows only the
+  bundled asset origin and the loopback app port; any other http(s) URL is
+  cancelled and handed to the OS browser (non-web schemes are refused). This is
+  what keeps a remote link (and its failure page) out of the desktop window.
+  `on_new_window` denies the new window: app-origin popouts navigate the existing
+  window, and external URLs open in the OS browser.
 - **Closing the window quits the app.** Closing (the tab-strip `X`, the taskbar
   menu, or Alt+F4) hides the window, stops the owned server tree and exits, so
   there is no invisible process left behind. **Run in background** is the one

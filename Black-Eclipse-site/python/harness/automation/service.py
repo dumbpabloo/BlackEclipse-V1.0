@@ -7,6 +7,7 @@ durable domain operations. No agentic logic here.
 
 from __future__ import annotations
 
+import secrets
 from typing import Any, Optional
 
 from pydantic.alias_generators import to_camel
@@ -137,15 +138,38 @@ class AutomationService:
             definition = AutomationDefinition(**data)
         except Exception as exc:  # noqa: BLE001 - a malformed body is a domain error
             raise AutomationError("INVALID_AUTOMATION", str(exc)) from exc
+        definition = self._with_webhook_secret(definition)
         self._assert_valid(definition)
         saved = self._store.save_automation(definition, created_by=created_by)
+        self._store.record_audit(
+            saved.id, "created", actor=created_by,
+            detail={"name": saved.name, "state": saved.state,
+                    "triggerType": saved.trigger.type, "actionType": saved.action.type},
+        )
         if saved.state == "active":
             self._engine.refresh_schedule(saved.id)
             saved = self._store.get_automation(saved.id) or saved
         return saved
 
+    @staticmethod
+    def _with_webhook_secret(definition: AutomationDefinition) -> AutomationDefinition:
+        """A webhook bot always has its own generated bearer token.
+
+        Never derived from the id: an id is visible, a token is not. Existing
+        secrets are preserved (so an edit cannot silently rotate a caller's URL).
+        """
+        trigger = definition.trigger
+        if trigger.type != "webhook" or trigger.webhook_secret:
+            return definition
+        return definition.model_copy(update={
+            "trigger": trigger.model_copy(update={"webhook_secret": secrets.token_urlsafe(32)}),
+        })
+
     def get(self, automation_id: str) -> Optional[AutomationDefinition]:
         return self._store.get_automation(automation_id)
+
+    def audit(self, automation_id: Optional[str] = None, limit: int = 200) -> list[dict[str, Any]]:
+        return self._store.list_audit(automation_id, limit=limit)
 
     def create_definition(
         self, definition: AutomationDefinition, *, created_by: Optional[str] = None,
@@ -153,6 +177,11 @@ class AutomationService:
         """Create from an already-built definition (legacy adapter / migration)."""
         self._assert_valid(definition)
         saved = self._store.save_automation(definition, created_by=created_by)
+        self._store.record_audit(
+            saved.id, "created", actor=created_by,
+            detail={"name": saved.name, "state": saved.state,
+                    "triggerType": saved.trigger.type, "actionType": saved.action.type},
+        )
         if saved.state == "active":
             self._engine.refresh_schedule(saved.id)
             saved = self._store.get_automation(saved.id) or saved
@@ -203,8 +232,13 @@ class AutomationService:
         candidate = current.model_copy(update={**fields, "version": version, "updated_at": now_iso()})
         # Re-validate the typed sub-models (a malformed dict must be refused).
         candidate = self._retype(candidate, fields)
+        candidate = self._with_webhook_secret(candidate)
         self._assert_valid(candidate)
         saved = self._store.save_automation(candidate, created_by=updated_by)
+        self._store.record_audit(
+            saved.id, "updated", actor=updated_by,
+            detail={"version": saved.version, "fields": sorted(fields.keys())},
+        )
         self._engine.refresh_schedule(saved.id)
         return self._store.get_automation(saved.id) or saved
 
@@ -246,7 +280,13 @@ class AutomationService:
         # Revoke trading authority BEFORE the row disappears: a deleted bot must
         # never leave a usable mandate behind. Positions are untouched.
         self._stop_trading(automation_id, "bot deleted")
-        return self._store.delete_automation(automation_id)
+        deleted = self._store.delete_automation(automation_id)
+        if deleted:
+            self._store.record_audit(
+                automation_id, "deleted", actor="operator",
+                detail={"note": "run history retained for audit"},
+            )
+        return deleted
 
     def _stop_trading(self, automation_id: str, reason: str) -> dict[str, Any]:
         """Stop a strategy bot's authority. Best-effort; never fails a lifecycle call."""
@@ -295,6 +335,10 @@ class AutomationService:
             # Pause/disable/archive is an operator decision to stop trading now.
             self._stop_trading(automation_id, f"bot {state}")
         self._engine.refresh_schedule(saved.id)
+        self._store.record_audit(
+            saved.id, "lifecycle", actor=actor,
+            detail={"from": current.state, "to": state},
+        )
         return self._store.get_automation(saved.id) or saved
 
     def enable(self, automation_id: str, *, actor: str = "operator") -> AutomationDefinition:
@@ -318,9 +362,23 @@ class AutomationService:
         self, automation_id: str, *, trigger_ref: Optional[str] = None,
         allow_paused: bool = False,
     ) -> Optional[str]:
-        return await self._engine.fire(
+        execution_id = await self._engine.fire(
             automation_id, trigger_type="manual", trigger_ref=trigger_ref,
             allow_paused=allow_paused,
+        )
+        if execution_id:
+            self._store.record_audit(
+                automation_id, "run", actor="operator",
+                detail={"executionId": execution_id, "allowPaused": allow_paused},
+            )
+        return execution_id
+
+    async def run_webhook(
+        self, automation_id: str, *, delivery_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """Fire an active webhook bot. The caller already verified its token."""
+        return await self._engine.fire(
+            automation_id, trigger_type="webhook", trigger_ref=delivery_id,
         )
 
     async def resume_execution(self, execution_id: str) -> bool:

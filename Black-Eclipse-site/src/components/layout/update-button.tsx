@@ -72,6 +72,7 @@ export function UpdateButton() {
   const shell = typeof window !== 'undefined' && canRestartFromShell();
 
   const latest = status?.latestVersion ?? null;
+  const current = status?.currentVersion ?? null;
   const available = Boolean(
     status?.ok && status.available && latest && latest !== prefs.skippedVersion,
   );
@@ -203,6 +204,17 @@ export function UpdateButton() {
             </button>
           </div>
 
+          {current && (
+            <div className="mt-3 flex items-center justify-between rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5">
+              <span className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
+                Current version
+              </span>
+              <span className="font-mono text-[11px] tabular-nums text-foreground/90">
+                v{current}
+              </span>
+            </div>
+          )}
+
           {running && (
             <div className="mt-3 space-y-2">
               <div className="h-1 overflow-hidden rounded-full bg-white/10">
@@ -327,7 +339,7 @@ export function UpdateButton() {
               <div className="flex items-center justify-between gap-2 border-t border-white/5 pt-2">
                 <p className="flex items-center gap-1 text-[10px] text-muted-foreground/70">
                   <ShieldCheck size={11} className="shrink-0" />
-                  Signed release, database backup, rollback on failure.
+                  <span>Signed release, database backup, rollback on failure.</span>
                 </p>
                 <button
                   type="button"

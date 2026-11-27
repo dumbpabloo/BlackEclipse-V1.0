@@ -5,9 +5,11 @@ import { prisma } from "@/lib/db";
 export const dynamic = "force-dynamic";
 
 // Bot mode's durable presentation state. Two documents only — the per-bot chat
-// threads and the group rooms (members + transcripts). This is a MIRROR of the
-// client stores, not an authority: the UI always hydrates from localStorage
-// first and only adopts the server copy when its client timestamp is newer.
+// threads and the group rooms (members + transcripts). The UI hydrates from
+// localStorage first for instant paint, then adopts the server copy when it is
+// newer. The server is the CONFLICT authority: a stale document (an older
+// stateUpdatedAt) is refused instead of overwriting a newer one, so an old tab
+// or a delayed push can never roll the conversation back.
 const ALLOWED_KEYS = new Set(["chat", "groups"]);
 
 // A transcript document is JSON and grows with use. 8 MB is generous for a
@@ -72,6 +74,26 @@ export async function PUT(
   if (!isIsoTimestamp(updatedAt)) return badRequest("updatedAt must be an ISO timestamp");
 
   try {
+    const existing = await prisma.botState.findUnique({ where: { key } });
+    if (
+      existing
+      && Date.parse(updatedAt) < Date.parse(existing.stateUpdatedAt)
+    ) {
+      // A newer document already exists. Return it so the caller can adopt it;
+      // never regress the durable transcript to an older client snapshot.
+      return NextResponse.json(
+        {
+          success: false,
+          error: "stale bot state",
+          state: {
+            document: existing.document,
+            updatedAt: existing.stateUpdatedAt,
+            revision: existing.revision,
+          },
+        },
+        { status: 409 },
+      );
+    }
     const row = await prisma.botState.upsert({
       where: { key },
       create: {

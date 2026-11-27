@@ -36,7 +36,7 @@ export function ScheduleEditor({ draft, onChange, className }: ScheduleEditorPro
   const t = useT();
   const choices: ScheduleChoice[] = [
     'manual', 'once', 'daily', 'weekdays', 'weekly', 'monthly', 'interval', 'cron',
-    'event', 'condition',
+    'event', 'condition', 'webhook',
   ];
   // The first filter field drives the two-input editor; the practical case is
   // "wake when this bot finishes" (`automationId`). Extra keys authored through
@@ -212,21 +212,42 @@ export function ScheduleEditor({ draft, onChange, className }: ScheduleEditorPro
         </div>
       )}
       {draft.schedule === 'condition' && (
-        <Input
-          value={draft.condition?.expression ?? ''}
-          onChange={(e) =>
-            onChange({
-              condition: {
-                expression: e.target.value,
-                edge: draft.condition?.edge ?? false,
-                variables: draft.condition?.variables ?? [],
-              },
-            })
-          }
-          placeholder="AAPL.price > 200"
-          className="font-mono"
-          aria-label="Condition expression"
-        />
+        <div className="space-y-2">
+          <Input
+            value={draft.condition?.expression ?? ''}
+            onChange={(e) =>
+              onChange({
+                condition: {
+                  expression: e.target.value,
+                  // Match the backend default: a condition fires on the false→true
+                  // edge, not on every tick while it remains true.
+                  edge: draft.condition?.edge ?? true,
+                  variables: draft.condition?.variables ?? [],
+                },
+              })
+            }
+            placeholder="AAPL.price > 200"
+            className="font-mono"
+            aria-label="Condition expression"
+          />
+          <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={draft.condition?.edge ?? true}
+              onChange={(e) =>
+                onChange({
+                  condition: {
+                    expression: draft.condition?.expression ?? '',
+                    edge: e.target.checked,
+                    variables: draft.condition?.variables ?? [],
+                  },
+                })
+              }
+              className="h-3.5 w-3.5 accent-[var(--primary)]"
+            />
+            {t('bots.conditionEdge')}
+          </label>
+        </div>
       )}
       {draft.schedule !== 'manual' && (
         <div className="flex items-center gap-2">

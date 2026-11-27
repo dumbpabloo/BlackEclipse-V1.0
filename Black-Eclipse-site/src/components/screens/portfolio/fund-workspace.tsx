@@ -20,17 +20,26 @@ interface FundWorkspaceProps {
   fund: Fund;
   onBack: () => void;
   onAddTransaction: (tx: Transaction) => Promise<void> | void;
+  /** Persist the engine's cost-basis method (not a display-only switch). */
+  onSetCostBasis: (method: NonNullable<Fund['costBasisMethod']>) => Promise<void> | void;
 }
+
+const COST_BASIS_METHODS: Array<NonNullable<Fund['costBasisMethod']>> = [
+  'FIFO', 'LIFO', 'AVERAGE_COST', 'HIFO', 'SPECIFIC_ID',
+];
 
 // v3 is a deliberate reset into the track-board grammar (v2 stored the retired
 // row-band arrangement, which was gappy). Old payloads are left untouched.
 const wsKeyFor = (fundId: string) => `be_ws_fund_${fundId}_v3`;
 
-export function FundWorkspace({ fund, onBack, onAddTransaction }: FundWorkspaceProps) {
+export function FundWorkspace({ fund, onBack, onAddTransaction, onSetCostBasis }: FundWorkspaceProps) {
   const defaultLayout = useMemo(() => defaultFundLayout(), []);
-  const [taxMethod, setTaxMethod] = useState<'FIFO' | 'LIFO'>(fund.costBasisMethod === 'LIFO' ? 'LIFO' : 'FIFO');
+  const [methodBusy, setMethodBusy] = useState(false);
   const [addTxOpen, setAddTxOpen] = useState(false);
-  const data = useFundData(fund, taxMethod);
+  // The preview fallback understands FIFO/LIFO only; the engine understands all
+  // five. When the engine answers, its method is what is shown.
+  const previewMethod: 'FIFO' | 'LIFO' = fund.costBasisMethod === 'LIFO' ? 'LIFO' : 'FIFO';
+  const data = useFundData(fund, previewMethod);
   const s = data.stats;
   const loading = data.loading && !data.ready;
 
@@ -63,14 +72,43 @@ export function FundWorkspace({ fund, onBack, onAddTransaction }: FundWorkspaceP
             <StatChip label="Value" value={fmtUsd(s.totalValue)} loading={loading} />
             <StatChip label="Unreal. P/L" value={fmtUsd(s.unrealizedPnL)} tone={s.unrealizedPnL} sub={fmtPct(s.roiPercent)} loading={loading} />
             <StatChip label="Day" value={fmtUsd(s.dailyChangeValue)} tone={s.dailyChangeValue} loading={loading} />
-            {/* Display/accounting switch — FIFO vs LIFO cost basis */}
-            <button
-              onClick={() => setTaxMethod(m => (m === 'FIFO' ? 'LIFO' : 'FIFO'))}
-              title="Toggle cost-basis accounting"
-              className="glass-button rounded-xl px-2.5 py-1.5 text-[10px] font-bold text-muted-foreground hover:text-primary transition-all cursor-pointer"
+            {/* The engine's cost-basis method, persisted — not a display toggle. */}
+            <label
+              title="Cost-basis method (saved on the fund and used by the engine)"
+              className="glass-button inline-flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-[10px] font-bold text-muted-foreground hover:text-primary transition-all"
             >
-              <RefreshCw size={10} className="inline mr-1" />{taxMethod}
-            </button>
+              <RefreshCw size={10} />
+              <select
+                aria-label="Cost-basis method"
+                value={fund.costBasisMethod ?? 'FIFO'}
+                disabled={methodBusy || data.engine.loading}
+                onChange={async (event) => {
+                  const next = event.target.value as NonNullable<Fund['costBasisMethod']>;
+                  setMethodBusy(true);
+                  try { await onSetCostBasis(next); } finally { setMethodBusy(false); }
+                }}
+                className="cursor-pointer bg-transparent text-[10px] font-bold text-foreground outline-none disabled:cursor-wait"
+              >
+                {COST_BASIS_METHODS.map((method) => (
+                  <option key={method} value={method} className="bg-neutral-900 text-foreground">{method}</option>
+                ))}
+              </select>
+            </label>
+            <span
+              title={data.engine.error
+                ? `Python engine unavailable: ${data.engine.error}. Showing a labelled client preview.`
+                : data.engine.source === 'engine'
+                  ? 'Positions, cost basis and P&L come from the Python Portfolio Accounting Engine.'
+                  : 'Waiting for the Python engine…'}
+              className={cn(
+                'rounded-full border px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider',
+                data.engine.source === 'engine'
+                  ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300'
+                  : 'border-amber-400/30 bg-amber-400/10 text-amber-300',
+              )}
+            >
+              {data.engine.source === 'engine' ? 'engine' : 'preview'}
+            </span>
           </div>
           <button
             onClick={() => setAddTxOpen(true)}

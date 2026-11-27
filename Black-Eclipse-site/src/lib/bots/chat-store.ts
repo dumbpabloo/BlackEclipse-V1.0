@@ -21,6 +21,15 @@ import {
   writeLocalEnvelope,
   type BotStateEnvelope,
 } from '@/lib/bots/state-sync';
+import {
+  appendBotMessage,
+  clearBotMessages,
+  decodePayload,
+  fetchBotMessages,
+  mergeMessageLog,
+  replaceBotMessages,
+  type MessageLogRow,
+} from '@/lib/bots/message-log';
 
 export const BOT_CHAT_KEY = 'be_bot_chat_v1';
 
@@ -95,16 +104,51 @@ function isMessage(v: unknown): v is BotMessage {
   );
 }
 
+/** Structured extras that are not columns of the message log. */
+function messagePayload(message: BotMessage): Record<string, unknown> | undefined {
+  const payload: Record<string, unknown> = {};
+  if (message.delegations?.length) payload.delegations = message.delegations;
+  if (message.pendingApproval) payload.pendingApproval = message.pendingApproval;
+  if (message.pendingClarification) payload.pendingClarification = message.pendingClarification;
+  return Object.keys(payload).length ? payload : undefined;
+}
+
+/** Rebuild a UI message from a durable log row (payload is JSON text). */
+function messageFromRow(row: MessageLogRow): BotMessage {
+  const payload = decodePayload(row.payload);
+  return {
+    id: row.id,
+    role: row.role,
+    content: row.content,
+    at: row.at,
+    ...(row.scheduled ? { scheduled: true } : {}),
+    ...(row.runId ? { runId: row.runId } : {}),
+    ...(row.error ? { error: true } : {}),
+    ...(row.feedback ? { feedback: row.feedback } : {}),
+    ...(payload?.delegations ? { delegations: payload.delegations as BotMessage['delegations'] } : {}),
+    ...(payload?.pendingApproval
+      ? { pendingApproval: payload.pendingApproval as BotMessage['pendingApproval'] }
+      : {}),
+    ...(payload?.pendingClarification
+      ? { pendingClarification: payload.pendingClarification as BotMessage['pendingClarification'] }
+      : {}),
+  };
+}
+
+function logRowToMessage(row: MessageLogRow): BotMessage {
+  return messageFromRow(row);
+}
+
 export const useBotChatStore = create<BotChatStore>((set, get) => {
-  /** Reconcile with the durable mirror without blocking the local render. */
+  /** Reconcile with the durable snapshot AND the per-message log without
+   *  blocking the local render. The log is the recovery source of truth: it
+   *  restores a thread even when the snapshot is missing or behind. */
   const syncFromServer = async () => {
     const remote = await pullBotState('chat');
     const local = readLocalEnvelope<Record<string, BotMessage[]>>(BOT_CHAT_KEY);
     if (!remote) {
       if (local) queueBotStatePush('chat', local);
-      return;
-    }
-    if (shouldAdoptRemote(local?.updatedAt, remote.updatedAt)) {
+    } else if (shouldAdoptRemote(local?.updatedAt, remote.updatedAt)) {
       try {
         const data = sanitizeByBot(JSON.parse(remote.document) as unknown);
         writeLocalEnvelope(BOT_CHAT_KEY, newBotStateEnvelope(data, new Date(remote.updatedAt)));
@@ -112,10 +156,26 @@ export const useBotChatStore = create<BotChatStore>((set, get) => {
       } catch {
         /* malformed mirror — keep the local copy */
       }
-      return;
-    }
-    if (local && shouldPushLocal(local.updatedAt, remote.updatedAt)) {
+    } else if (local && shouldPushLocal(local.updatedAt, remote.updatedAt)) {
       queueBotStatePush('chat', local);
+    }
+
+    const rows = await fetchBotMessages('chat');
+    if (rows.length === 0) return;
+    const byBot = { ...get().byBot };
+    const grouped = new Map<string, BotMessage[]>();
+    for (const row of rows) {
+      if (!row.botId) continue;
+      const list = grouped.get(row.botId) ?? [];
+      list.push(logRowToMessage(row));
+      grouped.set(row.botId, list);
+    }
+    for (const [botId, remoteMessages] of grouped) {
+      byBot[botId] = mergeMessageLog(byBot[botId] ?? [], remoteMessages);
+    }
+    if (grouped.size > 0) {
+      persist(byBot);
+      set({ byBot });
     }
   };
 
@@ -133,12 +193,16 @@ export const useBotChatStore = create<BotChatStore>((set, get) => {
       const byBot = { ...get().byBot, [botId]: messages };
       persist(byBot);
       set({ byBot });
+      // Truncate/regenerate must truncate the durable log too, or the next
+      // hydrate would resurrect the removed tail.
+      void replaceBotMessages('chat', botId, messages, (m) => messagePayload(m as BotMessage));
     },
 
     append: (botId, message) => {
       const byBot = { ...get().byBot, [botId]: [...(get().byBot[botId] ?? []), message] };
       persist(byBot);
       set({ byBot });
+      void appendBotMessage('chat', botId, message, messagePayload(message));
     },
 
     appendScheduled: (botId, message) => {
@@ -149,14 +213,20 @@ export const useBotChatStore = create<BotChatStore>((set, get) => {
       const byBot = { ...get().byBot, [botId]: [...list, message] };
       persist(byBot);
       set({ byBot });
+      void appendBotMessage('chat', botId, message, messagePayload(message));
       return true;
     },
 
     update: (botId, id, patch, persistNow = true) => {
       const list = get().byBot[botId];
       if (!list) return;
-      const byBot = { ...get().byBot, [botId]: list.map((m) => (m.id === id ? { ...m, ...patch } : m)) };
-      if (persistNow) persist(byBot);
+      const updated = list.map((m) => (m.id === id ? { ...m, ...patch } : m));
+      const byBot = { ...get().byBot, [botId]: updated };
+      if (persistNow) {
+        persist(byBot);
+        const message = updated.find((m) => m.id === id);
+        if (message) void appendBotMessage('chat', botId, message, messagePayload(message));
+      }
       set({ byBot });
     },
 
@@ -165,6 +235,7 @@ export const useBotChatStore = create<BotChatStore>((set, get) => {
       delete next[botId];
       persist(next);
       set({ byBot: next });
+      void clearBotMessages('chat', botId);
     },
   };
 });

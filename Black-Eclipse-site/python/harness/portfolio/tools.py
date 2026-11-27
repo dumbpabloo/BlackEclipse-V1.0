@@ -120,6 +120,32 @@ async def portfolio_get(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
     return text, reading
 
 
+async def portfolio_audit_log(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    try:
+        rows = service.audit_log(args["portfolio_id"], limit=int(args.get("limit") or 200),
+                                 actor_id=_actor(ctx))
+    except PortfolioError as exc:
+        return _fail(exc)
+    return f"{len(rows)} portfolio audit event(s).", {"events": rows}
+
+
+async def portfolio_audit_verify(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    try:
+        result = service.verify_audit(args["portfolio_id"], actor_id=_actor(ctx))
+    except PortfolioError as exc:
+        return _fail(exc)
+    if result.get("ok"):
+        summary = f"Audit chain verified ({result['checked']} event(s), head {result['head'][:12]}…)."
+    elif result.get("status") == "UNSEALED":
+        summary = (f"Audit chain has {result.get('unsealed', 0)} legacy unsealed event(s); "
+                   "the sealed portion cannot be verified as a whole.")
+    else:
+        summary = f"Audit chain BROKEN at {result.get('brokenAt')} ({result.get('reason')})."
+    return summary, result
+
+
 async def portfolio_calculate_pnl(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
     service = _service(ctx)
     try:
@@ -213,6 +239,7 @@ async def portfolio_calculate_tax_lots(args: dict[str, Any], ctx: Any) -> tuple[
     service = _service(ctx)
     try:
         lots = service.calculate_tax_lots(args["portfolio_id"], symbol=args.get("symbol"),
+                                          account_id=args.get("account_id"),
                                           actor_id=_actor(ctx))
     except PortfolioError as exc:
         return _fail(exc)
@@ -221,6 +248,86 @@ async def portfolio_calculate_tax_lots(args: dict[str, Any], ctx: Any) -> tuple[
         f"Tax lots ({lots['method']}): {total} open lot(s) across {len(lots['symbols'])} symbol(s).",
         lots,
     )
+
+
+async def portfolio_realized_gains(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    try:
+        report = service.realized_gains(
+            args["portfolio_id"],
+            tax_year=args.get("tax_year") or args.get("taxYear"),
+            long_term_days=int(args.get("long_term_days") or args.get("longTermDays") or 365),
+            wash_sale_window_days=int(
+                args.get("wash_sale_window_days") or args.get("washSaleWindowDays") or 30),
+            include_wash_sale=bool(args.get("include_wash_sale", True)),
+            actor_id=_actor(ctx),
+        )
+    except PortfolioError as exc:
+        return _fail(exc)
+    candidates = sum(1 for row in report["disposals"] if row["washSaleSuspected"])
+    text = (
+        f"Realized gains ({report['method']}): {len(report['disposals'])} disposal(s) "
+        f"across {len(report['years'])} tax-year/currency group(s); "
+        f"{candidates} wash-sale candidate(s) reported, not applied."
+    )
+    return text, report
+
+
+# ── Accounts (custody / cash separation) ─────────────────────────────────────
+
+async def portfolio_create_account(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    try:
+        account = service.create_account(
+            args["portfolio_id"], str(args.get("name") or ""),
+            kind=str(args.get("kind") or "brokerage"),
+            institution=args.get("institution"),
+            currency=args.get("currency"),
+            external_id=args.get("external_id") or args.get("externalId"),
+            actor_id=_actor(ctx),
+        )
+    except PortfolioError as exc:
+        return _fail(exc)
+    return (
+        f"Created account {account['name']!r} ({account['id']}, {account['currency']}) "
+        f"in portfolio {args['portfolio_id']}."
+    ), account
+
+
+async def portfolio_list_accounts(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    try:
+        rows = service.list_accounts(args["portfolio_id"], actor_id=_actor(ctx))
+    except PortfolioError as exc:
+        return _fail(exc)
+    return f"{len(rows)} account(s).", {"accounts": rows}
+
+
+async def portfolio_update_account(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    try:
+        account = service.update_account(
+            args["portfolio_id"], str(args["account_id"] or args.get("accountId") or ""),
+            args, actor_id=_actor(ctx),
+        )
+    except PortfolioError as exc:
+        return _fail(exc)
+    return f"Updated account {account['id']}.", account
+
+
+async def portfolio_delete_account(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    try:
+        outcome = service.delete_account(
+            args["portfolio_id"], str(args["account_id"] or args.get("accountId") or ""),
+            actor_id=_actor(ctx),
+        )
+    except PortfolioError as exc:
+        return _fail(exc)
+    return (
+        "Deleted the empty account." if outcome.get("deleted")
+        else "No account was deleted."
+    ), outcome
 
 
 # ── Mutating tools ────────────────────────────────────────────────────────────
@@ -253,6 +360,7 @@ async def portfolio_remove_position(args: dict[str, Any], ctx: Any) -> tuple[str
     service = _service(ctx)
     outcome = await service.remove_position(args["portfolio_id"], {
         "symbol": args["symbol"],
+        "account_id": args.get("account_id"),
         "price": args.get("price"),
         "use_market_price": args.get("use_market_price", True),
         "reason": args.get("reason"),
@@ -268,6 +376,7 @@ async def portfolio_update_position(args: dict[str, Any], ctx: Any) -> tuple[str
     service = _service(ctx)
     outcome = service.update_position(args["portfolio_id"], {
         "symbol": args["symbol"],
+        "account_id": args.get("account_id"),
         "target_quantity": args["target_quantity"],
         "price": args.get("price"),
         "reason": args.get("reason"),
@@ -694,13 +803,41 @@ def register_portfolio_tools(registry: Any) -> None:
 
     _def("portfolio_list", "List portfolios for the current user.", portfolio_list,
          {"type": "object", "properties": {"owner_id": {"type": "string"}}}, READ)
+    _def("portfolio_create_account",
+         "Create a custody/cash account inside a fund (brokerage, bank, wallet, …). "
+         "Transactions may carry `account_id`, so cash and lots are separable.",
+         portfolio_create_account,
+         {"type": "object", "properties": {
+             **pid, "name": {"type": "string"}, "kind": {"type": "string"},
+             "institution": {"type": "string"}, "currency": {"type": "string"},
+             "external_id": {"type": "string"}}, "required": ["portfolio_id", "name"]},
+         WRITE, "portfolio.write")
+    _def("portfolio_list_accounts", "List a fund's custody/cash accounts.",
+         portfolio_list_accounts,
+         {"type": "object", "properties": {**pid}, "required": ["portfolio_id"]},
+         READ)
+    _def("portfolio_update_account", "Update an account's name/kind/institution/currency.",
+         portfolio_update_account,
+         {"type": "object", "properties": {
+             **pid, "account_id": {"type": "string"}, "name": {"type": "string"},
+             "kind": {"type": "string"}, "institution": {"type": "string"},
+             "currency": {"type": "string"}, "external_id": {"type": "string"}},
+          "required": ["portfolio_id", "account_id"]},
+         WRITE, "portfolio.write")
+    _def("portfolio_delete_account",
+         "Delete an EMPTY account (refused with ACCOUNT_IN_USE if transactions reference it).",
+         portfolio_delete_account,
+         {"type": "object", "properties": {**pid, "account_id": {"type": "string"}},
+          "required": ["portfolio_id", "account_id"]},
+         WRITE, "portfolio.write")
     _def("portfolio_create",
          "Create a fund portfolio with its accounting ledger. This is the only "
          "user-facing portfolio type. `cost_basis_method` is FIFO, LIFO or AVERAGE_COST.",
          portfolio_create,
          {"type": "object", "properties": {
              "name": {"type": "string"}, "base_currency": {"type": "string"},
-             "cost_basis_method": {"type": "string", "enum": ["FIFO", "LIFO", "AVERAGE_COST"]},
+             "cost_basis_method": {"type": "string",
+                                   "enum": ["FIFO", "LIFO", "AVERAGE_COST", "HIFO", "SPECIFIC_ID"]},
              "description": {"type": "string"},
              "goal": {"type": "string", "description": "Optional fund goal shown by the Fund view."},
              "icon": {"type": "string"}, "accent": {"type": "string"}},
@@ -710,6 +847,17 @@ def register_portfolio_tools(registry: Any) -> None:
          "Read a portfolio: positions, cash, valuation, P&L, allocation and exposure, "
          "with per-price freshness/data-quality. Prices come from the Market Data Gateway.",
          portfolio_get, {"type": "object", "properties": {**pid, **include}, "required": ["portfolio_id"]},
+         READ)
+    _def("portfolio_audit_log",
+         "The portfolio's append-only audit trail (newest first), including each event's hash.",
+         portfolio_audit_log,
+         {"type": "object", "properties": {**pid, "limit": {"type": "integer"}}, "required": ["portfolio_id"]},
+         READ)
+    _def("portfolio_audit_verify",
+         "Verify the portfolio audit trail's hash chain: OK, UNSEALED (legacy rows) or "
+         "BROKEN at the first edited/reordered event.",
+         portfolio_audit_verify,
+         {"type": "object", "properties": {**pid}, "required": ["portfolio_id"]},
          READ)
     _def("portfolio_calculate_pnl",
          "Realized/unrealized/total P&L derived from the transaction ledger.",
@@ -734,7 +882,21 @@ def register_portfolio_tools(registry: Any) -> None:
     _def("portfolio_calculate_tax_lots",
          "Open tax lots and realized lot matches under the portfolio's cost-basis method.",
          portfolio_calculate_tax_lots,
-         {"type": "object", "properties": {**pid, "symbol": {"type": "string"}}, "required": ["portfolio_id"]},
+         {"type": "object", "properties": {
+             **pid, "symbol": {"type": "string"}, "account_id": {"type": "string"}},
+          "required": ["portfolio_id"]},
+         READ)
+    _def("portfolio_realized_gains",
+         "Realized gains grouped by tax year, currency and short/long term, with wash-sale "
+         "CANDIDATES (a same-symbol acquisition in the window). It never applies a "
+         "jurisdiction's rule or adjusts basis.",
+         portfolio_realized_gains,
+         {"type": "object", "properties": {
+             **pid, "tax_year": {"type": "integer"},
+             "long_term_days": {"type": "integer"},
+             "wash_sale_window_days": {"type": "integer"},
+             "include_wash_sale": {"type": "boolean"}},
+          "required": ["portfolio_id"]},
          READ)
     _def("portfolio_harvest_candidates",
          "Positions with an unrealized loss beyond a threshold — the raw material for a "
@@ -754,6 +916,7 @@ def register_portfolio_tools(registry: Any) -> None:
              "currency": {"type": "string"}, "trade_date": {"type": "string"},
              "type": {"type": "string", "enum": ["BUY", "TRANSFER_IN"]},
              "asset_type": {"type": "string"}, "external_id": {"type": "string"},
+             "account_id": {"type": "string", "description": "Custody/cash account; omitting uses the unassigned bucket."},
              "notes": {"type": "string"}}, "required": ["portfolio_id", "symbol", "quantity"]},
          WRITE, "portfolio.write")
     _def("portfolio_remove_position",
@@ -761,6 +924,7 @@ def register_portfolio_tools(registry: Any) -> None:
          portfolio_remove_position,
          {"type": "object", "properties": {
              **pid, "symbol": {"type": "string"}, "price": {"type": "string"},
+             "account_id": {"type": "string"},
              "use_market_price": {"type": "boolean"}, "reason": {"type": "string"}},
           "required": ["portfolio_id", "symbol"]},
          WRITE, "portfolio.write")
@@ -770,6 +934,7 @@ def register_portfolio_tools(registry: Any) -> None:
          portfolio_update_position,
          {"type": "object", "properties": {
              **pid, "symbol": {"type": "string"}, "target_quantity": {"type": "string"},
+             "account_id": {"type": "string"},
              "price": {"type": "string"}, "reason": {"type": "string"}},
           "required": ["portfolio_id", "symbol", "target_quantity", "reason"]},
          WRITE, "portfolio.write")
@@ -1087,8 +1252,11 @@ def register_portfolio_tools(registry: Any) -> None:
 
 
 PORTFOLIO_READ_TOOLS = [
-    "portfolio_list", "portfolio_get", "portfolio_calculate_pnl", "portfolio_calculate_exposure",
+    "portfolio_list", "portfolio_get", "portfolio_list_accounts",
+    "portfolio_audit_log", "portfolio_audit_verify",
+    "portfolio_calculate_pnl", "portfolio_calculate_exposure",
     "portfolio_calculate_allocation", "portfolio_calculate_risk", "portfolio_calculate_tax_lots",
+    "portfolio_realized_gains",
     "portfolio_reconcile", "portfolio_list_reconciliations", "portfolio_attribution",
     "portfolio_factor_exposure", "portfolio_hedge", "portfolio_aggregate",
     "portfolio_estimate_inputs", "portfolio_risk_contributions", "portfolio_stress_test",
@@ -1098,7 +1266,9 @@ PORTFOLIO_READ_TOOLS = [
     "portfolio_harvest_candidates",
 ]
 PORTFOLIO_WRITE_TOOLS = [
-    "portfolio_create", "portfolio_add_position", "portfolio_remove_position",
+    "portfolio_create", "portfolio_create_account", "portfolio_update_account",
+    "portfolio_delete_account",
+    "portfolio_add_position", "portfolio_remove_position",
     "portfolio_update_position", "portfolio_set_metadata",
     "portfolio_apply_corporate_action", "portfolio_record_swap", "portfolio_record_bridge",
     "portfolio_record_reward", "portfolio_apply_staking", "portfolio_rebuild",

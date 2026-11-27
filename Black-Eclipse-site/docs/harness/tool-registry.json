@@ -1,7 +1,7 @@
 {
-  "digest": "d6f00a0ec387f0fb",
+  "digest": "cb8ca155b15b0c01",
   "manifestVersion": "1",
-  "toolCount": 1121,
+  "toolCount": 1133,
   "tools": [
     {
       "deprecated": false,
@@ -1267,7 +1267,7 @@
     },
     {
       "deprecated": false,
-      "description": "Create a persistent autonomous bot (a scheduled agent) that runs in the background even after the browser closes. Set triggerType to manual, one_time, interval, cron, event or condition; provide objective; optionally name, agentId (any installed preset), description, state, workspaceRoot, autonomy, and the execution, retry, concurrency, limits, delivery and permissions blocks the Bots UI also exposes. A bot gets the SAME tool surface as an interactive turn of its agent.",
+      "description": "Create a persistent autonomous bot (a scheduled agent) that runs in the background even after the browser closes. Set triggerType to manual, one_time, interval, cron, event, condition or webhook; provide objective; optionally name, agentId (any installed preset), description, state, workspaceRoot, autonomy, and the execution, retry, concurrency, limits, delivery and permissions blocks the Bots UI also exposes. A bot gets the SAME tool surface as an interactive turn of its agent.",
       "effect": "external_action",
       "inputSchema": {
         "properties": {
@@ -1535,7 +1535,8 @@
               "interval",
               "cron",
               "event",
-              "condition"
+              "condition",
+              "webhook"
             ],
             "type": "string"
           },
@@ -2051,7 +2052,8 @@
               "interval",
               "cron",
               "event",
-              "condition"
+              "condition",
+              "webhook"
             ],
             "type": "string"
           },
@@ -19147,6 +19149,28 @@
     },
     {
       "deprecated": false,
+      "description": "Verify the audit trail's hash chain: OK, UNSEALED (legacy rows) or BROKEN at the first edited/reordered event.",
+      "effect": null,
+      "inputSchema": {
+        "properties": {
+          "ledger_id": {
+            "description": "Ledger id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ledger_id"
+        ],
+        "type": "object"
+      },
+      "name": "ledger_audit_verify",
+      "permission": "read",
+      "replacement": null,
+      "risk": "low",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
       "description": "Balance sheet as of a date: assets, liabilities, equity (including current earnings), with the accounting-equation check.",
       "effect": null,
       "inputSchema": {
@@ -19172,7 +19196,58 @@
     },
     {
       "deprecated": false,
-      "description": "Cash flow for a date range, classified operating/investing/financing from the counter account. Movement it cannot classify is reported in an explicit `unclassified` bucket, never guessed.",
+      "description": "List budgets and their lines.",
+      "effect": null,
+      "inputSchema": {
+        "properties": {
+          "ledger_id": {
+            "description": "Ledger id.",
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ledger_id"
+        ],
+        "type": "object"
+      },
+      "name": "ledger_budget_list",
+      "permission": "read",
+      "replacement": null,
+      "risk": "low",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
+      "description": "Budget vs actual: per-line budget/actual/variance and favourable flag, matched by account and dimension. Unmatched actuals are reported as unbudgeted.",
+      "effect": null,
+      "inputSchema": {
+        "properties": {
+          "budget_id": {
+            "type": "string"
+          },
+          "ledger_id": {
+            "description": "Ledger id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ledger_id",
+          "budget_id"
+        ],
+        "type": "object"
+      },
+      "name": "ledger_budget_variance",
+      "permission": "read",
+      "replacement": null,
+      "risk": "low",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
+      "description": "Cash flow for a date range. `method=direct` (default) classifies operating/investing/financing from the counter account; `method=indirect` starts from net income, adds depreciation and working-capital movements, and reconciles the result to the direct operating figure. Unclassifiable movement is explicit, never guessed.",
       "effect": null,
       "inputSchema": {
         "properties": {
@@ -19181,6 +19256,13 @@
           },
           "ledger_id": {
             "description": "Ledger id.",
+            "type": "string"
+          },
+          "method": {
+            "enum": [
+              "direct",
+              "indirect"
+            ],
             "type": "string"
           },
           "start": {
@@ -19193,6 +19275,37 @@
         "type": "object"
       },
       "name": "ledger_cash_flow",
+      "permission": "read",
+      "replacement": null,
+      "risk": "low",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
+      "description": "Cash runway from trailing operating burn plus open AR/AP: opening cash, monthly burn, runway months and an AR/AP-adjusted projection. A surplus reports UNKNOWN runway, never infinite.",
+      "effect": null,
+      "inputSchema": {
+        "properties": {
+          "as_of": {
+            "type": "string"
+          },
+          "history_days": {
+            "type": "integer"
+          },
+          "horizon_days": {
+            "type": "integer"
+          },
+          "ledger_id": {
+            "description": "Ledger id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ledger_id"
+        ],
+        "type": "object"
+      },
+      "name": "ledger_cash_runway",
       "permission": "read",
       "replacement": null,
       "risk": "low",
@@ -19255,6 +19368,38 @@
         "type": "object"
       },
       "name": "ledger_consolidate",
+      "permission": "read",
+      "replacement": null,
+      "risk": "low",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
+      "description": "Group journal movement by one dimension value (project, cost center, …), over a date range; unassigned lines are explicit.",
+      "effect": null,
+      "inputSchema": {
+        "properties": {
+          "dimension": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          },
+          "ledger_id": {
+            "description": "Ledger id.",
+            "type": "string"
+          },
+          "start": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ledger_id",
+          "dimension"
+        ],
+        "type": "object"
+      },
+      "name": "ledger_dimension_summary",
       "permission": "read",
       "replacement": null,
       "risk": "low",
@@ -19657,6 +19802,34 @@
         "type": "object"
       },
       "name": "ledger_list_accounts",
+      "permission": "read",
+      "replacement": null,
+      "risk": "low",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
+      "description": "List the source-document references on a ledger or one entry.",
+      "effect": null,
+      "inputSchema": {
+        "properties": {
+          "entry_id": {
+            "type": "string"
+          },
+          "ledger_id": {
+            "description": "Ledger id.",
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ledger_id"
+        ],
+        "type": "object"
+      },
+      "name": "ledger_list_attachments",
       "permission": "read",
       "replacement": null,
       "risk": "low",
@@ -20083,6 +20256,57 @@
         "type": "object"
       },
       "name": "ledger_trial_balance",
+      "permission": "read",
+      "replacement": null,
+      "risk": "low",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
+      "description": "Compare an attachment's frozen content hash with the artifact's current hash: MATCHED, CHANGED (artifact replaced) or MISSING (artifact deleted).",
+      "effect": null,
+      "inputSchema": {
+        "properties": {
+          "attachment_id": {
+            "type": "string"
+          },
+          "ledger_id": {
+            "description": "Ledger id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ledger_id",
+          "attachment_id"
+        ],
+        "type": "object"
+      },
+      "name": "ledger_verify_attachment",
+      "permission": "read",
+      "replacement": null,
+      "risk": "low",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
+      "description": "Preview the year-end closing entry: net income, retained-earnings target, closing lines and date. Writes nothing.",
+      "effect": null,
+      "inputSchema": {
+        "properties": {
+          "fiscal_year": {
+            "type": "integer"
+          },
+          "ledger_id": {
+            "description": "Ledger id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ledger_id"
+        ],
+        "type": "object"
+      },
+      "name": "ledger_year_end_preview",
       "permission": "read",
       "replacement": null,
       "risk": "low",
@@ -22958,6 +23182,53 @@
     },
     {
       "deprecated": false,
+      "description": "The portfolio's append-only audit trail (newest first), including each event's hash.",
+      "effect": null,
+      "inputSchema": {
+        "properties": {
+          "limit": {
+            "type": "integer"
+          },
+          "portfolio_id": {
+            "description": "Portfolio id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "portfolio_id"
+        ],
+        "type": "object"
+      },
+      "name": "portfolio_audit_log",
+      "permission": "read",
+      "replacement": null,
+      "risk": "low",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
+      "description": "Verify the portfolio audit trail's hash chain: OK, UNSEALED (legacy rows) or BROKEN at the first edited/reordered event.",
+      "effect": null,
+      "inputSchema": {
+        "properties": {
+          "portfolio_id": {
+            "description": "Portfolio id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "portfolio_id"
+        ],
+        "type": "object"
+      },
+      "name": "portfolio_audit_verify",
+      "permission": "read",
+      "replacement": null,
+      "risk": "low",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
       "description": "Allocation weights by asset, asset class, sector, currency or country (weights reconcile to 100%).",
       "effect": null,
       "inputSchema": {
@@ -23056,6 +23327,9 @@
       "effect": null,
       "inputSchema": {
         "properties": {
+          "account_id": {
+            "type": "string"
+          },
           "portfolio_id": {
             "description": "Portfolio id.",
             "type": "string"
@@ -23434,6 +23708,28 @@
     },
     {
       "deprecated": false,
+      "description": "List a fund's custody/cash accounts.",
+      "effect": null,
+      "inputSchema": {
+        "properties": {
+          "portfolio_id": {
+            "description": "Portfolio id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "portfolio_id"
+        ],
+        "type": "object"
+      },
+      "name": "portfolio_list_accounts",
+      "permission": "read",
+      "replacement": null,
+      "risk": "low",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
       "description": "List saved reconciliation runs for a portfolio.",
       "effect": null,
       "inputSchema": {
@@ -23477,6 +23773,40 @@
         "type": "object"
       },
       "name": "portfolio_list_runs",
+      "permission": "read",
+      "replacement": null,
+      "risk": "low",
+      "version": "1.0.0"
+    },
+    {
+      "deprecated": false,
+      "description": "Realized gains grouped by tax year, currency and short/long term, with wash-sale CANDIDATES (a same-symbol acquisition in the window). It never applies a jurisdiction's rule or adjusts basis.",
+      "effect": null,
+      "inputSchema": {
+        "properties": {
+          "include_wash_sale": {
+            "type": "boolean"
+          },
+          "long_term_days": {
+            "type": "integer"
+          },
+          "portfolio_id": {
+            "description": "Portfolio id.",
+            "type": "string"
+          },
+          "tax_year": {
+            "type": "integer"
+          },
+          "wash_sale_window_days": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "portfolio_id"
+        ],
+        "type": "object"
+      },
+      "name": "portfolio_realized_gains",
       "permission": "read",
       "replacement": null,
       "risk": "low",

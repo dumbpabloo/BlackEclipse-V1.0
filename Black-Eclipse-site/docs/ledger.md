@@ -1,7 +1,7 @@
 ---
 title: General Ledger (double-entry book of record)
 status: Current
-last-verified: 2026-11-13
+last-verified: 2026-11-26
 ---
 
 # General Ledger
@@ -68,6 +68,49 @@ Everything else follows from these. If a change weakens one, it is a bug.
    rate is `MISSING_FX`. A non-zero suspense balance blocks a close
    (`PERIOD_NOT_READY`).
 
+### Tamper-evident audit chain
+
+Append-only is enforced by the store; the hash chain proves it. Every
+`LedgerAuditEvent` is sealed with SHA-256 over the previous event's hash plus
+the event's immutable fields (`python/harness/audit_chain.py`).
+
+`ledger_audit_verify` (tool) and `GET /ledger/{id}/audit/verify` (route)
+recompute the chain in append order and return `status`:
+
+| status | meaning |
+|---|---|
+| `OK` | every sealed event hashes correctly and links to its predecessor |
+| `UNSEALED` | historical rows predate the chain; the sealed portion is not claimed as whole |
+| `BROKEN` | the first edited, reordered or deleted event, with `brokenAt` and `HASH_MISMATCH` / `PREV_HASH_MISMATCH` |
+
+Rows written before the chain existed are sealed on store open (metadata only;
+event content is never changed). A deleted event makes the next event's
+`prevHash` disagree, so deletion is detected as a broken link even when the
+surviving hashes are internally valid.
+
+### Source-document attachments
+
+A posted entry can carry the receipt, invoice or bank statement that supports
+it. The bytes are **not** copied into the ledger: the attachment stores the
+artifact id plus the artifact's content hash (`checksum`) frozen at attach time
+(`LedgerAttachment`). The artifact lives in the ONE artifact store
+(`python/harness/artifacts/`).
+
+- **Attach** refuses an artifact that cannot be found or that has no checksum
+  (`ARTIFACT_NOT_FOUND` / `ARTIFACT_UNHASHED`): an unverifiable reference is not
+  evidence. Without the artifact service the answer is
+  `ARTIFACT_STORE_UNAVAILABLE`.
+- **`get_entry`** returns `attachments` with the entry, so an auditor reading one
+  posting sees its evidence without a second lookup.
+- **Verify** compares the frozen hash with the artifact's current hash:
+  `MATCHED`, `CHANGED` (the artifact was replaced) or `MISSING` (deleted). It
+  never rewrites the ledger.
+- **Detach** removes the reference only; the artifact itself is unchanged.
+- Attach/detach are audited (`DOCUMENT_ATTACHED` / `DOCUMENT_DETACHED`) and
+  therefore sealed by the audit chain.
+- The table is `entryId` + `artifactId` unique, so the same document cannot be
+  attached twice to the same entry (`ATTACHMENT_EXISTS`).
+
 ## Chart of accounts
 
 Charts ship as **data** in `ledger/accounts.py` (`standard`, `sole_trader`,
@@ -133,11 +176,25 @@ findings. `reopen_period` works on `CLOSED`; `lock_period` makes it permanent.
 | trial balance | opening + movement + closing per account | closing debits = credits, movement balanced, Σ nets = 0 |
 | balance sheet | assets / liabilities / equity as of a date, current earnings folded into equity | assets = liabilities + equity |
 | income statement | revenue, cost of sales, gross profit, operating expenses, depreciation, net income | net income = gross profit − opex − depreciation |
-| cash flow | operating / investing / financing / unclassified | opening + net change = closing; every cash movement classified |
+| cash flow (direct) | operating / investing / financing / unclassified | opening + net change = closing; every cash movement classified |
+| cash flow (indirect) | net income + depreciation/amortisation + operating working-capital movement; investing/financing from the direct statement | indirect operating = direct operating (any difference is reported) |
 
 Every statement returns `checks` (`[{name, ok, detail}]`) and a `balanced` flag.
 `currentEarnings` on the balance sheet is the same number as `netIncome` for the
 same range — a test pins that.
+
+`ledger_cash_flow` / `GET /ledger/{id}/cash-flow` accepts `method=indirect`.
+The indirect statement selects working capital by the account's declared
+`cash_flow_category` (ASSET/LIABILITY, non-cash, OPERATING): receivables,
+inventory, prepaid, payables, tax, accruals, payroll, intercompany and suspense.
+Depreciation/amortisation expense is added back by subtype. A debit movement in
+an operating asset is cash used; a credit movement in an operating liability is
+cash provided (`amount = −movement_net`).
+
+The direct and indirect operating figures are reconciled, not forced. A non-cash
+investing/financing entry (for example equipment bought on credit) is outside a
+simple working-capital adjustment, so the difference is returned with the
+amount and `reconciled: false` rather than plugged.
 
 ## Statement import
 
@@ -278,6 +335,61 @@ Warnings do not stop a close; they are the operator's to accept. The run is
 persisted (`LedgerCloseRun`) with its findings and checks, so "we closed March"
 carries the evidence that was true at the time.
 
+## Year-end close
+
+`ledger_year_end_preview` / `ledger_close_fiscal_year` (routes
+`GET /ledger/{id}/year-end/preview` and `POST /ledger/{id}/year-end/close`) roll a
+fiscal year's P&L into retained earnings.
+
+- **Preview writes nothing.** It returns the net income, the retained-earnings
+  target, every closing line and the closing date.
+- **The closing entry is dated the FIRST day of the next fiscal year**, so the
+  closed year's income statement is never rewritten. It carries
+  `source='year_end_close'` and `externalId='ye:<yearEnd>'`, so a retry returns
+  `ALREADY_CLOSED` with the existing entry instead of double-posting.
+- **Lines:** every revenue/expense account is zeroed (debit the credit balance of
+  a revenue account, credit the debit balance of an expense account), then the
+  balancing amount goes to the first active `EQUITY`/`RETAINED` account. A net
+  profit credits retained earnings; a net loss debits it.
+- **P&L readers omit closing entries.** `income_statement` and the indirect
+  cash-flow statement filter `source='year_end_close'`; the trial balance and
+  balance sheet include them. After a close, `currentEarnings` is zero and
+  retained earnings carries the result.
+- A chart with no active retained-earnings account is refused
+  (`RETAINED_EARNINGS_MISSING`); a year with no revenue/expense movement is
+  `YEAR_END_NOT_READY`.
+- A correction is a **reversal** entry, never an edit, like every other posting.
+
+## Dimensions, budgets and runway
+
+**Dimensions are already first-class on every journal line** (`dimensions`, a
+small string→string map validated at post time). `ledger_dimension_summary` /
+`GET /ledger/{id}/dimensions/{dimension}` group movement by one dimension value
+(project, cost centre, department) over a date range. Cash lines are excluded
+from the grouping; a line without the dimension is reported as `(unassigned)`,
+never dropped.
+
+**A budget is planning data, not a posting.** `LedgerBudget` + `LedgerBudgetLine`
+store a named set of account + optional dimension targets over a period.
+`ledger_budget_create` / `ledger_budget_list` create and read them;
+`ledger_budget_variance` / `GET /ledger/{id}/budgets/{id}/variance` derive
+actuals from the journal:
+
+- A posting is assigned to the **most specific matching budget line** (most
+  dimension keys), so a broad account line and a project line do not
+  double-count.
+- Actuals are signed in each account's natural direction (revenue is
+  credit-positive, expense debit-positive). `favorable` compares against that
+  direction; `variancePct` is `null` when the budget is zero.
+- Actuals that match no line appear in `unbudgeted`, with the amount, rather
+  than disappearing.
+
+**Cash runway** (`ledger_cash_runway` / `GET /ledger/{id}/runway`) uses the
+trailing direct operating cash flow to derive a monthly burn, adds open AR/AP
+from the aging report, and returns `runwayMonths`, an AR/AP-adjusted runway and
+a horizon projection. A surplus (negative burn) reports runway `UNKNOWN`, never
+an infinite number. It is a labelled planning model, not a collection forecast.
+
 ## Receivables, payables and tax
 
 `documents.py` is the AR/AP subledger. A **document** is an invoice (`INVOICE`, a
@@ -411,14 +523,42 @@ A posting is a write to the **book of record**, not a payment: nothing in this
 package moves money, so it needs one approval and no money guardrail. Any future
 payment initiation belongs behind the existing finance guardrails instead.
 
+### Optional segregation of duties
+
+Above that single-use approval, an operator may configure a **per-effect SoD
+policy** (`harness/sod.py`). It is **off by default** — with no policy,
+single-user local mode is byte-for-byte unchanged. A policy sets a threshold and
+`requiredApprovals`: an effect whose amount is at/above the highest applicable
+threshold needs N **distinct** approvers, and by default the requester cannot be
+one of them (`SOD_SELF_APPROVAL`).
+
+- Policy/sign-off routes are operator-only: `GET|POST /sod/policies`,
+  `DELETE /sod/policies/{id}`, `GET /sod/status`, `POST|GET /sod/signoffs`.
+  There is deliberately **no agent tool to sign off**, so the agent cannot
+  satisfy a rule that exists to constrain it.
+- Sign-offs are keyed by the exact call digest (the same digest as the single-use
+  approval), so a changed amount or payload needs fresh sign-offs. They are
+  consumed when the call is authorized.
+- Both gates apply: SoD sign-offs **and** the single-use `ledger_write`
+  approval. If SoD is unsatisfied the authorizer requests the normal approval
+  card, emits `sod.pending`, and refuses without pausing; the operator records
+  the missing sign-offs and the caller retries.
+- A broken SoD store fails closed once a policy is configured.
+- The amount is the balanced debit total of a posting, an explicit
+  `amount`/`total`, or `quantity × price`; a zero threshold applies to every
+  call regardless of amount.
+
 The registered handlers are wrapped so no ledger failure escapes as an exception:
 the tool loop always receives `status: FAILED` plus a named code.
 
 | Tools | Class |
 |---|---|
 | `ledger_list`, `ledger_get`, `ledger_list_accounts`, `ledger_list_entries`, `ledger_get_entry` | read |
+| `ledger_list_attachments`, `ledger_verify_attachment` | read |
 | `ledger_trial_balance`, `ledger_balance_sheet`, `ledger_income_statement`, `ledger_cash_flow` | read |
-| `ledger_list_periods`, `ledger_audit_log` | read |
+| `ledger_list_periods`, `ledger_audit_log`, `ledger_audit_verify` | read |
+| `ledger_year_end_preview` | read |
+| `ledger_budget_list`, `ledger_budget_variance`, `ledger_dimension_summary`, `ledger_cash_runway` | read |
 | `ledger_import_preview`, `ledger_list_imports`, `ledger_rule_list` | read |
 | `ledger_reconcile_statement`, `ledger_list_reconciliations`, `ledger_get_reconciliation` | read (persist a run; never touch the journal) |
 | `ledger_schedule_list`, `ledger_revalue_preview`, `ledger_close_preview` | read |
@@ -427,6 +567,9 @@ the tool loop always receives `status: FAILED` plus a named code.
 | `ledger_group_list`, `ledger_consolidate`, `ledger_export` | read |
 | `ledger_create`, `ledger_create_account`, `ledger_set_account_active` | write (`ledger.write`) |
 | `ledger_post`, `ledger_reverse` | write |
+| `ledger_attach_document`, `ledger_detach_document` | write |
+| `ledger_close_fiscal_year` | write |
+| `ledger_budget_create` | write |
 | `ledger_import_commit` | write |
 | `ledger_rule_create`, `ledger_rule_deactivate` | write |
 | `ledger_schedule_create`, `ledger_schedule_post`, `ledger_accrue`, `ledger_revalue_post` | write |
@@ -445,7 +588,12 @@ a posting. A run that finds problems cannot change the book.
 `GET /ledger/{id}/entries`, `GET /ledger/{id}/entries/{entryId}`,
 `POST /ledger/{id}/entries/{entryId}/reverse`, `GET /ledger/{id}/trial-balance`,
 `…/balance-sheet`, `…/income-statement`, `…/cash-flow`, `GET …/periods`,
-`POST …/periods/{periodId}/{close,reopen,lock}`, `GET …/audit`,
+`POST …/periods/{periodId}/{close,reopen,lock}`, `GET …/year-end/preview`,
+`POST …/year-end/close`, `GET …/audit`, `GET …/audit/verify`,
+`GET|POST …/attachments`, `DELETE …/attachments/{attachmentId}`,
+`GET …/attachments/{attachmentId}/verify`, `GET|POST …/budgets`,
+`GET …/budgets/{budgetId}/variance`, `GET …/dimensions/{dimension}`,
+`GET …/runway`,
 `POST …/import/preview`, `POST …/import/commit`, `GET …/imports`,
 `GET|POST …/rules`, `POST …/rules/{ruleId}/deactivate`, `POST …/reconcile`,
 `GET …/reconciliations`, `GET …/reconciliations/{runId}`,
@@ -464,6 +612,14 @@ actor asserted the app is in its documented single-user local mode.
 ## Known limits (honest)
 
 - **Monthly periods only.** No weekly/4-4-5 calendar.
+- **Indirect cash flow models depreciation/amortisation plus operating working
+  capital.** Other non-cash items (e.g. non-cash investing/financing) are not
+  reconstructed; they show up as a reported direct-vs-indirect difference.
+- **Budgets are one currency per budget and have no version/approval workflow.**
+  Actuals always come from the journal; editing a budget is a new budget.
+- **Runway is an extrapolation, not a forecast.** It uses trailing operating cash
+  flow and open AR/AP at face value; it does not model seasonality, collection
+  probability or financing events.
 - **Single functional currency per book**, with per-line FX translation. No
   multi-currency revaluation of monetary balances and no translation reserve.
 - **No subledger beyond AR/AP:** invoices, bills, payments and aging exist;
@@ -494,10 +650,10 @@ actor asserted the app is in its documented single-user local mode.
   receivable/payable subledgers).
 - **Accruals are one-off entries**, not a recurring schedule (an accrual pattern
   that repeats monthly is the operator's to re-post or a future schedule kind).
-- **The close does not generate closing entries.** Current earnings remain a
-  derived equity line; a year-end close that transfers them to retained earnings
-  is not implemented, and a period close does not stop later postings into it —
-  that is what `LOCKED` is for.
+- **Year-end close is one closing entry, not a per-account close checklist.**
+  It does not require every month of the year to be `CLOSED` first. The entry is
+  dated in the next fiscal year, so that period must be `OPEN`; monthly `LOCKED`
+  remains the control that stops later postings into a closed month.
 - **Consolidation is proportionate and by account code.** No
   non-controlling-interest line, no full-consolidation/NCI treatment, no chart
   mapping between members that use different codes, and one translation rate per
@@ -512,9 +668,11 @@ actor asserted the app is in its documented single-user local mode.
   browser client to keep in sync with the engine.
 - **No financial-statement PDF/XLSX export** — the existing `document_create`
   builders can render a statement payload; a dedicated exporter is not built.
-- **No closing entries automation**: current earnings are a derived equity line;
-  an explicit year-end close that transfers them to retained earnings is not
-  implemented.
+- **No scheduled year-end automation**: the closing entry is an explicit tool /
+  route; it is not yet a graph node or a scheduler job.
+- **SoD policies are enforced only by the finance authorizers** (`ledger.write`
+  and the portfolio write/proposal effects). Other effect classes are not wired;
+  the policy surface is routes/API, not a dedicated settings page.
 
 ## Next phases (the plan this core unblocks)
 

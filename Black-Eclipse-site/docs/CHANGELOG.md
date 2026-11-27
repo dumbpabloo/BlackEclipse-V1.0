@@ -4,7 +4,336 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 — one file per month. This file keeps the newest seven dated sections;
 `npm run rotate:changelog -- --write` performs the move.
 
+## 2026-11-26
+
+- **test(harness): isolate each parallel pytest worker's SQLite files.** The
+  sharded suite gave every worker the same `AGENT_MEMORY_DB_PATH` /
+  `ECLIPSE_MEMORY_DB_PATH`, so concurrent startup migrations raced and a worker
+  died during COLLECTION with `duplicate column name: recoveredCall` (exit 2)
+  before running a test. `pytest-parallel.js` now accepts a per-worker env
+  factory and `test-python.js` gives each worker its own DB pair.
+  no doc change — test-runner infrastructure.
+
+- **feat(harness): cooperative drain, activity heartbeat, retention and honest
+  wait/reconnect state.** Completes the parallel-chat reliability work: the
+  supervisor now calls `POST /runtime/drain` (new runtime router) before clearing
+  a silent port, so a restart waits for live runs; `run_activity` heartbeats every
+  event (transient deltas included) and the watchdog treats fresh activity as
+  live; `model.queued`/`model.rate_limited` are persisted per run via
+  `model_runtime/run_events.py` and the chat shows "Waiting for provider
+  capacity…" / "Connection lost — reconnecting…" instead of a bare spinner; the
+  desktop tab strip marks a tab whose conversation still has a live run.
+  `python/harness/retention.py` + `npm run memory:prune` prune terminal-run child
+  rows (dry run by default) and checkpoint the WAL — a live dry run against the
+  multi-GB store reported 800 terminal runs / 36,583 events eligible at 30 days
+  (no deletion performed). Tests: `test_run_activity.py`, `test_retention.py`,
+  `test_runtime_drain.py`, `test_model_run_events.py`, the watchdog/parallel-tool
+  additions, and the TS notice/run-manager cases.
+  docs updated: `docs/harness/multi-session-concurrency.md`.
+
+- **fix(harness): stop orphaned runs when two chats stream in parallel.**
+  Root cause was a runtime replacement/kill while runs were in flight: the
+  supervisor cleared a listening-but-silent port after a 30 s grace with no
+  `activeRuns` check, the lease heartbeat died permanently on one transient
+  SQLite lock, and a lost/crashed run had no terminal write (the watchdog only
+  noticed ~6 min later and wrote `RUN_STALLED`). Adds a single-owner port lock
+  before uvicorn's lifespan, a conservative silence/kill policy that protects
+  active and parked runs, per-chat shared-run keys (v3) and per-tab new-chat
+  keys, a per-tab rate-limit key, chunk-idle + serial-tool deadlines, terminal
+  settlement for lost/crashed runs, and a client stream idle watchdog with SSE
+  resume. Verified against the live DB: two runs on `stable:14000` stopped
+  heartbeating at 21:17:38/41 and were only failed at 21:24:09; new runs were
+  already being served by `stable:12044`.
+  docs updated: `docs/harness/multi-session-concurrency.md`.
+
+- **test(size): re-pin the shared-tree Python module budgets.** The accounting /
+  portfolio work already in the tree pushed `main.py`, `service.py`,
+  `ledger/{service,store,tools}.py`, `portfolio/{service,tools}.py` and
+  `trade/service.py` past their pinned budgets. Re-pinned to the measured sizes
+  with split candidates named in `python/tests/test_size_budget.py`; no runtime
+  code was changed by this re-pin. `test_phase_s_stabilization.py` updated for
+  the new `main.py` measurement.
+  no doc change — test-only.
+
+- **test(runner): make the port-ownership child see `harness` under the vendored
+  interpreter.** The full suite runs from the repo root with the vendored
+  Python, whose `_pth` ignores `PYTHONPATH`; the test now injects the package
+  root into the child's `sys.path` (same launcher pattern as the test runner).
+  no doc change — test-only.
+
+- **test(registry): regenerate the published tool manifest.** The webhook
+  trigger and external-agent action changed the tool schema, so
+  `docs/harness/tool-registry.json` was regenerated with `npm run eval:registry`
+  (1133 tools, digest `cb8ca155b15b0c01`). No runtime behavior changed by the
+  regeneration.
+  docs updated: `docs/harness/tool-registry.json`.
+
+- **feat(bots): quiet runs, continuity handoff, roundtable rooms, approvals
+  inbox, archive, and stale-write protection.** Scheduled bot runs may answer
+  exactly `[[no-update]]` (or `[SILENT]`); the answer stays in run history but
+  is kept out of the thread and the completion toast/sound, and a pending order
+  always breaks quiet. Each scheduled run gets a bounded digest of the bot's
+  last completed reports, labelled unverified, to survive compaction/reset.
+  Group rooms gain a **Roundtable** mode (members answer in order and later
+  members see earlier replies in the same round) plus an optional chair that
+  writes one visible synthesis, alongside independent takes.
+  Bots mode now mounts the effectful-tool approvals panel in the scheduler dock,
+  group rooms mount the trade approval banner, the row menu can archive a bot,
+  and the UI-authored condition trigger defaults to the backend's edge semantics
+  with an explicit toggle. The BotState PUT refuses an older `updatedAt` with
+  409 + the current document, so a stale tab cannot roll the transcript back.
+  Bot/group messages now also have a per-message durable log
+  (`BotChatMessage`, `BotGroupMessage` + `/api/bots/messages`) that survives a
+  lost localStorage snapshot; clear/regenerate replaces the log atomically.
+  Team `maxCost`/`maxRuntimeMs` now meter from a task result's optional
+  cost/runtime and stop NEW work at the next task boundary (in-flight provider
+  calls still complete; the run reports the exhausted budget honestly).
+  Adds a **webhook trigger**: the runtime generates a per-bot bearer token at
+  create time and exposes `POST /api/automations/webhook/<id>` (Python
+  `/automations/webhook/{id}`) outside operator auth; the token is compared in
+  constant time, the bot must be active, and an edit preserves the token. The
+  Bots schedule editor and detail page expose the type, URL and token.
+  `messaging` delivery is now real: `<kind>:<chat>` targets call the one
+  `ChannelService.send_outbound` with the rendered run report instead of
+  publishing a dead event; failures are recorded per target, never raised.
+  Trade approvals carry the proposing bot (`automationId`) and a bot's chat
+  filters the banner to its own orders (old unattributed rows stay visible).
+  Scheduled bots get an isolated workspace under `.black-eclipse/bots/<id>`
+  when they have no explicit root; a run may now narrow (never widen) the
+  server-resolved workspace to a real subdirectory. The Bots sidebar has a
+  search field over bot name/description/objective/tags and room names, and a
+  running desk can be cancelled from its room. A new **Teammates** panel in the
+  scheduler dock lists A2A agents and recent durable messages and can post a
+  STATUS message through a guarded `/api/a2a/*` proxy.
+  Room identity/membership/mode/chair/photo now has a durable `BotRoom` row and
+  `/api/bots/rooms`, so a cleared snapshot no longer orphans transcripts.
+  Adds a real minimal **ACP client** (`python/harness/acp_client.py`): a
+  `run_external_agent` action launches an external agent over stdio JSON-RPC
+  (`initialize → session/new → session/prompt`), streams text, denies
+  permission requests unless explicitly allowed, and exposes command/args on the
+  bot detail page (operator-only; not exposed to `bot_create`/`bot_update`).
+  The full ACP SDK surface is intentionally not implemented.
+  Bots export/import as secret-free, versioned JSON: export strips the webhook
+  token and credential reference, and import always creates a draft. Adds
+  `npm run bots:headless` (`scripts/bots-headless.js`): the Python runtime and
+  scheduler run without Electron/Next (loopback by default; the existing
+  non-loopback secret guard is unchanged), giving scheduled bots an always-on
+  host path.
+  Extends the ACP client with `session/load`, MCP server descriptors at session
+  setup, and opt-in path-confined fs/terminal capability handling. Adds a bot
+  audit trail (`AutomationAudit`, `/automations/audit`, Bots Audit section) and
+  gives each bot chat the same server-owned `bot:<id>` workspace as its scheduled
+  runs. Updates `docs/research/hermes-vs-eclipse/FEATURE-GAP-MATRIX.md` with the
+  closed rows.
+  Verified: `npx tsc --noEmit` clean; full `npm run test` = Vitest 5,321
+  passed / 1 skipped, Python 3,633 passed / 11 skipped (1,218 files), eval
+  gates ALL PASS. New tests: `test_acp_client.py`, `room-log.test.ts`,
+  `transfer.test.ts`.
+  Tests: `quiet.test.ts`, `groups-store.test.ts`, `bots-run-diff.test.ts`,
+  `message-log.test.ts`, `test_automation_quiet_runs.py`,
+  `test_task_budget_usage.py`; `npx tsc --noEmit` clean.
+  docs updated: `docs/bot-mode.md`, `docs/harness/bot-team-orchestration.md`,
+  `docs/harness/automation-engine.md`, `docs/harness/agent-to-agent.md`,
+  `docs/research/hermes-vs-eclipse/FEATURE-GAP-MATRIX.md`.
+
+- **docs(analysis): accounting & finance gap analysis.** Adds a source-verified
+  gap register across the General Ledger, Portfolio Accounting Engine, broker
+  journal and finance guardrails, with the highest-risk finding being that the
+  Funds UI recomputes cost basis/P&L in TypeScript (`use-portfolio-engine.ts`)
+  and silently drops split/corporate-action/fee/tax transaction types
+  (`engine-funds.ts`) instead of reading the authoritative Python engine. Also
+  records missing realized-gains/tax-lot reporting, tamper-evident audit,
+  attachments, year-end close, dimensions/budgets, fund administration and
+  workflow surfaces, plus a phased roadmap.
+  docs updated: `docs/accounting-finance-gap-analysis.md` (new, `status: Analysis`).
+
+- **feat(portfolio): the Funds UI reads the authoritative engine, preserves
+  every transaction type, persists cost basis, and reports tax lots.** Adds a
+  pure `engine-stats.ts` mapper (`POST /portfolio/{id}/query` → widget stats) and
+  `use-engine-fund-stats.ts` for the fund list, so workspace and cards show the
+  engine's positions/cost basis/realized P&L instead of a second TypeScript lot
+  engine; the client FIFO/LIFO path is now a labelled `PREVIEW` fallback. Adds
+  `engine-transactions.ts`, which keeps splits, corporate actions, fees, taxes,
+  crypto and transfer rows (the old adapter dropped all but five types and
+  relabelled transfers). The cost-basis control persists
+  `cost_basis_method` via `PATCH /portfolio/{id}` and offers FIFO/LIFO/
+  AVERAGE_COST/HIFO/SPECIFIC_ID. Adds a **Tax Lots & Realized Gains** widget
+  (open lots, realized matches, holding days) with CSV export, plus engine
+  data-quality warnings. Tests: `engine-stats.test.ts`,
+  `engine-transactions.test.ts` (22 passing with the existing engine suite),
+  plus `python/tests/test_portfolio_api.py` pinning the tax-lot fields the
+  widget reads and the persisted `cost_basis_method`; `npx tsc --noEmit` clean,
+  full vitest 5,305 passing.
+  docs updated: `docs/portfolio-accounting.md`,
+  `docs/accounting-finance-gap-analysis.md`.
+
+- **feat(accounting): tamper-evident hash-chained audit trails for both books.**
+  Adds `python/harness/audit_chain.py` (SHA-256 over the previous hash + the
+  event's immutable fields) and seals `LedgerAuditEvent` /
+  `PortfolioAuditEvent`. Existing rows are sealed on store open (metadata only;
+  content unchanged). New read surfaces: `ledger_audit_verify`,
+  `portfolio_audit_log`, `portfolio_audit_verify` tools plus
+  `GET /ledger/{id}/audit/verify`, `GET /portfolio/{id}/audit` and
+  `GET /portfolio/{id}/audit/verify`. Verification returns `OK`, `UNSEALED`
+  (legacy rows) or `BROKEN` with the first bad event id and
+  `HASH_MISMATCH`/`PREV_HASH_MISMATCH`. Tests: new
+  `python/tests/test_audit_chain.py` (clean, edited-row and deleted-row cases
+  for both books) and the tool-count contract updated to 42.
+  docs updated: `docs/ledger.md`, `docs/portfolio-accounting.md`,
+  `docs/accounting-finance-gap-analysis.md`.
+
+- **feat(ledger): source-document attachments with a frozen content hash.**
+  Adds `LedgerAttachment` (artifact id + checksum + note, no copied bytes) and
+  `ledger_attach_document` / `ledger_list_attachments` /
+  `ledger_detach_document` / `ledger_verify_attachment`, plus
+  `GET|POST /ledger/{id}/attachments`, `DELETE …/attachments/{id}` and
+  `GET …/attachments/{id}/verify`. `get_entry` now returns `attachments`.
+  Attach refuses a missing/unhashed artifact (`ARTIFACT_NOT_FOUND` /
+  `ARTIFACT_UNHASHED`); verify reports `MATCHED`, `CHANGED` or `MISSING`.
+  Attach/detach are audited and therefore sealed by the hash chain. Tests:
+  new `python/tests/test_ledger_attachments.py` (6) + route coverage in
+  `test_ledger_api.py`.
+  docs updated: `docs/ledger.md`, `docs/accounting-finance-gap-analysis.md`.
+
+- **feat(portfolio): realized-gains report by tax year and term, with
+  wash-sale candidates.** Adds `portfolio/tax_report.py` (pure report over the
+  engine's lot matches) and `PortfolioService.realized_gains`, exposed as the
+  `portfolio_realized_gains` tool and `GET /portfolio/{id}/realized-gains`.
+  Groups gains by tax year, currency and SHORT/LONG term (caller-supplied
+  `long_term_days`, default 365), with per-currency totals and per-disposal
+  proceeds/basis/gain/holding days. For a realized loss it reports
+  same-symbol acquisitions within `wash_sale_window_days` as **candidates**
+  (`washSaleSuspected`, `candidateDisallowedLoss`, replacement transactions)
+  and explicitly does **not** apply a jurisdiction rule, disallow the loss or
+  adjust replacement basis (`washSale.applied: false`). Currencies are never
+  summed together. Tests: `test_portfolio_tax_report.py` (6) + route coverage
+  in `test_portfolio_api.py`; portfolio tool count 43.
+  docs updated: `docs/portfolio-accounting.md`,
+  `docs/accounting-finance-gap-analysis.md`.
+
+- **feat(ledger): indirect-method cash flow reconciled to the direct statement.**
+  Adds `statements.cash_flow_indirect` (net income + depreciation/amortisation
+  add-back + operating working-capital movement, with investing/financing from
+  the direct statement). Working capital is selected by the account's declared
+  `cash_flow_category` (ASSET/LIABILITY, non-cash, OPERATING), and the indirect
+  operating figure is checked against the direct operating bucket. A difference
+  (e.g. equipment bought on credit) is returned with the amount and
+  `reconciled: false`, never plugged. `ledger_cash_flow` and
+  `GET /ledger/{id}/cash-flow` accept `method=direct|indirect`; an unknown
+  method is `INVALID_STATEMENT_METHOD` (422). Tests: new
+  `test_ledger_cash_flow_indirect.py` (trading month reconciles, depreciation
+  add-back, non-cash investing on credit reports the difference) + route test in
+  `test_ledger_api.py`.
+  docs updated: `docs/ledger.md`, `docs/accounting-finance-gap-analysis.md`.
+
+- **feat(ledger): year-end closing entries and retained-earnings roll-forward.**
+  Adds `ledger_year_end_preview` / `ledger_close_fiscal_year` and
+  `GET /ledger/{id}/year-end/preview` + `POST …/year-end/close`. The closing
+  entry is dated the first day of the next fiscal year, zeroes every revenue/
+  expense account, and posts the balancing net income to the active
+  `EQUITY/RETAINED` account (a net loss debits it). It is idempotent
+  (`source=year_end_close`, `externalId=ye:<yearEnd>`; retry → `ALREADY_CLOSED`),
+  and P&L readers (`income_statement`, indirect cash flow) omit closing rows
+  while the trial balance / balance sheet include them. A year with no activity
+  is `YEAR_END_NOT_READY`; a chart without a retained account is
+  `RETAINED_EARNINGS_MISSING`. Tests: new `test_ledger_year_end.py` (preview,
+  post/roll-forward, idempotency, reversal + fresh re-close, net loss,
+  non-January fiscal year, refusals) + route coverage in `test_ledger_api.py`.
+  docs updated: `docs/ledger.md`, `docs/accounting-finance-gap-analysis.md`.
+
+- **feat(ledger): dimensions reporting, budgets vs actual, and cash runway.**
+  Journal-line `dimensions` are now selectable in `store.postings` and reported
+  by `ledger_dimension_summary` / `GET /ledger/{id}/dimensions/{dimension}`
+  (cash lines excluded, unassigned explicit). Adds `LedgerBudget` +
+  `LedgerBudgetLine`, `ledger_budget_create/list/variance` and
+  `GET|POST /ledger/{id}/budgets` + `…/variance`: actuals are journal movements,
+  assigned to the most specific account+dimension budget line, signed in the
+  account's natural direction, with `favorable` and an explicit `unbudgeted`
+  bucket. Adds `ledger_cash_runway` / `GET /ledger/{id}/runway`: trailing
+  operating burn, open AR/AP from aging, runway months and a horizon projection;
+  a surplus reports `UNKNOWN`, never infinity. Tests: new
+  `test_ledger_budgeting.py` (6) + route coverage in `test_ledger_api.py`.
+  docs updated: `docs/ledger.md`, `docs/accounting-finance-gap-analysis.md`.
+
+- **feat(security): optional segregation-of-duties policies above the single-use
+  approval layer.** Adds `harness/sod.py` (per-effect policy: amount threshold,
+  required distinct approvers, requester exclusion) and operator-only `/sod/*`
+  routes for policies, status and sign-offs. The ledger and portfolio authorizers
+  read the collected sign-offs before consuming the normal single-use approval,
+  emit `sod.pending` when blocked, and consume both gates on authorization.
+  Default is off: with no policy the single-user flow is unchanged. There is no
+  agent tool to sign off, so the agent cannot satisfy a rule that constrains it;
+  a self-approval is `SOD_SELF_APPROVAL`. Tests: new `test_sod.py` (off-by-default,
+  distinct approvers, duplicate/self approval, threshold tiers, deactivation,
+  portfolio authorizer, routes).
+  docs updated: `docs/ledger.md`, `docs/portfolio-accounting.md`,
+  `docs/accounting-finance-gap-analysis.md`.
+
+- **feat(portfolio): per-account cash and lot separation on PortfolioAccount.**
+  Wires the existing table: `portfolio_create_account/list/update/delete` tools
+  and `GET|POST /portfolio/{id}/accounts` + `PATCH|DELETE …/{accountId}`;
+  `account_id` on transactions, tax lots and add/remove/update position. `read`
+  returns `accounts[]` with cash/net deposits/dividends/open positions/open lots
+  plus an explicit synthetic `Unassigned` bucket, and reconciles
+  `accountCashTotal` to aggregate cash (`accountsReconcile`). An account-scoped
+  SELL/oversell consumes only that account's lots; deleting an in-use account is
+  `ACCOUNT_IN_USE`; duplicate external ids are `ACCOUNT_EXISTS`. Tests: new
+  `test_portfolio_accounts.py` (4) + route coverage in `test_portfolio_api.py`;
+  portfolio tool count 47. Real fund administration (NAV per unit, fees, capital
+  accounts) remains an explicit product decision and is documented as such.
+  docs updated: `docs/portfolio-accounting.md`,
+  `docs/accounting-finance-gap-analysis.md`.
+
+- **docs(scope): "fund" is a portfolio book; real fund administration is
+  explicitly out of scope.** Product decision 2026-11-26: do not build NAV per
+  unit, subscriptions/redemptions, management/performance fees, capital accounts
+  or an investor registry unless the product direction changes. Per-account cash
+  and lot separation remain in place as custody accounting.
+  docs updated: `docs/portfolio-accounting.md`,
+  `docs/accounting-finance-gap-analysis.md`.
+
 ## 2026-11-25
+
+- **fix(desktop): the boot splash keeps its orbit mark, and the update panel
+  names the running version.** Restores the intentional boot orb (a lit conic
+  ring around a dark core) in `desktop/ui/index.html`; the offline screen keeps
+  the static brand mark instead, so the two states stay distinct. The title-bar
+  update icon stays icon-only, and the panel it opens now shows a
+  **Current version** row (`v<current>`) above the actions, so the version in use
+  is visible where updates are handled.
+  no doc change — presentation-only; the shell and update contracts are
+  unchanged.
+
+- **fix(desktop): a failed navigation shows the Black Eclipse offline screen,
+  never WebView2's Microsoft/Edge error page.** WebView2 substitutes its own
+  branded `chrome-error://` document when a navigation fails, and the app
+  document is already gone, so `show_failure_overlay` could not style it. On
+  Windows the shell now subscribes to `NavigationCompleted` (`webview2-com`,
+  same version Tauri already resolves) and navigates back to the bundled splash
+  with `#offline=local|offline|timeout|other`; the splash (`desktop/ui/index.html`)
+  renders the real inlined brand mark, a reason-specific message, and a
+  `desktop_reopen` retry that probes the loopback port before restarting the
+  supervisor. `on_navigation` now cancels every non-app URL and opens http(s)
+  links in the OS browser, and `on_new_window` denies the window and forwards
+  externally, so the desktop window can never render a remote (or failed) page.
+  The Live Intelligence widget no longer mounts a remote player while
+  `navigator.onLine` is false, which removes the same error page from inside the
+  card, and a root-mounted `OfflineBanner`
+  (`src/components/layout/offline-banner.tsx`) shows one calm app-wide
+  "You're offline" notice while local features keep working. A 15 s
+  `/api/updates` watchdog in the shell replaces the page after three unanswered
+  probes, so a wedged Next server (which never exits the child) cannot leave a
+  dead document on screen. Tests: `navigation_tests` (origin/bundled-asset/
+  reason mapping, splash contract, HTTP probe incl. a silent socket) in
+  `desktop/src-tauri/src/main.rs`. Also fixes the release payload: Next's
+  standalone tracing copied local build/release trees from the checkout root
+  (`releases/` 1.9 GB, `.runtime/` 948 MB, `.next-desktop-dev/` 175 MB), which
+  inflated the payload to 3.2 GB and made the 32-bit NSIS compressor fail with
+  `Internal compiler error #12345`. `scripts/desktop-payload.js` now prunes them
+  (payload 3211 MB → 210 MB); `--prune-only` re-prunes an assembled payload.
+  Docs updated: `desktop/README.md`, `docs/desktop-app-plan.md`,
+  `docs/desktop-cross-platform-plan.md`, `docs/data-and-privacy.md`,
+  `docs/NAVIGATION.md`, `docs/CHANGELOG.md`.
 
 - **docs(updates): record the published v0.4.30 manifest.** Signed offline against
   the CI build (`vg7kNYrOIlBSOn-VzBotG`, lockHash `c26e37a1…`) and the win32-x64
@@ -21,7 +350,6 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
   cold-runtime boot fix. The `v0.4.30` tag drives `desktop-release.yml`; the
   offline-signed `stable.json` is uploaded to the draft before publishing.
   docs updated: `docs/UPDATES.md` (release state), `docs/CHANGELOG.md`.
-
 
 - **feat(presentations): deck copilot, PDF/PNG export, thumbnails and import.**
   Completes the presentation subsystem: (1) the Canvas AI panel now edits decks
@@ -4557,385 +4885,4 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
   onboarding's custom flow creates one too.
   Docs updated: `docs/model-connections.md` (new), `docs/NAVIGATION.md`,
   `docs/ARCHITECTURE.md`.
-
-## 2026-11-19
-
-- **fix(build): the standalone payload build imported a `buildEnv` that was never defined.** `scripts/desktop-payload.js` gained `const { buildEnv } = require("./lib/server")` with the 6cfe77e7 changes, but `scripts/lib/server.js` never exported it, so `npm run desktop:payload` — and therefore every desktop release after v0.4.15 — died with `TypeError: buildEnv is not a function`. Restored the helper alongside `buildNodeOptions`: it merges the caller's overrides over `process.env` and applies the production heap. Verified locally; the v0.4.16 tag is re-cut onto this commit. no doc change — the bug and its fix are the code.
-
-- **release: v0.4.16.** Ships the AI-provider batch below (Ollama roots, auto model detection, custom-endpoint keys, OpenCode Go) plus the desktop data-dir/stop fixes and the restored payload `buildEnv`. Version bumped in `package.json`, `pyproject.toml` and `python/harness/__init__.py`; the `v0.4.16` tag (`7db57bb5`) drove `desktop-release.yml` for the Windows installer. Published 2026-11-20: `BlackEclipse-Setup.exe` (188,457,151 bytes, sha256 `1f5e1d74…`), the offline `-full` edition and the feature packs; the offline-signed `stable.json` was uploaded to the draft and then promoted to latest. Verified: `node scripts/update.js --check` reports *latest signed release v0.4.16 / already up to date*, `npm run check:downloads` resolves both buttons. docs updated: `docs/UPDATES.md` (release state).
-
-- **chore(git): ignore the packaging artifacts that were dirtying the worktree.**
-  `scripts/desktop-package.js` writes `config/packs.json` at package time (it
-  landed with a stale `version: 0.4.6` and was never tracked), and a packaging
-  run had left a runaway nested build in `dist-local/`
-  (`app/dist/BlackEclipse/app/dist/...`, 38 files). `.gitignore` now covers
-  `/dist-local/` and `/config/packs.json`; the nested build directory was
-  deleted. No source or release behaviour changed.
-  No doc change - the ignore rules are the artifact.
-
-- **feat(ai): model detection is automatic, and any API's key now reaches its probe.** The picker probes on mount and whenever the endpoint or the provider's key state changes (debounced, once per provider+endpoint), instead of requiring a manual Discover click and locking a provider out for six hours; the chat composer does the same for the selected provider. Two gaps made "connect any API" fail: a hand-typed endpoint's probe resolved no vault key (it now falls back to `CUSTOM_LLM_API_KEY` exactly as the LLM config does), and `llmKeyEnvVar` treated Ollama's `OLLAMA_BASE_URL` (a base URL, not a key) as a credential for keyless presets. OpenCode Go is now also offered in the setup wizard and its shared Console key is labelled "OpenCode Zen / Go" — the provider itself already existed in Settings, the runtime catalog and the model probe (`https://opencode.ai/inference/go/v1/models`, verified live); the running window was simply an older install. Tests: `src/lib/settings.test.ts`, `src/lib/agent/presets.test.ts`. no doc change — no data shape, setup step or architecture changed.
-
-- **fix(ai): an Ollama endpoint pasted as its documented root (`http://localhost:11434`) now lists and selects models.** Two gaps combined to leave the picker empty with no Discover action: the model probe requested `{root}/models` (404 — the OpenAI surface is `/v1/models`, the native list is `/api/tags`), and no preset matched a base URL without a `/v1` suffix, so the settings panel resolved no provider id at all. Discovery now tries `{base}/models` first, then `{root}/v1/models`, then Ollama's native `{root}/api/tags` (a 404 or non-JSON reply falls through; the first real error is still reported), and a keyless local preset also matches its `/v1`-less root. Works for local Ollama, `ollama.com` (with or without `/v1`) and LM Studio. Tests: `python/tests/test_model_discovery.py`, `src/lib/agent/presets.test.ts`; verified against the running local Ollama (`kimi-k3:cloud`) and `ollama.com`. no doc change — discovery is an implementation detail of the model-runtime contract; no data shape, setup or architecture changed.
-
-- **fix(ai): a hand-typed endpoint now gets its key, its model list and its
-  Discover action.** A custom API entered as a base URL matched no preset, so
-  `llmKeyEnvVar` resolved no vault entry — saving refused with "API key is
-  required", and the runtime ran with an empty key even when the vault held one.
-  The active-setup panel also showed no key field and no model catalog because
-  the provider id stayed `auto`. Any hosted URL that is not a preset now resolves
-  to `CUSTOM_LLM_API_KEY`, and the panel treats it as the generic `custom`
-  provider (key editor, declared catalog, Discover). Verified end to end against
-  a stub OpenAI-compatible server (discovery + chat + Bearer key) and by building
-  a model for all 17 catalog providers; the local runtime was missing
-  `langchain-openai` and the sibling SDKs, now installed from
-  `python/requirements.txt`.
-  No doc change — provider contract and data shapes are unchanged.
-
-- **fix(desktop): `black app` / `desktop:refresh` no longer open the window
-  against an empty checkout database.** `channelLaunchEnv` forced
-  `BE_DATA_DIR` to the repository root for the Stable channel too, overriding the
-  packaged install's own `%LOCALAPPDATA%\BlackEclipse\data`. The checkout's
-  `jdds.db` has no schema until `prisma db push`, so every DB-backed screen
-  failed with `P2021: table ... does not exist` and the Node server eventually
-  died of OOM. `BE_DATA_DIR` is now set only for the isolated Dev channel; Stable
-  keeps its packaged data directory (verified: window boots, `/api/setup`,
-  `/api/alerts/live`, `/api/settings` all 200 against the 11 MB database).
-  Two consequences handled in the same pass: the owner marker is now read from
-  the same directory it is written to, and `black stop` clears the channel's app
-  port, because a packaged install pins no build and therefore writes no owner
-  marker — stopping the window used to leave its server behind and the next
-  launch showed "port 3100 is in use by another application".
-  docs updated: `docs/desktop-app-plan.md` (§4 data-directory resolution).
-  `operator-secret` (a per-install signing secret that the broken launches wrote
-  into the checkout) is now gitignored.
-
-- **release: v0.4.15 is published, with its signed manifest.** Signed
-  `stable.json` offline with key `3e5f4f12096f06ac` for commit `b18e7e7b`, uploaded
-  it to the draft, rewrote the release body to the Windows-only template (the
-  old body still linked a `.dmg` that was never attached), then promoted the
-  draft. Verified end to end: `node scripts/update.js --check` reports
-  *latest signed release v0.4.15 / already up to date*, and
-  `npm run check:downloads` resolves `BlackEclipse-Setup.exe` and
-  `SHA256SUMS.txt`.
-  Docs updated: `docs/UPDATES.md` (release state).
-
-- **chore(size): re-pin the harness budget for the settled tree.** `check:size`
-  was red on `main` (521969 lines vs a 521545 ceiling) from the chart-engine,
-  bots and provider-spec work that landed after the 2026-11-18 pin. Re-pinned to
-  the measured tree — total 521969, `.` 40246, routers 24145 — per ADR-H288's
-  rule that a ceiling may be raised only by a deliberate edit.
-  No doc change — the budget file is the artifact.
-
-- **fix(release): a blank `only` no longer rebuilds all three OSes, and the
-  release body stops describing downloads that do not exist.** `e6c21adc`
-  removed the macOS/Linux download links but left two traps: a manual
-  `workflow_dispatch` with `only` blank still built `ubuntu-latest` and
-  `macos-latest` (the slow path the Windows-first lane was meant to remove), and
-  the generated release body still told macOS/Linux users how to open an app
-  they cannot download. Blank `only` now resolves to `windows-latest` (name an OS
-  to backfill), and the body's **First open** paragraph is Windows-only. Same
-  semantics on a tag push, so no release path changed behaviour.
-  Docs updated: `docs/UPDATES.md` (backfill table, iterate note).
-
-- **fix(ci): regenerate the published benchmark page for 0.4.15.** Every push
-  since v0.4.13 failed `test_published_benchmarks` because
-  `docs/harness/benchmarks.md` still said `agent version: 0.4.12` (and pointed at
-  the v0.4.12 commit), so the generated-file guard read the page as stale or
-  hand-edited. Ran `npm run eval:benchmarks`; only the run id, version, commit
-  and latency line changed.
-  No doc change — the benchmark page is the artifact itself.
-
-- **feat(updates): a packaged install can finally update itself.** Every
-  update path was git-only (`fetch` → `checkout` → `npm ci` → build), so the
-  window shipped by `BlackEclipse-Setup.exe` had no way to apply an update: its
-  `app` directory has no `.git`. `scripts/update-apply.js` now branches on that:
-  a source tree keeps the checkout+build path, a packaged tree downloads the
-  platform installer named in the signed manifest, verifies its SHA-256 and size
-  **while streaming** to `<BE_DATA_DIR>/.runtime/updates/`, and only then opens
-  it. A mismatch deletes the file and installs nothing. The handoff runs through
-  a detached PowerShell helper so closing the window/server cannot kill the step
-  that starts the installer. The manifest gains a signed `installers` map
-  (`<platform>-<arch>` → `{url,sha256,size}`), validated by both verifier
-  mirrors and host-checked like every other URL; `update-sign.js` builds it from
-  `--installer-file` (streaming hash, no 200 MB read) + `--installer-url`. Jobs
-  carry `mode` and the verified `artifact`, and installer mode tells the user to
-  follow the installer instead of offering a restart that would do nothing.
-  v0.4.15's manifest predates the field, so packaged 0.4.15 falls back to an
-  honest "open the release page" message; the next signed release can use it.
-  `desktop-package.js` now ships `update-apply.js` and `update.js` in
-  `app/scripts` — it copied only the bootstrap before, so a packaged install had
-  no updater to run at all. Docs updated: `docs/UPDATES.md`.
-
-- **perf(boot): a page request waits 3 s for a cold Python runtime, not 45 s.**
-  The browser allows six concurrent HTTP/1.1 connections per origin; six boot
-  API calls parked on the 45 s runtime budget held every socket, so even
-  Python-free routes (the chat transcript among them) queued for 45–55 s on a
-  cold start. `DEFAULT_REQUEST_WAIT_MS` is now 3 s: the background spawn keeps
-  going, the route answers an honest 503, and the next poll succeeds.
-  `HARNESS_PY_REQUEST_WAIT_MS` still overrides it. Files:
-  `src/lib/harness/runtime-supervision.ts` (+ test). Docs updated:
-  `docs/ARCHITECTURE.md`.
-
-- **fix(build): the production payload builds with Turbopack.** The webpack
-  production compile of the current graph exceeded a 15 GB live heap and died
-  with "Ineffective mark-compacts near heap limit" on this 16 GB host — at both
-  the 12 GB and 15 GB ceilings — so `desktop:refresh` and the in-app updater
-  could never finish their `building` phase (the same tree built in ~2.5 min
-  under Turbopack). `scripts/lib/server.js` (stable / `npm run build`) and
-  `scripts/desktop-build.js` (dev channel) now pass `--turbopack`;
-  `BE_BUILD_WEBPACK=1` is the fallback. Also removed the 3.7 GB stale webpack
-  cache that made rebuilds slower. Docs updated: `docs/UPDATES.md`.
-
-- **chore(marketing): Windows is the only advertised platform.** Removed the
-  macOS and Linux download buttons from the README and the macOS/Linux rows from
-  the release body and the install/requirements tables. Nothing links to an
-  artifact that is not published yet. The builds are not gone: the workflow
-  still produces `.dmg`/`.deb` on request (`only: macos-latest` /
-  `ubuntu-latest`). `check:downloads` now checks the Windows button by default
-  and takes `--all` to include the backfilled ones. `docs/install.md` records how
-  to turn macOS on later (Apple Developer membership + notarisation secrets,
-  backfill run, restore the button) and the shorter Linux path.
-  Docs: `README.md`, `docs/install.md`, `docs/public-readme.md`,
-  `docs/UPDATES.md`.
-
-- **feat(release): tag builds are Windows-first, and macOS/Linux attach
-  later.** A tag push now builds only `windows-latest`, so the draft release
-  exists in ~15 minutes instead of waiting for the slowest runner — Windows is
-  where the installed user base is, and a packaged install can only receive a
-  fix by installing a new build (the in-app updater needs a git checkout and
-  `node_modules`, which a packaged payload does not ship). The other platforms
-  attach to the same release from a manual run (`tag: vX.Y.Z`,
-  `only: macos-latest|ubuntu-latest`, `upload_release: true`); that run preserves
-  the release's existing draft/published state, because `action-gh-release`
-  updates with `draft: existingRelease.draft`. The workflow also gains `tag`
-  (a dispatch otherwise builds the branch ref) and `publish` (promote a draft)
-  inputs, and a blank `only` still builds all three on demand.
-  Docs updated: `docs/UPDATES.md` (Windows-first tags, backfill, and why packaged
-  installs need an installer).
-
-- **perf(chat): opening the app no longer serializes the entire chat archive.**
-  `GET /api/chat/transcript` returned every message body of every conversation;
-  on the reference host that was 16 MB / 177 conversations, parsed, stringified,
-  gzipped and parsed again in the WebView on every boot — a multi-second block
-  on the single Node thread that queued the page's other API calls behind it
-  (measured 5–10 s boot requests). The boot path now asks for `?summary=1`
-  (metadata + `messageCount`, `messages: []`) and hydrates one conversation with
-  `?chatId=…` when it is opened; the full list remains the default for
-  migrations/external callers. Files: `src/app/api/chat/transcript/route.ts`,
-  `src/lib/chat/session-store.ts` (`summarizeTranscript`),
-  `src/lib/chat/chat-organization.ts` (`messageCount` survives merges),
-  `src/lib/chat/transcript-client.ts`, `src/lib/chat/use-conversation-persistence.ts`
-  (`hydrateConversation`), `src/components/screens/stock-chat.tsx`.
-  The route also stops hand-gzipping: the Turbopack production build dropped the
-  `content-encoding` header, so the browser parsed raw gzip as JSON and the
-  hydration failed silently. Plain JSON now, and the boot payload is ~50 KB.
-  Docs updated: `docs/ARCHITECTURE.md` (conversation persistence).
-
-- **perf(desktop): the Tauri shell no longer builds with the slowest Rust
-  settings available.** `desktop/src-tauri/Cargo.toml` had `lto = true` with
-  `codegen-units = 1`, so the final binary was code-generated and linked
-  single-threaded on every release — tens of minutes for a thin WebView wrapper
-  whose Next payload is two orders of magnitude larger than the few MB those
-  settings saved. It is now `lto = "thin"` with the default parallel codegen
-  units, still stripped. The release workflow also pins the Rust toolchain
-  (`1.99.0`) instead of floating `stable`, because a toolchain bump invalidates
-  every fingerprint in the cached `target` dir and quietly turns a warm build
-  cold, and adds a `smoke_tests` dispatch input (a tag push always runs the
-  smoke test).
-  Docs updated: `docs/UPDATES.md` (iterating on a release build).
-
-- **fix(updates): the in-app updater compares against the window that is
-  actually running, not the checkout on disk.** The runner read
-  `package.json` from the working tree to decide "already up to date". On a
-  bridged/pinned install the checkout can be ahead of the served build (here:
-  running **0.4.12**, checkout **0.4.15**, signed release **0.4.14**), so every
-  click on *Update now* exited with "already up to date (v0.4.15)" without
-  building anything. Worse, the job recorded `fromVersion: 0.4.15`, which
-  `readUpdateJob` correctly treated as a spent receipt for an app running
-  0.4.12 and hid — the panel silently returned to "Update available", a loop
-  with no error. The running version now travels with the request
-  (`be-update {currentVersion}` → `--running-version`; the HTTP fallback passes
-  `BE_UPDATE_RUNNING_VERSION`) into `update.js` and `update-apply.js`; the
-  no-op branch records the running version as `toVersion` so a finished job can
-  never claim a build that was not made. `black update` is unchanged (no flag →
-  disk version). Docs updated: `docs/UPDATES.md`.
-
-- **fix(build): lower the production build's peak heap so an in-app build fits on
-  a 16 GB machine.** `experimental.webpackMemoryOptimizations` is on (a little
-  slower, less heap). The in-app updater runs `npm run build` on the user's own
-  machine at the 12 GB old-space ceiling, so a build that OOMs is a stalled
-  update, not just a slow one. The observed `Ineffective mark-compacts near heap
-  limit` was also reproducible by two simultaneous builds (a raw `npx next build`
-  skips `.next-build.lock`), so the failure mode and the check for a second
-  `next build` are documented. Docs updated: `docs/environments.md`.
-
-- **perf(release): a tag build stops paying for work it already did.** The
-  `only` fast-lane input was dead — it is accepted by `workflow_dispatch` and
-  never read, so the "one OS, ~20 minutes" lane silently built all three. It now
-  filters `strategy.matrix` (an `include` filter would add the skipped OSes back;
-  a job-level `if` cannot see `matrix`). The build job also:
-  caches `scripts/vendor/python` + the pip download dir per OS, keyed on the
-  requirement files and provisioning scripts, so a repeat release skips the
-  multi-minute install of playwright/sklearn/xgboost/lightgbm/duckdb/whisper/av;
-  restores the Rust `target` dir across a `Cargo.lock` change
-  (`restore-keys`), where a dependency bump used to force a cold ~15-25 minute
-  build; and skips the `-full` Windows installer on a manual run
-  (`offline_installer`, default false) because compressing every pack is the
-  slowest step — a tag still always builds it. `scripts/setup-python.js` now
-  targets the vendored interpreter on macOS/Linux too (it is what the app
-  resolves and what ships), which removes a duplicate full Python install on
-  every non-Windows runner; `scripts/setup-portable-python.js` writes a
-  requirements digest marker so a restored runtime skips pip. A tag push still
-  builds and publishes all three platforms unchanged.
-  Docs updated: `docs/UPDATES.md` (iterating on a release build).
-
-- **release: cut v0.4.15.** Ships the chart-engine readiness fix, per-tab chat
-  sessions, the `desktop:refresh` bridge and the 12 GB default build heap
-  (entries below). Regenerates `sbom.cdx.json` / `THIRD-PARTY-NOTICES.md` —
-  v0.4.14 shipped while the SBOM still said 0.4.13, which failed
-  `sbom-artifact.test.ts` on every run after it. Bumps `pyproject.toml` and
-  `harness.__version__` to 0.4.15 (they had stayed at 0.4.12 since v0.4.12, so
-  the PyPI tag check failed on 0.4.13 and 0.4.14). The signed `stable.json` is
-  produced offline with key `3e5f4f12` and uploaded before the draft release is
-  published. Docs updated: `docs/UPDATES.md` (release state).
-- **fix(charts): a missing drawing library is now a named, testable failure
-  instead of a silent 503.** The vendored interpreter can boot the agent stack
-  (`langgraph`) while `matplotlib`/`plotly` are absent, so every chat chart
-  returned `503 "install the Python runtime"` — pointing at a runtime that was
-  already installed. `PYTHON_RUNTIME_PACKAGES` now enumerates `matplotlib`,
-  `plotly`, `numpy` and `pydantic`; `PYTHON_CHART_PACKAGES` +
-  `chartEngineReadiness()` define "can draw"; `probeChartEngine()` checks the
-  SAME interpreter `findPython()` selects and the charts route distinguishes
-  `RUNTIME_UNAVAILABLE` from `CHART_RENDER_UNAVAILABLE` (with the interpreter
-  path and missing modules); `scripts/setup-python.js` verifies by importing and
-  exits non-zero when the stack is missing, force-reinstalling a corrupt
-  distribution; `scripts/doctor.js` verifies after a repair;
-  `scripts/test-python.js` refuses to run without the chart stack;
-  `python/harness/charts/render.py` names `sys.executable`; the runtime
-  exposes `GET /charts/health`; `response-chart.tsx` shows the cause instead of
-  italic prose; and a source-scanning regression test fails the build when the
-  charts package imports a module the install list does not cover. Docs updated:
-  `docs/chart-engine.md`, `docs/harness/python-runtime.md`.
-- **fix(desktop): each tab now owns its chat session.** The tab strip recorded
-  only the page (plus sidebar mode), so the single shell-wide
-  `activeConversationId`/transcript was shared by every Chat tab: pressing `+`
-  ran the global "new chat" reset and the old tab then showed the new (or empty)
-  session. `DesktopTab` now carries `conversationId` (`null` = that tab's own
-  fresh chat), the strip captures the live session into the tab on
-  switch/new/close, restores the selected tab's conversation, names Chat tabs
-  after their session, and persists the front tab
-  (`be_desktop_tabs_v2_active`) so a relaunch returns to the session that was
-  open. Selecting a conversation also clears a stale transcript when the id is
-  not loaded yet. Docs updated: `docs/ARCHITECTURE.md`, `docs/NAVIGATION.md`,
-  `desktop/README.md`.
-- **fix(desktop): `desktop:refresh` bridges a stale install instead of leaving
-  the old UI on screen.** A packaged Stable shell serves its bundled payload
-  under `<install>\app`; promoting `releases/stable/<buildId>/.next` therefore
-  did not change what the window loaded, and refresh only printed a warning the
-  user could miss. Refresh now stops the window and its owned server after the
-  build, runs `desktop-dev-bridge.js` (reversible; keeps
-  `app.bundled-<version>`), then promotes and relaunches. Docs updated:
-  `docs/environments.md`.
-- **fix(build): default the production build to a 12 GB V8 heap.** A local
-  `desktop:refresh` died at Node 22's ~4 GB default (`JavaScript heap out of
-  memory`), then again at 6.05 GB and 8.07 GB as the cap was raised. The repo's
-  release history already established that the Windows payload build needs
-  12 GB (v0.4.10). `scripts/lib/server.js` now supplies
-  `--max-old-space-size=12288` for the managed Stable build (and
-  `scripts/desktop-build.js` for Dev), keeping any explicit caller value and
-  allowing `BE_BUILD_HEAP_MB` to override. Docs updated: `docs/environments.md`.
-- **fix(updates): a packaged install no longer offers an in-place update it cannot
-  perform.** The title-bar button and banner ran the git-based updater inside the
-  installed app, whose `<install>\app` payload has no `.git` (and current packages
-  do not even ship `update.js`), so *Update now* failed with "the updater did not
-  report back". `/api/updates` now carries `canSelfUpdate` (`<root>/.git` exists);
-  a packaged install gets **Download vX** to the signature-checked release page
-  instead, and `POST /api/updates/apply` + `scripts/update-apply.js` refuse with an
-  explicit message. `npm run desktop:refresh` now **fails** when the installed
-  shell is not bridged instead of warning, building, promoting and reopening a
-  window that still serves its bundled payload. Manifest fetches get 20 s instead
-  of 8 s (a cold GitHub redirect measured 6.4 s, so checks failed spuriously).
-  Test: `src/lib/updates/core.test.ts`.
-  Docs updated: `docs/UPDATES.md`, `docs/environments.md`.
-
-- **fix(ai): the model list could load empty, stay empty, or point at a model the
-  endpoint does not serve.** Four defects behind "I can't see my models":
-  (1) `loadModelCatalog` memoised a FAILED fetch as `{}` for the whole page load —
-  the AI/LLM panel mounts while the Python runtime is still cold-starting, so one
-  503 left the Model dropdown holding only the current value *and* hid the
-  **Discover models** action, which was gated on that same missing catalog row
-  (only a relaunch recovered it); the failed promise is no longer cached and
-  `useModelCatalog` re-probes up to 3× (1.5 s apart) without ever replacing a
-  loaded catalog with an empty one. (2) `canDiscover` now falls back to "the
-  runtime decides" when the catalog has no row, so Discover is always available
-  for a configured provider. (3) The auto-discovery throttle stamped the attempt
-  BEFORE probing, so one cold-start failure locked that provider out for six
-  hours; it now stores the next-allowed time and waits 6 h on success but only
-  60 s on failure (new `be_model_autodiscover_v2` key, which also releases anyone
-  still held by v1). (4) A successful Discover that does not list the saved model
-  now adopts the newest served id and says so (the "model 'qwen3' not found" 404);
-  the silent background probe only warns and never rewrites the saved config.
-  The picker also prints "no models loaded yet — use Discover models" instead of
-  a bare empty dropdown. Regression test: `src/lib/agent/model-catalog.test.ts`.
-  No doc change — bug fixes, contracts unchanged.
-
-- **fix(ai): the missing provider paths — Ollama Cloud, OpenCode Go, and any
-  custom endpoint.** Three "I can't add my API" dead ends, all in the AI/LLM
-  screen: (1) the Ollama preset is keyless, so a user whose Ollama only holds
-  cloud models (`kimi-k3:cloud`) had no field for an ollama.com key —
-  `OLLAMA_API_KEY` was not even in the vault registry; (2) only the OpenCode Zen
-  (pay-as-you-go) base URL existed, so a Go subscriber's key was sent to the
-  wrong gateway; (3) a custom endpoint could never hold a key — the key editor
-  was resolved from the *base URL* matching a preset, which a custom URL never
-  does, so the field disappeared exactly when it was needed and the save failed
-  with "An API key is required for a remote LLM provider". Added `ollama-cloud`
-  (`https://ollama.com/v1`) and `opencode-go`
-  (`https://opencode.ai/inference/go/openai/v1`) presets + `OLLAMA_API_KEY` in
-  `PROVIDER_KEYS` + `ProviderSpec`s in the Python catalog (a preset id the
-  runtime does not know fails every run), made `ProviderKeyEditor` fall back to
-  the saved provider id (`custom` → `CUSTOM_LLM_API_KEY`), and surfaced
-  OpenCode/OpenCode Go/Custom in the Popular group. New test asserts every
-  `LLM_PRESETS` id exists in `PROVIDER_CATALOG` so the two lists cannot drift.
-  Docs updated: `docs/ARCHITECTURE.md` (AI/LLM provider invariant),
-  `docs/NAVIGATION.md` (key-registry row pointed at a deleted file).
-
-- **fix(search): the boot warm-index can no longer freeze the agent runtime.**
-  A packaged install indexes its own payload (`python/harness` under
-  `<install>\app`), so the first boot walked ~1,500 files / 19k chunks while
-  `bulk_index` ran synchronously on the event loop; `/health` never answered,
-  the front door waited 45 s per call and reported "runtime unavailable", and
-  every runtime-backed action (agent, broker/MCP tests) hung until it finished.
-  `documents_from_repository` now skips a payload marked by
-  `scripts/vendor/python` (a packaged install, never the user's project),
-  repository collection runs via `asyncio.to_thread`, and `index_documents`
-  yields to the event loop every 50 ms. Verified with `py-spy` (stack pinned in
-  `save_chunks`) and by a healthy `/health` after a fresh boot.
-  Docs updated: `docs/harness/search-retrieval.md`.
-
-- **fix(release): rotate the update-signing key and ship v0.4.13, the first
-  release with a signed manifest since v0.4.1.** The in-app update check polls
-  `releases/latest/download/stable.json`; v0.4.2 and v0.4.3 shipped without one,
-  so every user got "couldn't check" (verified: `node scripts/update.js --check`
-  → `HTTP 404`) and no notice could reach them. The old private key
-  (`7a08848038457e37`) is gone, so `npm run update:keys` generated
-  `3e5f4f12096f06ac`; `config/update-signing-key.pub` now carries it and the
-  private half stays gitignored in `.black-eclipse/update-keys/`. Anyone on
-  0.4.12 or older trusts the old key and must install 0.4.13 manually once, then
-  updates resume normally. Version bumped 0.4.12 → 0.4.13.
-  Published with the signed manifest attached: `node scripts/update.js --check`
-  now verifies and reports *up to date* on 0.4.13 (it printed `HTTP 404` before),
-  and `npm run check:downloads` serves all three installer aliases.
-  Docs updated: `docs/UPDATES.md` (release state, key id, rotation cost).
-
-- **chore(repo): the project now lives at `dumbpabloo/BlackEclipse-V1.0`.** Every
-  live reference was repointed: `package.json` (`repository`/`homepage`/`bugs`),
-  `config/updates.json` (the update check would otherwise poll a redirect),
-  both installer scripts and their `-Repo` defaults, the README
-  download/install/source links, `.github/ISSUE_TEMPLATE/config.yml`, the release
-  workflow's install table, `desktop-package.js` and `check-downloads.js`.
-  Left alone deliberately: historical entries in `docs/changelog/`, and the
-  pre-commit commit identity (`121116805+desimarijuana@users.noreply.github.com`),
-  whose numeric user id must not be guessed.
-  Docs: `docs/install.md`, `docs/UPDATES.md`, `docs/repository-guards.md`,
-  `docs/OPEN-SOURCE-READINESS.md`.
 

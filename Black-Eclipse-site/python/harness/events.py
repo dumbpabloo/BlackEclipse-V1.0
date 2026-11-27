@@ -16,6 +16,8 @@ from typing import Any, Callable, Optional
 from .config.flags import get_bool
 from .execution_log import ExecutionEventLog
 from .persistence import AgentMemoryStore, now_iso
+from .run_activity import forget as forget_activity
+from .run_activity import touch as touch_activity
 from .run_timings import RunTimings, TERMINAL_EVENT_TYPES
 
 log = logging.getLogger("harness.events")
@@ -112,6 +114,7 @@ class RunEmitter:
         self._log = log
 
     async def emit(self, event_type: str, data: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        touch_activity(self.run_id)
         event = self._durable_event(event_type, data)
         if self._bus:
             self._bus.publish(event)
@@ -126,6 +129,7 @@ class RunEmitter:
             # so a reader always sees the run's outcome first. Fail-open: the
             # summary is diagnostics and can never fail a finished run.
             self._timings_emitted = True
+            forget_activity(self.run_id)
             try:
                 await self.emit("run.timings", self._timings.summary(at=self._clock()))
             except Exception:  # noqa: BLE001
@@ -140,6 +144,7 @@ class RunEmitter:
         sequence/persistence/bus path as `emit`; a persistence failure is
         swallowed (an advisory must never break a tool call).
         """
+        touch_activity(self.run_id)
         event = self._durable_event(event_type, data)
         if self._bus:
             self._bus.publish(event)
@@ -192,6 +197,7 @@ class RunEmitter:
         bus to live subscribers only — the final message is still persisted by
         `model.completed`.
         """
+        touch_activity(self.run_id)
         self._seq += 1
         event = {
             # A transient event is never persisted, so it lives outside the

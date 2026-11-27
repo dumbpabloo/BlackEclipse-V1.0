@@ -88,6 +88,7 @@ def request_approval(
     *,
     risk: str = "high",
     run_id: str = "",
+    automation_id: str = "",
     risk_summary: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Create (or reuse) the single-use approval for this exact order.
@@ -104,6 +105,9 @@ def request_approval(
         )
     affected = {
         "order": intent.to_dict(),
+        # The bot/automation that proposed this exact order. The chat card uses
+        # it to show only the approvals that belong to the bot being viewed.
+        "automationId": automation_id or None,
         "preview": {
             "symbol": preview.get("symbol"),
             "volume": preview.get("volume"),
@@ -241,6 +245,9 @@ def approval_view(row: dict[str, Any]) -> dict[str, Any]:
     order = affected.get("order")
     if isinstance(order, dict):
         view["intent"] = order
+    automation_id = affected.get("automationId")
+    if isinstance(automation_id, str) and automation_id:
+        view["automationId"] = automation_id
     server = str(row.get("serverId") or "")
     if server.startswith("trade:"):
         view["connectionId"] = server.removeprefix("trade:")

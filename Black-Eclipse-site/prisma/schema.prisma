@@ -1250,10 +1250,10 @@ model Workflow {
 
 // Durable presentation state for Bots mode: the per-bot chat threads (`chat`)
 // and the group rooms incl. their transcripts (`groups`). The JSON document is
-// owned by the client stores; the row is only a durable mirror so clearing
-// localStorage (or opening another browser) does not erase conversations.
-// `stateUpdatedAt` is the CLIENT's ISO timestamp of the document contents and
-// is what lets a tab decide whether local or remote is newer.
+// the fast hydration snapshot; the per-message tables below are the recovery
+// record. `stateUpdatedAt` is the CLIENT's ISO timestamp of the document
+// contents and is what lets a tab decide whether local or remote is newer; the
+// API refuses an older write so a stale tab cannot roll the transcript back.
 model BotState {
   key            String   @id
   document       String
@@ -1262,6 +1262,67 @@ model BotState {
   updatedAt      DateTime @updatedAt
 
   @@map("BotState")
+}
+
+// Per-message durable log for Bots mode. `BotState` remains the fast
+// presentation snapshot; these rows are the recovery/audit source of truth for
+// a conversation. An id is the client's message id, so an append is idempotent
+// and a terminal streaming update becomes an upsert of the same row.
+model BotChatMessage {
+  id        String   @id
+  botId     String
+  role      String
+  content   String
+  at        String
+  scheduled Boolean  @default(false)
+  runId     String?
+  error     Boolean  @default(false)
+  feedback  String?
+  /// JSON for delegations / pending approval / pending clarification.
+  payload   String?
+  revision  Int      @default(1)
+  updatedAt DateTime @updatedAt
+
+  @@index([botId, at])
+  @@map("BotChatMessage")
+}
+
+model BotGroupMessage {
+  id         String   @id
+  groupId    String
+  role       String
+  content    String
+  at         String
+  authorId   String?
+  authorName String?
+  scheduled  Boolean  @default(false)
+  runId      String?
+  error      Boolean  @default(false)
+  feedback   String?
+  /// JSON for delegations / pending approval / pending clarification.
+  payload    String?
+  revision   Int      @default(1)
+  updatedAt  DateTime @updatedAt
+
+  @@index([groupId, at])
+  @@map("BotGroupMessage")
+}
+
+// Room identity and membership. `BotState` remains the instant snapshot, but a
+// lost/cleared snapshot must not orphan a durable transcript. The room row is
+// authoritative for name/members/mode/chair; images are bounded data URLs.
+model BotRoom {
+  id        String   @id
+  name      String
+  /// JSON array of member bot ids.
+  memberIds String
+  mode      String   @default("parallel")
+  leadId    String?
+  image     String?
+  createdAt String
+  updatedAt DateTime @updatedAt
+
+  @@map("BotRoom")
 }
 
 // A timezone-aware schedule that starts a workflow's run unattended.

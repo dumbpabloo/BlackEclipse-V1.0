@@ -1,7 +1,7 @@
 ---
 title: Bots Mode
 status: Current
-last-verified: 2026-11-18
+last-verified: 2026-11-26
 ---
 
 # Bots Mode
@@ -19,7 +19,7 @@ state, and the two deliberate cross-surface rules.
 | Area | Owner | Notes |
 | --- | --- | --- |
 | Conversation | `src/components/bots/bot-chat.tsx` / `group-chat-room.tsx` | The page IS the conversation; no page header. |
-| Bot + group list | `src/components/bots/bots-sidebar-panel.tsx` | The ONE list, rendered in the left sidebar only in Bots mode. |
+| Bot + group list | `src/components/bots/bots-sidebar-panel.tsx` | The ONE list, rendered in the left sidebar only in Bots mode. A search field filters bots by name/description/objective/tags and rooms by name. |
 | Scheduler + monitors | `src/components/bots/scheduler-dock.tsx` | Right-docked Agent Workspace slot; opens from the sidebar. |
 | Empty state | `src/components/screens/bots/bots-screen.tsx` | New bot, new group, finance pack, Institution committee. |
 
@@ -42,10 +42,27 @@ dialog owns Escape).
   `eclipse-agent`, which is the full agent.
 - **Objective**: the standing instructions injected as the persona each turn.
 - **Schedule**: manual, once, daily, weekdays, weekly, monthly, interval (floor
-  30s), cron, event, condition. The trigger's IANA zone is preserved on edit so a
-  bot created elsewhere does not silently shift.
+  30s), cron, event, condition, webhook. A webhook bot gets a generated bearer
+  token (`trigger.webhookSecret`) and is woken by
+  `POST /api/automations/webhook/<id>` with `X-Eclipse-Webhook-Token` (or
+  `?token=`); an edit preserves the token. The trigger's IANA zone is preserved
+  on edit so a bot created elsewhere does not silently shift.
 - **Run behaviour**: misfire policy, concurrency conflict rule, max concurrent
   runs, max attempts, per-run timeout, and an optional provider/model pin.
+- **Brain**: the native agent preset, a saved graph workflow, a saved strategy,
+  or an **external ACP agent**. An external agent is a real subprocess
+  (`command` + argv, no shell); the bot detail page exposes the command, argv and
+  a permission switch. Its output is the run answer and its permission requests
+  are denied unless the operator explicitly allows them. The runtime also
+  supports `session/load` when the agent advertises it, passes configured MCP
+  server descriptors to session setup, and negotiates fs/terminal capabilities
+  only when `fsRead`/`fsWrite`/`terminal` are explicitly enabled (paths confined
+  to the bot workspace).
+- **Workspace**: an explicit `workspaceRoot` wins. Without one, a scheduled bot
+  is bound to `<server root>/.black-eclipse/bots/<id>` (created lazily), so two
+  bots do not overwrite each other's generated files. A requested root may
+  NARROW the server-resolved workspace to a real subdirectory; a sibling or
+  outside path is still refused (`code/workspace.py`).
 
 ## Trading bots
 
@@ -162,22 +179,75 @@ The team layer itself (graph, conflicts, review, budgets) is
 
 The visible threads are **local-first**: the stores hydrate from localStorage so
 the UI renders before (and without) the runtime. Every persisted mutation is
-also mirrored, best effort, to a `BotState` document in JDdS:
+also mirrored to JDdS in two layers:
 
-- keys: `chat` (per-bot threads) and `groups` (rooms + transcripts);
-- client sync: `src/lib/bots/state-sync.ts`;
-- route: `src/app/api/bots/state/[key]/route.ts`.
+- a `BotState` snapshot (`chat`, `groups`) for instant hydration;
+- a **per-message log** (`BotChatMessage`, `BotGroupMessage`) written on every
+  append and terminal update, replacing a thread's rows on clear/regenerate.
+  Hydrate merges the log back by message id, so clearing localStorage or losing
+  the snapshot recovers the conversation;
+- a **room row** (`BotRoom`) for name/members/mode/chair/photo. A lost snapshot
+  restores the rooms that own the durable transcripts instead of orphaning them;
+- client sync: `src/lib/bots/state-sync.ts`,
+  `src/lib/bots/message-log.ts`;
+- routes: `src/app/api/bots/state/[key]/route.ts`,
+  `src/app/api/bots/messages/route.ts`.
 
-The invariant is **newest client timestamp wins**. On hydrate the store renders
-local data, then adopts the server copy only when its `updatedAt` is newer; a
-newer local copy is pushed instead. A failed/offline/oversized mirror never
-loses the local copy. Other tabs adopt a written document through the `storage`
-event, so two tabs converge without a reload. Clearing localStorage therefore
-recovers the last mirrored document; it is not a sync engine and does not merge
-conflicting edits from two tabs made at the same instant.
+The invariant is **newest client timestamp wins**, enforced on BOTH sides: the
+store adopts the server copy only when its `updatedAt` is newer, and the API
+refuses a stale PUT (HTTP 409 + the current document) instead of letting an old
+tab or a delayed push roll the transcript back (`src/app/api/bots/state/[key]/route.ts`).
+A failed/offline/oversized mirror never loses the local copy. Other tabs adopt a
+written document through the `storage` event, so two tabs converge without a
+reload. Clearing localStorage therefore recovers the last mirrored document; it
+is not a sync engine and does not merge conflicting edits from two tabs made at
+the same instant.
+
+## Quiet runs and continuity
+
+A scheduled run is not forced to manufacture a report. The dispatcher tells the
+model that, when nothing materially changed and the operator needs nothing, it
+may answer with exactly `[[no-update]]` (Hermes' `[SILENT]` is accepted too).
+The execution row keeps that answer for audit, but the marker is **not** posted
+into the bot thread, does not raise the unread dot, and does not toast or sound
+(`src/lib/bots/quiet.ts`, `src/lib/notifications/bots-run-diff.ts`). A pending
+order always breaks quiet: an order awaiting a decision is never hidden.
+
+A scheduled run also receives a bounded digest of this bot's last completed
+reports (`_prior_run_digest` in `python/harness/automation/dispatcher.py`) and
+the same `bot-<id>` conversation. The digest is labelled as unverified prior
+output and exists to bridge a compaction/provider reset, not to replace the
+conversation. `test_automation_quiet_runs.py` pins the contract.
+
+## Audit trail
+
+Every bot create/update/lifecycle/run/delete appends an `AutomationAudit` row on
+`agent-memory.db` (actor, action, bounded detail). The bot detail page has an
+**Audit trail** section fed by `GET /automations/audit`; deleting a bot retains
+its audit rows. This is the operator-facing answer to "who changed this bot and
+when?", separate from run history and the execution ledger.
+
+## Room modes
+
+A group room has two ways to turn one message into answers:
+
+- **Independent takes** (default, legacy rooms included): every targeted member
+  answers in parallel and does not see the others' replies from that round.
+- **Roundtable**: members answer in order, and each later member receives the
+  replies already produced in this round. Each member still speaks in its own
+  voice; nothing is merged. The mode is stored on the room
+  (`groups-store.ts`, `mode`), chosen in Group settings, and shown in the room.
+  An optional **chair** (`leadId`) then writes one visible synthesis naming the
+  recommendation, the strongest disagreement and what still needs the operator.
+  The chair is a normal member turn with the same identity/tools/memory. A desk
+  remains the surface for a dependency-aware pipeline.
 
 ## When a bot runs
 
+- **Always-on without the desktop:** `npm run bots:headless` runs the Python
+  runtime and scheduler on a VPS/spare machine (loopback by default; the
+  runtime's non-loopback secret guard still applies). The desktop UI is not
+  required for scheduled runs, but it is how you manage them.
 - **Scheduler / event / condition / webhook / fabric** launches require the
   automation to be `active`.
 - **Run now** is an explicit operator request and also works while `paused`.
@@ -256,6 +326,24 @@ by calling tools; and an `agent.bot` graph node is one bounded turn (`maxSteps`
 
 ## Packs and teams
 
+- **Teammates panel.** The scheduler dock shows the registered A2A agents and
+  the newest durable teammate messages, and can post a `STATUS` message to an
+  agent through `/api/a2a/*`. It is the same A2A bus the runtime uses; delivery
+  is queued for the recipient's next run, not a live chat turn. This makes the
+  teammate record visible without inventing a second messaging store.
+- **Bots mode has a real approvals surface.** The scheduler dock mounts the
+  existing effectful-tool approvals panel, so a scheduled/manual run that blocks
+  on a write action is answerable without leaving Bots. The group composer also
+  mounts the trade approval banner, so an `order_preview` made by a room member
+  can be confirmed in the room that produced it. A trade approval now carries
+  the proposing `automationId`; a bot's chat shows only that bot's orders (old
+  rows without attribution stay visible).
+- **Bots can be archived from the row menu** (not only through the API); the
+  conversation and run history stay.
+- **Bots export/import as secret-free JSON.** The detail menu downloads a
+  versioned `eclipse.bot` document; the sidebar import creates a **draft** and
+  never carries a webhook token or vault credential reference.
+  `src/lib/bots/transfer.ts`.
 - **Finance starter pack**: six editable scheduled bots plus the `Markets Desk`
   room; idempotent by name, seeded through the real automation API.
 - **Institution committee**: analyst → bull → bear → trader → risk → PM, seeded

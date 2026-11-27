@@ -26,6 +26,7 @@ from .model_runtime import get_runtime
 from .persistence import AgentMemoryStore, now_iso
 from .retrieval.cache import RetrievalCache
 from .retrieval_tools import register_retrieval_tools
+from .run_supervision import supervise_background_run
 from .schemas import HarnessError, RunRequest, RunResult
 from .skills import SkillRegistry
 from .tools import DataBridge, ToolRegistry
@@ -515,6 +516,16 @@ class AgenticService:
         # Effectful-tool approvals (5G): persisted in the runtime's own DB and
         # consulted by every run's effect authorizer.
         self.approvals = ApprovalStore(self.store) if MCP_AVAILABLE else None
+        # Optional segregation-of-duties policies (off by default). Attached to the
+        # approval store so the finance authorizers can read it without a new
+        # parameter on every composition seam.
+        try:
+            from .sod import SoDService  # noqa: PLC0415
+            self.sod = SoDService(self.store)
+            if self.approvals is not None:
+                self.approvals.sod = self.sod
+        except Exception:  # noqa: BLE001 - never block boot
+            self.sod = None
         # MCP integration agent tools (catalog + install). The install operation
         # itself lives in `mcp/install_ops.py`, shared with the operator route.
         from .mcp.install_tools import register_mcp_install_tools  # noqa: PLC0415
@@ -2059,11 +2070,10 @@ class AgenticService:
                         )
                     await self._schedule_review(request.runId, result.status)
             finally:
-                # Signal live SSE consumers that the run is over, whatever the
-                # terminal status, so their streams close promptly.
+                # Signal live SSE consumers that the run is over, whatever the status.
                 self.bus.end_stream(request.runId)
 
-        task = asyncio.create_task(_task())
+        task = asyncio.create_task(supervise_background_run(_task(), self, request.runId))
         self._active[request.runId] = task
         task.add_done_callback(lambda _t: self._active.pop(request.runId, None))
 

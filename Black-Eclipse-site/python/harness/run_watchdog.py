@@ -368,6 +368,14 @@ def sweep_stalled_runs(service: Any, now_epoch: Optional[float] = None) -> list[
             }
         except Exception:  # noqa: BLE001 - no lease table means no live owner
             live = set()
+        # A run that is emitting token deltas is alive even though deltas are
+        # transient and never appear in `HarnessEvent`. Without this, a healthy
+        # long generation was eligible for RUN_STALLED as soon as the last
+        # durable event aged past the budget.
+        from .run_activity import active_run_ids, prune as prune_activity  # noqa: PLC0415
+
+        live |= active_run_ids()
+        prune_activity(older_than_s=3600.0)
         # Repair first: a run that already emitted a terminal event finished, so
         # the row is merely stale. Doing this before the stall check keeps a
         # finished run from ever being relabelled RUN_STALLED.

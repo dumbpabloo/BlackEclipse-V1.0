@@ -18,6 +18,7 @@
 // while the core API is the one Tauri guarantees for remote origins.
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useRunningConversationIds } from '@/lib/agent/use-agent-run';
 import {
   ChartLine,
   Code,
@@ -196,6 +197,10 @@ export function DesktopTabBar({
   // Applies the persisted glass-window preference at shell boot (and tells Rust
   // to apply the acrylic). Mounted for the life of the app, unlike Settings.
   useWindowGlass();
+  // Per-tab run indicator: the tab strip is the only place that can show which
+  // conversation is still working while another tab has focus (the Agent
+  // Workspace is a single projection by design).
+  const runningConversationIds = useRunningConversationIds();
   const bootTab = useRef(activeTab);
   const bootId = useRef('boot');
   const [desktop, setDesktop] = useState(false);
@@ -676,6 +681,14 @@ export function DesktopTabBar({
               )}
             >
               <Icon size={12} className="shrink-0 opacity-80" />
+              {tab.page === 'chat' && tab.conversationId &&
+                runningConversationIds.includes(tab.conversationId) && (
+                  <span
+                    title="Run in progress"
+                    aria-label="Run in progress"
+                    className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-primary"
+                  />
+                )}
               <span className="truncate">{label}</span>
               <button
                 type="button"

@@ -7,7 +7,7 @@
 // run id (`/team/runs/by-root/<id>`); the memo is the execution's own output.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Loader2, Pencil, Play, Users } from '@/lib/icons';
+import { Loader2, Pencil, Play, Users, X } from '@/lib/icons';
 import { Button } from '@/components/ui/button';
 import {
   getAutomationExecution,
@@ -16,7 +16,7 @@ import {
   type AutomationView,
   type ExecutionView,
 } from '@/lib/harness/clients/automation-browser';
-import { getTeamRunByRoot, type TeamStatusView } from '@/lib/harness/clients/team-client';
+import { cancelTeam, getTeamRunByRoot, type TeamStatusView } from '@/lib/harness/clients/team-client';
 import { deskTeamOf } from '@/lib/bots/desk';
 import { TradeApprovalBanner } from '@/components/chat/trade-approval-banner';
 
@@ -144,6 +144,22 @@ export function DeskRoom({
     }
   }, [bot.id, busy, onChanged]);
 
+  const cancel = useCallback(async () => {
+    const teamRunId = status?.team.id;
+    if (!teamRunId || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await cancelTeam(teamRunId);
+      await load();
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not cancel the desk run.');
+    } finally {
+      setBusy(false);
+    }
+  }, [status?.team.id, busy, load, onChanged]);
+
   const running = latest ? !TERMINAL.has(latest.state) : false;
   const stageStatus = useMemo(() => {
     const map: Record<string, string> = {};
@@ -180,6 +196,11 @@ export function DeskRoom({
             {busy || running ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
             {running ? 'Running…' : 'Run now'}
           </Button>
+          {running && status?.team.id && (
+            <Button size="sm" variant="ghost" onClick={() => void cancel()} disabled={busy}>
+              <X size={13} /> Cancel
+            </Button>
+          )}
         </div>
       </div>
 

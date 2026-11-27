@@ -1,7 +1,7 @@
 ---
 title: Bot Team Orchestration
 status: Current
-last-verified: 2026-11-18
+last-verified: 2026-11-26
 ---
 
 # Bot Team Orchestration
@@ -232,11 +232,14 @@ team; the preset routes are `GET /team/presets`,
 
 ## Known limitations (with exact cause + remediation)
 
-- **Cost and runtime are set but not metered.** The run result carries no
-  per-run cost or wall-clock in a form the executor can attribute, so `maxCost`
-  and `maxRuntimeMs` remain advertised caps rather than enforced ones.
-  Remediation: surface a per-run cost/runtime on `RunResult`/`TaskRunOutcome`, then
-  feed them to `record_usage` alongside tokens.
+- **Cost and runtime are metered at the task boundary, not pre-empted.** A run
+  result's optional `totalCost`/`runtimeMs` (or `cost`/`durationMs`) is now
+  recorded on the root `BudgetTracker` by `tasks/bootstrap.py`, alongside tokens
+  and tool calls, so a team over `maxCost`/`maxRuntimeMs` refuses NEW work at the
+  next task boundary. A provider call already in flight still completes and is
+  billed (providers bill per call); the team reports the exhausted budget rather
+  than pretending the cap was never crossed. If a result omits cost/runtime,
+  those counters remain zero for that run (honest absence, never invented).
 - **A team can now be saved and authored as a "desk".** A `run_team` automation
   carries its `TeamDefinition` in `action.config.team`; the Bots builder maps a
   draft to that definition and `dispatcher._run_team` runs it (the Institution

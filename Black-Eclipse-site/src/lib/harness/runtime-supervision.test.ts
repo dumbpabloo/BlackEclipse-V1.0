@@ -3,9 +3,13 @@ import {
   BUSY_GRACE_MS,
   DEFAULT_REQUEST_WAIT_MS,
   DEFAULT_START_TIMEOUT_MS,
+  hasRunsToProtect,
   isRecentlyHealthy,
   resolveRequestWaitMs,
   resolveStartTimeoutMs,
+  shouldClearSilentRuntime,
+  SILENT_KILL_WINDOW_MS,
+  SILENT_MISSES_BEFORE_KILL,
   shouldReplaceStaleRuntime,
 } from "./runtime-supervision";
 
@@ -58,6 +62,56 @@ describe("isRecentlyHealthy", () => {
 
   it("does not treat an unknown last-success as recent", () => {
     expect(isRecentlyHealthy(undefined, 1_000_000)).toBe(false);
+  });
+});
+
+describe("shouldClearSilentRuntime", () => {
+  const now = 10_000_000;
+
+  it("NEVER clears the port on one or two transient probe misses", () => {
+    // One synchronous tool or a long model call can stop the event loop for
+    // longer than a readiness timeout. Killing then orphans every live chat.
+    expect(shouldClearSilentRuntime({ misses: 1, firstMissAt: now - 60_000, now })).toBe(false);
+    expect(shouldClearSilentRuntime({ misses: 2, firstMissAt: now - 60_000, now })).toBe(false);
+  });
+
+  it("requires the miss streak to outlast the long silence window", () => {
+    expect(shouldClearSilentRuntime({
+      misses: SILENT_MISSES_BEFORE_KILL,
+      firstMissAt: now - (SILENT_KILL_WINDOW_MS - 1),
+      now,
+    })).toBe(false);
+    expect(shouldClearSilentRuntime({
+      misses: SILENT_MISSES_BEFORE_KILL,
+      firstMissAt: now - SILENT_KILL_WINDOW_MS,
+      now,
+    })).toBe(true);
+  });
+
+  it("never clears a runtime that answered inside the grace window", () => {
+    expect(shouldClearSilentRuntime({
+      misses: 10,
+      firstMissAt: now - 10 * SILENT_KILL_WINDOW_MS,
+      lastHealthyAt: now - 1_000,
+      now,
+    })).toBe(false);
+  });
+
+  it("is conservative without a recorded first miss", () => {
+    expect(shouldClearSilentRuntime({ misses: 10, now })).toBe(false);
+  });
+});
+
+describe("hasRunsToProtect", () => {
+  it("protects active and parked (approval/clarification) runs", () => {
+    expect(hasRunsToProtect({ activeRuns: 1 })).toBe(true);
+    expect(hasRunsToProtect({ parkedRuns: 1 })).toBe(true);
+    expect(hasRunsToProtect({ activeRuns: 0, parkedRuns: 0 })).toBe(false);
+    expect(hasRunsToProtect(null)).toBe(false);
+  });
+
+  it("a parked approval protects a stale runtime from replacement", () => {
+    expect(shouldReplaceStaleRuntime(ours({ startedAtMs: 1000, activeRuns: 0, parkedRuns: 1 }), 2000)).toBe(false);
   });
 });
 

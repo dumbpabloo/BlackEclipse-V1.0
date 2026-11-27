@@ -19,6 +19,7 @@ import json
 import sqlite3
 from typing import Any, Iterable, Optional, Sequence
 
+from ..audit_chain import GENESIS, event_hash, verify_chain
 from ..persistence import now_iso
 from .models import (
     CostBasisMethod,
@@ -257,6 +258,8 @@ CREATE TABLE IF NOT EXISTS PortfolioAuditEvent (
   before       TEXT,
   after        TEXT,
   createdAt    TEXT NOT NULL,
+  prevHash     TEXT,
+  hash         TEXT,
   FOREIGN KEY (portfolioId) REFERENCES Portfolio(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_portfolio_audit ON PortfolioAuditEvent(portfolioId, createdAt);
@@ -295,6 +298,24 @@ def _loads(value: Any) -> Any:
 
 def _dumps(value: Any) -> str:
     return json.dumps(value, default=str)
+
+
+def _portfolio_audit_payload(row: Any) -> dict[str, Any]:
+    """The immutable fields sealed by one portfolio audit event's hash.
+
+    `before`/`after` are the STORED text (or NULL), not a re-serialization, so
+    verification does not depend on a future writer's JSON formatting.
+    """
+    return {
+        "id": row["id"],
+        "portfolioId": row["portfolioId"],
+        "kind": row["kind"],
+        "actor": row["actor"],
+        "reason": row["reason"],
+        "before": row["before"],
+        "after": row["after"],
+        "createdAt": row["createdAt"],
+    }
 
 
 def _construction_row(row: Any) -> dict[str, Any]:
@@ -338,12 +359,40 @@ class PortfolioStore:
         wanted = {
             "PortfolioTransaction": {"basisAdjustment": "TEXT", "lotSelection": "TEXT"},
             "Portfolio": {"kind": "TEXT NOT NULL DEFAULT 'fund'", "metadata": "TEXT NOT NULL DEFAULT '{}'"},
+            "PortfolioAuditEvent": {"prevHash": "TEXT", "hash": "TEXT"},
         }
         for table, columns in wanted.items():
             existing = {r["name"] for r in self._db.execute(f"PRAGMA table_info({table})").fetchall()}
             for column, decl in columns.items():
                 if column not in existing:
                     self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        self._seal_audit_chain()
+
+    def _seal_audit_chain(self) -> None:
+        """Seal audit rows written before the chain existed (metadata only)."""
+        pending = self._db.execute(
+            "SELECT COUNT(*) AS n FROM PortfolioAuditEvent WHERE hash IS NULL"
+        ).fetchone()
+        if not pending or not int(pending["n"] or 0):
+            return
+        portfolio_ids = [row["portfolioId"] for row in self._db.execute(
+            "SELECT DISTINCT portfolioId FROM PortfolioAuditEvent WHERE hash IS NULL"
+        ).fetchall()]
+        for portfolio_id in portfolio_ids:
+            previous = GENESIS
+            rows = self._db.execute(
+                "SELECT * FROM PortfolioAuditEvent WHERE portfolioId=? ORDER BY rowid ASC",
+                (portfolio_id,),
+            ).fetchall()
+            for row in rows:
+                payload = _portfolio_audit_payload(row)
+                sealed = event_hash(previous, payload)
+                self._db.execute(
+                    "UPDATE PortfolioAuditEvent SET prevHash=?, hash=? WHERE id=?",
+                    (previous, sealed, row["id"]),
+                )
+                previous = sealed
+        self._db.commit()
 
     # ── Portfolios ───────────────────────────────────────────────────────────
     def create_portfolio(
@@ -441,6 +490,14 @@ class PortfolioStore:
             "SELECT * FROM PortfolioAccount WHERE portfolioId = ? ORDER BY createdAt", (portfolio_id,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def delete_account(self, portfolio_id: str, account_id: str) -> bool:
+        cur = self._db.execute(
+            "DELETE FROM PortfolioAccount WHERE id=? AND portfolioId=?",
+            (account_id, portfolio_id),
+        )
+        self._db.commit()
+        return cur.rowcount > 0
 
     # ── Transactions ─────────────────────────────────────────────────────────
     def append_transaction(self, tx: Transaction) -> tuple[Transaction, bool]:
@@ -859,21 +916,35 @@ class PortfolioStore:
         self, event_id: str, portfolio_id: str, kind: str, *, actor: Optional[str] = None,
         reason: Optional[str] = None, before: Any = None, after: Any = None,
     ) -> None:
+        created_at = now_iso()
+        before_text = None if before is None else _dumps(before)
+        after_text = None if after is None else _dumps(after)
+        last = self._db.execute(
+            "SELECT hash FROM PortfolioAuditEvent WHERE portfolioId=? AND hash IS NOT NULL "
+            "ORDER BY rowid DESC LIMIT 1",
+            (portfolio_id,),
+        ).fetchone()
+        previous = last["hash"] if last and last["hash"] else GENESIS
+        payload = {
+            "id": event_id, "portfolioId": portfolio_id, "kind": kind,
+            "actor": actor, "reason": reason,
+            "before": before_text, "after": after_text, "createdAt": created_at,
+        }
+        sealed = event_hash(previous, payload)
         self._db.execute(
-            """INSERT INTO PortfolioAuditEvent (id, portfolioId, kind, actor, reason, before, after, createdAt)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO PortfolioAuditEvent
+               (id, portfolioId, kind, actor, reason, before, after, createdAt, prevHash, hash)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 event_id, portfolio_id, kind, actor, reason,
-                None if before is None else _dumps(before),
-                None if after is None else _dumps(after),
-                now_iso(),
+                before_text, after_text, created_at, previous, sealed,
             ),
         )
         self._db.commit()
 
     def list_audit(self, portfolio_id: str, limit: int = 200) -> list[dict[str, Any]]:
         rows = self._db.execute(
-            "SELECT * FROM PortfolioAuditEvent WHERE portfolioId=? ORDER BY createdAt DESC LIMIT ?",
+            "SELECT * FROM PortfolioAuditEvent WHERE portfolioId=? ORDER BY rowid DESC LIMIT ?",
             (portfolio_id, max(1, int(limit))),
         ).fetchall()
         out = []
@@ -883,6 +954,16 @@ class PortfolioStore:
             data["after"] = _loads(data.get("after"))
             out.append(data)
         return out
+
+    def verify_audit(self, portfolio_id: str) -> dict[str, Any]:
+        """Recompute the portfolio audit chain in append order."""
+        rows = self._db.execute(
+            "SELECT * FROM PortfolioAuditEvent WHERE portfolioId=? ORDER BY rowid ASC",
+            (portfolio_id,),
+        ).fetchall()
+        result = verify_chain(rows, payload_of=_portfolio_audit_payload)
+        result["portfolioId"] = portfolio_id
+        return result
 
     # ── Construction / optimization runs ─────────────────────────────────────
     def save_construction_run(

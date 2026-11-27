@@ -70,6 +70,7 @@ def _now_ms() -> int:
 
 
 _RUNTIME_ID: Optional[str] = None
+_PROCESS_STARTED_AT = now_iso()
 
 
 def default_runtime_id() -> str:
@@ -132,7 +133,7 @@ class RunLeaseManager:
             "(runtimeId, environment, port, dbPath, pid, startedAt, heartbeatAt, expiresAtMs) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (self.runtime_id, self.environment, port, db_path, os.getpid(),
-             now_iso(), now_iso(), _now_ms() + self.ttl_ms),
+             _PROCESS_STARTED_AT, now_iso(), _now_ms() + self.ttl_ms),
         )
         self._db.commit()
         try:
@@ -198,8 +199,16 @@ class RunLeaseManager:
             self._db.execute("ROLLBACK")
             raise
 
-    def heartbeat(self, run_id: str, epoch: int) -> bool:
-        """Extend the lease iff this process still owns this epoch."""
+    def heartbeat_result(self, run_id: str, epoch: int) -> str:
+        """Extend the lease; classify the outcome for the heartbeat thread.
+
+        Returns ``"ok"`` when the lease was extended, ``"fenced"`` when another
+        runtime owns this run/epoch (the worker must stop), and ``"error"`` for
+        a transient failure (a locked/busy database). A transient error must
+        NOT kill the heartbeat thread: the old code returned `False` for any
+        exception, so one >5 s write lock silently stopped the heartbeat, the
+        lease expired, and the run was fenced mid-chat (observed 2026-11-26).
+        """
         try:
             cur = self._db.execute(
                 "UPDATE RunLease SET heartbeatAt=?, expiresAtMs=? "
@@ -207,10 +216,18 @@ class RunLeaseManager:
                 (now_iso(), _now_ms() + self.ttl_ms, run_id, self.runtime_id, int(epoch)),
             )
             self._db.commit()
-            return cur.rowcount == 1
-        except Exception:  # noqa: BLE001 - a missed beat is recovered by expiry
-            log.warning("lease heartbeat failed for %s", run_id, exc_info=True)
-            return False
+            return "ok" if cur.rowcount == 1 else "fenced"
+        except Exception:  # noqa: BLE001 - retried on the next beat
+            log.warning("lease heartbeat failed for %s; will retry", run_id, exc_info=True)
+            try:
+                self._db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            return "error"
+
+    def heartbeat(self, run_id: str, epoch: int) -> bool:
+        """True while this process still owns the epoch (transient errors retry)."""
+        return self.heartbeat_result(run_id, epoch) != "fenced"
 
     def release(self, run_id: str, epoch: int) -> None:
         """Give the lease up immediately (terminal run)."""
@@ -357,9 +374,34 @@ class LeaseHeartbeat:
 
     def _loop(self) -> None:
         while not self._stop.wait(self._interval):
-            if not self._manager.heartbeat(self._run_id, self._epoch):
+            outcome = self._manager.heartbeat_result(self._run_id, self._epoch)
+            if outcome == "fenced":
                 log.warning("lease lost for run %s (epoch %s)", self._run_id, self._epoch)
                 return
+            # outcome == "error": a transient lock/DB failure. Keep beating; the
+            # next beat extends the lease. Returning here used to orphan the run.
+
+
+_MANAGER_CACHE: dict[int, RunLeaseManager] = {}
+
+
+def _manager_for(store: Any, **kwargs: Any) -> RunLeaseManager:
+    """ONE manager per store per process (schema + runtime identity once).
+
+    `RunLeaseGuard` is constructed for every run. Building a manager per run ran
+    `executescript(SCHEMA)`, the `PRAGMA table_info` + `ALTER` checks and an
+    `INSERT OR REPLACE` on RuntimeInstance on every chat start — extra write
+    locks on the same multi-GB database the run is using.
+    """
+    key = id(store)
+    manager = _MANAGER_CACHE.get(key)
+    if kwargs:
+        # An explicit identity/ttl (tests, embedded callers) is honoured exactly.
+        return RunLeaseManager(store, **kwargs)
+    if manager is None or manager._store is not store:  # noqa: SLF001 - identity cache
+        manager = RunLeaseManager(store)
+        _MANAGER_CACHE[key] = manager
+    return manager
 
 
 class RunLeaseGuard:
@@ -373,7 +415,10 @@ class RunLeaseGuard:
         # A non-SQLite/embedding store has no lease table. Leasing is a safety
         # layer, not a prerequisite for execution: degrade to "owned" rather
         # than breaking the run (tests and embedded callers use stubs).
-        self.manager = RunLeaseManager(store, **kwargs) if hasattr(store, "_db") else None
+        # ONE manager per store/process: constructing one per run re-ran the
+        # schema DDL + ALTER checks and rewrote RuntimeInstance on EVERY chat,
+        # adding write-lock contention to a multi-GB database.
+        self.manager = _manager_for(store, **kwargs) if hasattr(store, "_db") else None
         self.run_id = run_id
         self.epoch: Optional[int] = None
         self._heartbeat: Optional[LeaseHeartbeat] = None

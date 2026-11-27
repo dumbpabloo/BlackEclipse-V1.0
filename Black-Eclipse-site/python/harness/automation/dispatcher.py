@@ -31,6 +31,31 @@ BLOCKED = "blocked"
 
 APPROVAL_KIND = "automation_action"
 
+#: A scheduled run may honestly have nothing to report. The marker is the whole
+#: answer (never part of a longer report); the chat surface and the completion
+#: watcher suppress it, while the execution row keeps it for audit.
+QUIET_MARKERS = ("[[no-update]]", "[SILENT]")
+
+_AUTONOMOUS_RUN_RULES = (
+    "Autonomous-run contract: if nothing material changed since your last run "
+    "and there is nothing the operator needs to see, reply with exactly "
+    "[[no-update]] and nothing else. Do not use that marker when you did work, "
+    "found something, failed, or need a decision. If you did work, report the "
+    "outcome and any blocker plainly."
+)
+
+#: Bounded continuity between scheduled runs. The conversation itself is the
+#: primary memory; this digest only bridges a reset/compaction and keeps a bot
+#: from repeating the same investigation with no awareness of yesterday's answer.
+_HANDOFF_RUNS = 3
+_HANDOFF_CHARS_PER_RUN = 1_200
+_HANDOFF_TOTAL_CHARS = 3_000
+
+
+def is_quiet_answer(output: Optional[str]) -> bool:
+    """True when a run's whole answer is the no-update marker."""
+    return (output or "").strip() in QUIET_MARKERS
+
 
 @dataclass
 class DispatchResult:
@@ -84,6 +109,10 @@ def plan_actions(definition: AutomationDefinition) -> list[str]:
         steps.append(f"delegate to {action.agent_id or 'eclipse-agent'}: {(action.objective or definition.name)[:120]}")
     elif action.type == "execute_workflow":
         steps.append(f"run workflow {action.workflow_id}")
+    elif action.type == "run_external_agent":
+        external = action.config.get("externalAgent") if isinstance(action.config, dict) else None
+        command = external.get("command") if isinstance(external, dict) else None
+        steps.append(f"run external ACP agent {command or '?'}: {(action.objective or definition.name)[:120]}")
     elif action.type == "run_strategy":
         config = action.config or {}
         steps.append(
@@ -145,9 +174,77 @@ class Dispatcher:
             )
         return base
 
+    @staticmethod
+    def _default_bot_workspace(bot_id: str) -> Optional[str]:
+        """`<server root>/.black-eclipse/bots/<id>`, created lazily.
+
+        A bot without an explicit workspace used to share the runtime root, so
+        two bots could overwrite each other's files. The folder is omitted when
+        no server root resolves (the run then gets no workspace at all, an
+        honest refusal rather than an unconfined guess).
+        """
+        try:
+            from ..code.workspace import default_root  # noqa: PLC0415
+
+            base = default_root()
+        except Exception:  # noqa: BLE001 - workspace resolution is best effort
+            return None
+        if base is None:
+            return None
+        safe_id = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in bot_id)[:120]
+        root = base / ".black-eclipse" / "bots" / safe_id
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return None
+        return str(root)
+
+    def _prior_run_digest(self, definition: AutomationDefinition) -> str:
+        """A bounded continuity note from this bot's last finished runs.
+
+        The conversation is the primary memory, but a compaction/provider reset
+        can drop it. This digest is deliberately small, labelled as unverified
+        prior output, and never replaces the current objective.
+        """
+        try:
+            runs = self._service.history(definition.id, limit=_HANDOFF_RUNS + 2)
+        except Exception:  # noqa: BLE001 - continuity is best effort, never a blocker
+            return ""
+        parts: list[str] = []
+        total = 0
+        for run in runs or []:
+            if str(run.get("state") or "") != COMPLETED:
+                continue
+            output = str(run.get("output") or "").strip()
+            if not output or is_quiet_answer(output):
+                continue
+            text = output[:_HANDOFF_CHARS_PER_RUN]
+            if len(output) > _HANDOFF_CHARS_PER_RUN:
+                text += "\n[truncated]"
+            block = f"- {run.get('finishedAt') or run.get('startedAt') or 'earlier'}: {text}"
+            if total + len(block) > _HANDOFF_TOTAL_CHARS:
+                break
+            parts.append(block)
+            total += len(block)
+            if len(parts) >= _HANDOFF_RUNS:
+                break
+        if not parts:
+            return ""
+        return (
+            "Previous scheduled-run reports for continuity (unverified prior output; "
+            "re-check anything you rely on):\n" + "\n".join(parts)
+        )
+
     def _run_request(self, definition: AutomationDefinition, run_id: str, objective: str) -> RunRequest:
         action = definition.action
         query = (objective or definition.name)[:4000]
+        # A scheduled run is a continuation, not a cold start. Give the model the
+        # last honest reports and an explicit way to say "nothing to report".
+        if definition.trigger.type != "manual":
+            digest = self._prior_run_digest(definition)
+            if digest:
+                query = f"{digest}\n\n{query}"
+            query = f"{query}\n\n{_AUTONOMOUS_RUN_RULES}"
         # Visual teaching: reference images reach a scheduled agent run as
         # guidance, exactly as they do in the bot's chat.
         config = action.config if isinstance(action.config, dict) else {}
@@ -170,6 +267,13 @@ class Dispatcher:
                     "caption": str(visual.get("caption") or "")[:280],
                     "mime": str(visual.get("mime") or "image/png")[:40],
                 })
+        # Every scheduled bot gets its OWN workspace instead of sharing the
+        # runtime root: generated files from one bot cannot overwrite another's,
+        # and the path is still inside the server-resolved workspace (the code
+        # policy refuses anything else). An explicit action workspace wins.
+        workspace_root = action.workspace_root
+        if not workspace_root and "bot" in (getattr(definition, "tags", None) or []):
+            workspace_root = self._default_bot_workspace(definition.id)
         return RunRequest(
             runId=run_id,
             input=RunInput(query=query[:8000], images=images or None),
@@ -185,7 +289,7 @@ class Dispatcher:
             # COMPUTE a derived figure (`analysis_run`) instead of only narrating.
             # Still gated by `analysis.execute`; this grants no new capability.
             analysisEnabled=True,
-            workspace=RunWorkspace(root=action.workspace_root) if action.workspace_root else None,
+            workspace=RunWorkspace(root=workspace_root) if workspace_root else None,
             parentRunId=action.config.get("parentRunId"),
             callbackBaseUrl=_callback_url(),
             callbackToken=os.environ.get("CRON_SECRET"),
@@ -233,6 +337,8 @@ class Dispatcher:
                 return self._create_task(definition, execution_id)
             if action.type == "run_team":
                 return await self._run_team(definition)
+            if action.type == "run_external_agent":
+                return await self._run_external_agent(definition, run_id)
             if action.type in ("execute_task", "run_agent", "generate_report", "delegate_agent"):
                 if action.config.get("tasks"):
                     return await self._run_parallel(definition, run_id)
@@ -305,6 +411,110 @@ class Dispatcher:
             error_class=(error or {}).get("code") if isinstance(error, dict) else None,
         )
 
+    async def _run_external_agent(self, definition: AutomationDefinition, run_id: str) -> DispatchResult:
+        """Run the objective through an external ACP agent (stdio JSON-RPC).
+
+        The agent is a real subprocess; no shell is involved. Permissions are
+        DENIED unless the bot explicitly opts into `permissionPolicy: "allow"`,
+        and even then only an `allow_once` option is selected. The ACP client
+        refuses filesystem/terminal client methods because Eclipse advertises no
+        such capability.
+        """
+        from ..acp_client import AcpError, run_acp_prompt  # noqa: PLC0415
+
+        action = definition.action
+        config = action.config if isinstance(action.config, dict) else {}
+        external = config.get("externalAgent")
+        if not isinstance(external, dict):
+            return DispatchResult(
+                state=FAILED,
+                error="run_external_agent needs action.config.externalAgent {command, args}",
+                error_class="INVALID_CONFIGURATION",
+            )
+        command = str(external.get("command") or "").strip()
+        if not command:
+            return DispatchResult(
+                state=FAILED, error="the external agent command is empty",
+                error_class="INVALID_CONFIGURATION",
+            )
+        raw_args = external.get("args")
+        args = [str(arg) for arg in raw_args] if isinstance(raw_args, list) else []
+        protocol = str(external.get("protocol") or "acp").lower()
+        if protocol != "acp":
+            return DispatchResult(
+                state=FAILED,
+                error=f"unsupported external agent protocol {protocol!r}; only 'acp' is implemented",
+                error_class="INVALID_CONFIGURATION",
+            )
+        timeout_s = external.get("timeoutS")
+        if not isinstance(timeout_s, (int, float)) or timeout_s <= 0:
+            timeout_s = (
+                definition.execution.timeout_s
+                or min(definition.execution.max_runtime_s, 1800)
+            )
+        cwd = (
+            str(external.get("cwd") or action.workspace_root or "").strip()
+            or self._default_bot_workspace(definition.id)
+            or None
+        )
+        raw_mcp = external.get("mcpServers")
+        mcp_servers: list[dict[str, Any]] = []
+        if isinstance(raw_mcp, list):
+            for item in raw_mcp[:16]:
+                if not isinstance(item, dict) or not item.get("name"):
+                    continue
+                clean: dict[str, Any] = {"name": str(item["name"])[:120]}
+                if item.get("url"):
+                    clean["url"] = str(item["url"])[:2000]
+                if item.get("command"):
+                    clean["command"] = str(item["command"])[:500]
+                    clean["args"] = [str(arg)[:500] for arg in (item.get("args") or [])][:32]
+                if isinstance(item.get("headers"), dict):
+                    clean["headers"] = {
+                        str(k)[:100]: str(v)[:2000] for k, v in list(item["headers"].items())[:16]
+                    }
+                mcp_servers.append(clean)
+        try:
+            result = await asyncio.to_thread(
+                run_acp_prompt,
+                command,
+                (action.objective or definition.name)[:20_000],
+                args=args,
+                cwd=cwd,
+                permission_policy=str(external.get("permissionPolicy") or "deny"),
+                timeout_s=float(timeout_s),
+                mcp_servers=mcp_servers,
+                session_id=str(external.get("sessionId") or "") or None,
+                fs_read=bool(external.get("fsRead")),
+                fs_write=bool(external.get("fsWrite")),
+                terminal=bool(external.get("terminal")),
+                workspace_root=cwd,
+            )
+        except AcpError as exc:
+            return DispatchResult(
+                state=FAILED,
+                run_id=run_id,
+                error=exc.message[:2000],
+                error_class=exc.code,
+            )
+        except Exception as exc:  # noqa: BLE001 - an external failure is recorded, not raised
+            return DispatchResult(
+                state=FAILED,
+                run_id=run_id,
+                error=f"{type(exc).__name__}: {exc}"[:2000],
+                error_class="EXTERNAL_AGENT_ERROR",
+            )
+        return DispatchResult(
+            state=COMPLETED,
+            run_id=run_id,
+            output=result.text or "(the external agent returned no text)",
+            detail={
+                "externalAgent": True,
+                "stopReason": result.stop_reason,
+                "stderr": result.stderr,
+            },
+        )
+
     async def _run_agent(self, definition: AutomationDefinition, run_id: str, execution_id: str) -> DispatchResult:
         action = definition.action
         task = self._task_start(definition, execution_id, run_id)
@@ -321,15 +531,24 @@ class Dispatcher:
         # engine has to be able to report THAT order (and its window) instead of
         # a generic success, so collect the rows this run asked for.
         pending = self._pending_trade_approvals(agent_run_id)
+        output = dumped.get("output")
+        # A pending order is a decision the operator must see, so it is never
+        # quiet even if the model also wrote the marker.
+        quiet = is_quiet_answer(output) and not pending
+        detail: dict[str, Any] = {}
+        if pending:
+            detail["pendingApprovals"] = pending
+        if quiet:
+            detail["quiet"] = True
         return DispatchResult(
             state=state,
             run_id=agent_run_id,
             task_id=getattr(task, "id", None),
-            output=dumped.get("output"),
+            output=output,
             error=error.get("message") if isinstance(error, dict) else None,
             error_class=error.get("code") if isinstance(error, dict) else None,
             tokens=int(dumped.get("totalTokens") or 0) or None,
-            detail={"pendingApprovals": pending} if pending else {},
+            detail=detail,
         )
 
     def _team_task_runs(self, run_id: str) -> set[str]:

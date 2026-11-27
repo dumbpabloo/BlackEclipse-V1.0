@@ -187,4 +187,41 @@ describe("eclipseAgent chat — a refused request", () => {
       images,
     });
   });
+
+  it("recovers a run whose stream goes quiet instead of hanging", async () => {
+    // A runtime restart (or a dead socket) stops the frames without closing the
+    // response. Before the idle watchdog the bubble sat on "working" until the
+    // stall watchdog failed the run minutes later.
+    (globalThis as { __BE_STREAM_IDLE_MS__?: number }).__BE_STREAM_IDLE_MS__ = 25;
+    const encoder = new TextEncoder();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/harness/runs/run_stall")) {
+        return new Response(JSON.stringify({ run: { status: "completed", output: "recovered" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      // Send the run id, then never send another frame and never close.
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode('event: client.run\ndata: {"runId":"run_stall","documentsUsed":[]}\n\n'),
+          );
+        },
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const reply = await getAgentProvider().chat([{ role: "user", content: "hello" }], undefined, {
+        onEvent: () => {},
+      });
+      expect(reply).toBe("recovered");
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes("run_stall"))).toBe(true);
+    } finally {
+      delete (globalThis as { __BE_STREAM_IDLE_MS__?: number }).__BE_STREAM_IDLE_MS__;
+    }
+  });
 });

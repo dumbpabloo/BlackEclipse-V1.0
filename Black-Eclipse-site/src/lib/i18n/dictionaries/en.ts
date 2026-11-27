@@ -6,9 +6,6 @@
 // Scope: interface chrome only (navigation, buttons, settings labels, empty
 // states). Never financial data, news, or AI output — those come from the API
 // and are not translated here.
-//
-// Domain slices live beside this file and are spread in (`./analysis`) so this
-// canonical file can SHRINK as domains move out (the size ratchet's intent).
 import { analysis } from './analysis';
 import { notebook } from './notebook';
 import { acquire } from './acquire';
@@ -17,6 +14,7 @@ import { capabilityStudio } from './capability-studio';
 import { capabilityCard } from './capability-card';
 import { evolution } from './evolution';
 import { builds } from './builds';
+import { bots } from './bots';
 
 export const en = {
   // Bots (autonomous, scheduled agents)
@@ -1391,4 +1389,5 @@ export const en = {
   ...capabilityCard,
   ...evolution,
   ...builds,
+  ...bots,
 } as const;

@@ -128,6 +128,24 @@ def test_sweep_fails_a_stalled_run_once_and_leaves_terminal_runs_alone(store):
     assert sweep_stalled_runs(service) == []
 
 
+def test_sweep_skips_a_run_that_is_still_emitting_transient_deltas(store):
+    """Deltas are not persisted, but they prove the run is alive."""
+    from harness import run_activity
+
+    store.create_run("run_live", "eclipse-agent", {"query": "x"})
+    store.update_run("run_live", status="running")
+    store.append_event("run_live", "model.requested", 1, {"step": 1})
+    _age_run(store, "run_live", 600)
+    run_activity.touch("run_live")
+
+    service = _StubService(store)
+    try:
+        assert sweep_stalled_runs(service) == []
+        assert store.get_run("run_live")["status"] == "running"
+    finally:
+        run_activity.forget("run_live")
+
+
 def test_sweep_preserves_the_last_assistant_text_as_a_partial_answer(store):
     from langchain_core.messages import AIMessage
 

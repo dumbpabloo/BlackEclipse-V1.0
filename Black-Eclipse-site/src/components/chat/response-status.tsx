@@ -14,6 +14,8 @@ export interface ResponseStatusLineProps {
   status: ResponseStatus;
   /** Latest activity, used to name what the agent is doing right now. */
   activities?: ActivityItem[];
+  /** Explicit wait/reconnect explanation, when the runtime reported one. */
+  note?: string;
   /** Tighter type for the floating dock. */
   compact?: boolean;
 }
@@ -50,9 +52,11 @@ function isWorking(status: ResponseStatus): boolean {
   return status === 'queued' || status === 'planning' || status === 'tool_running' || status === 'streaming';
 }
 
-export function ResponseStatusLine({ status, activities = [], compact = false }: ResponseStatusLineProps) {
-  const label = statusLabel(status, activities);
+export function ResponseStatusLine({ status, activities = [], note, compact = false }: ResponseStatusLineProps) {
   const working = isWorking(status);
+  // A live wait/reconnect note outranks the generic lifecycle label, so the
+  // operator can tell "waiting for provider capacity" from "preparing response".
+  const label = working && note ? note : statusLabel(status, activities);
 
   const Icon =
     status === 'completed' ? Check

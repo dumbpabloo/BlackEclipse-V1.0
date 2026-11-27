@@ -270,24 +270,27 @@ class ModelGateway:
                 return False
 
         trace: list[Attempt] = []
-        result = await self.runtime.invoke(
-            invoke_fn=_invoke,
-            primary_model=req.model,
-            resolution=req.resolution,
-            fallback_build=req.fallback_build,
-            credential_pool=pool,
-            max_attempts=req.max_attempts,
-            task=req.task,
-            run_id=req.run_id,
-            retryable=_retryable,
-            trace=trace,
-            on_attempt=_on_attempt,
-            max_run_tokens=req.max_run_tokens,
-            return_result=True,
-            raise_original=True,
-            max_wait_s=min(120.0, float(req.timeout_s or 60.0)),
-            request_tokens=_estimate_request_tokens(req.messages),
-        )
+        from .run_events import bind_run_emitter  # noqa: PLC0415 - keep the module light
+
+        with bind_run_emitter(req.emitter):
+            result = await self.runtime.invoke(
+                invoke_fn=_invoke,
+                primary_model=req.model,
+                resolution=req.resolution,
+                fallback_build=req.fallback_build,
+                credential_pool=pool,
+                max_attempts=req.max_attempts,
+                task=req.task,
+                run_id=req.run_id,
+                retryable=_retryable,
+                trace=trace,
+                on_attempt=_on_attempt,
+                max_run_tokens=req.max_run_tokens,
+                return_result=True,
+                raise_original=True,
+                max_wait_s=min(120.0, float(req.timeout_s or 60.0)),
+                request_tokens=_estimate_request_tokens(req.messages),
+            )
         if not isinstance(result, GatewayResult):
             from .errors import ErrorClass, ModelError  # noqa: PLC0415
             raise ModelError(

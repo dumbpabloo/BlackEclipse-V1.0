@@ -607,12 +607,17 @@ class AutomationEngine:
                 "teamRunId": (getattr(result, "detail", None) or {}).get("teamRunId") if result else None,
             },
         )
-        pending = (getattr(result, "detail", None) or {}).get("pendingApprovals") if result else None
-        await self._deliver(
-            definition, execution_id, run_id_out, state,
-            result.output if result else None,
-            pending_approvals=pending,
-        )
+        detail = getattr(result, "detail", None) or {}
+        pending = detail.get("pendingApprovals") if result else None
+        # A quiet run ("nothing changed") stays in run history but does not
+        # notify, deliver a report, or post to the bot's chat. A pending order
+        # always breaks quiet, because the operator must decide it.
+        if not detail.get("quiet"):
+            await self._deliver(
+                definition, execution_id, run_id_out, state,
+                result.output if result else None,
+                pending_approvals=pending,
+            )
         self._store.release_lock(lease, self._worker_id)
         # A one-time automation that has fired has no next run; it stays (audit).
         if definition.trigger.type == "one_time":
@@ -715,6 +720,7 @@ class AutomationEngine:
                 definition, execution_id=execution_id, run_id=run_id, state=state,
                 output=output, store=self._store, bus=self._bus,
                 pending_approvals=pending_approvals,
+                channel_service=getattr(self._service, "channels", None),
             )
         except Exception as exc:  # noqa: BLE001 - delivery never fails the run
             log.warning("automation delivery failed", exc_info=True)

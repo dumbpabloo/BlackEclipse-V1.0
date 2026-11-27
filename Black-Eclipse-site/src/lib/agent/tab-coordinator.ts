@@ -14,6 +14,9 @@
 import type { AssistantTurn } from './response-model';
 
 const SHARED_RUNS_KEY = 'eclipse.sharedRuns.v1';
+/** v3: ONE localStorage key per conversation, so two tabs never clobber each
+ *  other's record with a read-modify-write of a shared map. */
+const SHARED_RUN_KEY_PREFIX = 'eclipse.sharedRun.v3:';
 const CHANNEL_NAME = 'eclipse.chat.v1';
 const PENDING_RUN = '__pending__';
 // A background tab's timers are throttled; keep the record live long enough
@@ -82,35 +85,55 @@ export function readSharedRuns(): Record<string, SharedRun> {
   }
 }
 
-function writeSharedRuns(runs: Record<string, SharedRun>): void {
+function runKey(chatId: string): string {
+  return `${SHARED_RUN_KEY_PREFIX}${chatId}`;
+}
+
+function readSharedRun(chatId: string): SharedRun | null {
   try {
-    const store = localStore();
-    if (!store) return;
-    if (Object.keys(runs).length === 0) store.removeItem(SHARED_RUNS_KEY);
-    else store.setItem(SHARED_RUNS_KEY, JSON.stringify({ runs }));
+    const raw = localStore()?.getItem(runKey(chatId));
+    if (!raw) {
+      // One-time migration from the shared map. Writing the per-chat key on the
+      // next put means the old map is only read, never rewritten.
+      return readSharedRuns()[chatId] ?? null;
+    }
+    const parsed = JSON.parse(raw) as SharedRun;
+    return parsed && typeof parsed.chatId === 'string' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function putSharedRun(run: SharedRun): void {
+  try {
+    localStore()?.setItem(runKey(run.chatId), JSON.stringify(run));
   } catch {
     /* shared coordination is best-effort */
   }
 }
 
-export function putSharedRun(run: SharedRun): void {
-  const runs = readSharedRuns();
-  runs[run.chatId] = run;
-  writeSharedRuns(runs);
-}
-
 export function removeSharedRun(chatId: string, runId?: string): void {
-  const runs = readSharedRuns();
-  const current = runs[chatId];
-  if (!current) return;
-  if (runId && current.runId !== runId) return;
-  delete runs[chatId];
-  writeSharedRuns(runs);
+  try {
+    const store = localStore();
+    if (!store) return;
+    const current = readSharedRun(chatId);
+    if (runId && current && current.runId !== runId) return;
+    store.removeItem(runKey(chatId));
+    // Also drop the legacy map entry so a stale v1 record cannot resurrect.
+    const legacy = readSharedRuns();
+    if (legacy[chatId]) {
+      delete legacy[chatId];
+      if (Object.keys(legacy).length === 0) store.removeItem(SHARED_RUNS_KEY);
+      else store.setItem(SHARED_RUNS_KEY, JSON.stringify({ runs: legacy }));
+    }
+  } catch {
+    /* shared coordination is best-effort */
+  }
 }
 
 export function getSharedRun(chatId: string | null | undefined): SharedRun | null {
   if (!chatId) return null;
-  const run = readSharedRuns()[chatId];
+  const run = readSharedRun(chatId);
   if (!run) return null;
   return Date.now() - run.at <= LIVE_WINDOW_MS ? run : null;
 }
@@ -133,7 +156,7 @@ export function subscribeTabEvents(listener: Listener): () => void {
     if (event.data && typeof event.data.type === 'string') listener(event.data);
   };
   const onStorage = (event: StorageEvent) => {
-    if (event.key !== SHARED_RUNS_KEY) return;
+    if (event.key !== SHARED_RUNS_KEY && !(event.key ?? '').startsWith(SHARED_RUN_KEY_PREFIX)) return;
     // localStorage is the durable fallback; a snapshot broadcast carries the
     // richer turn, so a storage-only change is only a lifecycle hint.
   };
@@ -197,4 +220,4 @@ export async function withChatStartLock<T>(
   }
 }
 
-export { PENDING_RUN, SHARED_RUNS_KEY };
+export { PENDING_RUN, SHARED_RUNS_KEY, SHARED_RUN_KEY_PREFIX };

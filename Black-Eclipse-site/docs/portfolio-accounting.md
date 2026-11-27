@@ -1,7 +1,7 @@
 ---
 title: Portfolio Accounting Engine
 status: Current
-last-verified: 2026-11-13
+last-verified: 2026-11-26
 ---
 
 # Portfolio Accounting Engine
@@ -104,6 +104,32 @@ The engine's `POST /portfolio/{id}/bridge` is **not** part of this read path: it
 is a write that moves a quantity of one symbol out and the bridged quantity of
 another in across chains at the carried cost basis (no gain/loss), and is
 exposed for cross-chain custody transfers only.
+
+### The Funds UI reads the engine, it does not recompute it
+
+`src/lib/portfolio/engine-stats.ts` maps a `POST /portfolio/{id}/query`
+response into the widget layer's `PortfolioStats`. Live quotes are passed as
+`marks` (valuation observations only); positions, cost basis, realized P&L and
+dividends are read verbatim from the engine. `src/components/screens/portfolio/use-fund-data.ts`
+uses that mapper for the workspace and `use-engine-fund-stats.ts` does the same
+for the fund list/cards. The client-side FIFO/LIFO engine
+(`src/hooks/use-portfolio-engine.ts`) is a **labelled fallback** shown only
+while the Python runtime is unavailable — the UI renders `PREVIEW` instead of
+`ENGINE` and the KPI board says so explicitly. A change must never reintroduce
+a second authoritative calculation.
+
+- The cost-basis method is the engine's persisted `costBasisMethod`; the
+  workspace control writes it through `PATCH /portfolio/{id}` and re-reads the
+  book. It is not a display-only toggle and is not limited to FIFO/LIFO
+  (the engine also supports `AVERAGE_COST`, `HIFO`, `SPECIFIC_ID`).
+- `src/lib/portfolio/engine-transactions.ts` preserves **every** engine
+  transaction type (`SPLIT`, `SPIN_OFF`, `MERGER`, `FEE`, `TAX`, `SWAP`,
+  `STAKING_REWARD`, crypto and transfer events, …). Dropping an unknown row is
+  a correctness bug: a dropped split changes quantity and cost per unit.
+- The **Tax Lots & Realized Gains** widget reads `GET /portfolio/{id}/tax-lots`
+  (open lots plus realized lot matches with proceeds, basis, gain and holding
+  period) and exports the matches as CSV. Realized amounts are native-currency;
+  the engine's lot match is not a tax-jurisdiction determination.
 
 ## Database
 
@@ -302,6 +328,22 @@ rather than blocking the request.
 cumulative + daily returns, and benchmark comparison (tracking error,
 information ratio). Computed from portfolio snapshots.
 
+## Realized gains by tax year (+ wash-sale candidates)
+
+`tax_report.py` turns the engine's lot matches into a report grouped by **tax
+year, currency and short/long term** (`long_term_days` is caller-supplied,
+default 365). `portfolio_realized_gains` / `GET /portfolio/{id}/realized-gains`
+return per-disposal rows (proceeds, cost basis, gain, acquired/disposed dates,
+holding days) plus per-year totals.
+
+Wash sales are **candidates, never applied**. For a realized loss, the report
+looks for a same-symbol acquisition within `wash_sale_window_days` (default 30,
+either side) and reports the replacement transaction(s), `washSaleSuspected`
+and `candidateDisallowedLoss`. It never adjusts basis, never changes the
+reported gain, and states in `washSale.applied: false` that no jurisdiction's
+rule was applied. Currencies are never summed together; each currency has its
+own totals.
+
 ## Rebalancing (proposal only — never executes)
 
 `rebalance.py` produces buy/sell recommendations against target weights with
@@ -324,17 +366,26 @@ names):
 
 | Tool | Class | Effect |
 |---|---|---|
-| `portfolio_list`, `portfolio_get` | read | — |
+| `portfolio_list`, `portfolio_get`, `portfolio_list_accounts`, `portfolio_audit_log`, `portfolio_audit_verify` | read | — |
 | `portfolio_calculate_pnl` / `_exposure` / `_allocation` / `_risk` / `_tax_lots` | read | — |
+| `portfolio_realized_gains` (`tax_report.py`) | read | — (tax-year/term report; wash sales are candidates, not applied) |
 | `portfolio_harvest_candidates` (`harvest.py`) | read | — (proposal-only; wash-sale rules not modelled) |
 | `portfolio_reconcile`, `portfolio_list_reconciliations` | read | — |
 | `portfolio_attribution`, `portfolio_factor_exposure`, `portfolio_hedge`, `portfolio_aggregate` | read | — |
 | `portfolio_estimate_inputs`, `portfolio_risk_contributions`, `portfolio_stress_test`, `portfolio_transaction_costs` | read | — |
 | `portfolio_compare_allocations`, `portfolio_estimate_factor_loadings`, `portfolio_simulate_rebalancing`, `portfolio_list_runs`, `portfolio_get_run`, `portfolio_factor_risk` | read | — |
 | `portfolio_create` | mutating | `portfolio.write` |
+| `portfolio_create_account`, `portfolio_update_account`, `portfolio_delete_account` | mutating | `portfolio.write` |
 | `portfolio_add_position`, `portfolio_remove_position`, `portfolio_update_position`, `portfolio_set_metadata` | mutating | `portfolio.write` |
 | `portfolio_apply_corporate_action`, `portfolio_record_swap`, `portfolio_record_bridge`, `portfolio_record_reward`, `portfolio_apply_staking`, `portfolio_rebuild`, `portfolio_apply_slashing`, `portfolio_record_funding` | mutating | `portfolio.write` |
 | `portfolio_rebalance`, `portfolio_optimize`, `portfolio_construct` | consequential | `portfolio.rebalance_proposal` |
+
+An optional **segregation-of-duties** policy (`harness/sod.py`, off by default)
+can sit above the single-use approval for `portfolio.write` and
+`portfolio.rebalance_proposal`: above a configured amount threshold the effect
+needs N distinct approvers (the requester excluded by default). Sign-offs are
+operator-only routes (`/sod/*`), keyed to the exact call digest, and consumed on
+authorization. With no policy configured, nothing changes.
 
 Read tools run freely. Mutating and consequential tools go through the run's
 effect authorizer — the `make_portfolio_authorizer` layer in
@@ -354,7 +405,9 @@ HTTP surface is operator-gated (loopback or the runtime token).
 `…/position/remove`, `…/position/update`, `…/metadata`,
 `POST …/corporate-action`, `POST …/swap`, `POST …/bridge`, `POST …/reward`,
 `POST …/staking`, `POST …/slashing`, `POST …/funding`, `POST …/rebuild`,
-`GET …/tax-lots`, `POST …/reconcile`, `GET …/reconciliations`,
+`GET|POST …/accounts`, `PATCH|DELETE …/accounts/{accountId}`,
+`GET …/tax-lots`, `GET …/realized-gains`, `GET …/audit`, `GET …/audit/verify`,
+`POST …/reconcile`, `GET …/reconciliations`,
 `POST …/optimize`, `POST …/attribution`, `POST …/factor-exposure`,
 `POST …/hedge`, `POST /portfolio/aggregate`, `POST …/rebalance`,
 `GET …/rebalance/plans`, `POST …/snapshot`, `GET …/snapshots`,
@@ -450,6 +503,51 @@ documented single-user local mode (no authentication); an unowned row is a
 legacy/guest portfolio. This is a real tenant boundary **whenever an actor is
 asserted** — it does not pretend the accountless local mode is multi-user secure.
 
+## Tamper-evident audit chain
+
+Every `PortfolioAuditEvent` is sealed with SHA-256 over the previous event's
+hash plus the event's immutable fields (`python/harness/audit_chain.py`, the
+same rule as the General Ledger). `portfolio_audit_verify` (tool) and
+`GET /portfolio/{id}/audit/verify` (route) recompute the chain and return
+`OK`, `UNSEALED` (legacy rows) or `BROKEN` with the first bad event id.
+`portfolio_audit_log` / `GET /portfolio/{id}/audit` expose the trail with each
+event's hash. Rows written before the chain existed are sealed on store open;
+event content is never changed. Deleting an event breaks the next event's
+`prevHash`, so truncation is detected too.
+
+## Accounts, per-account cash and lot separation
+
+`PortfolioAccount` is the custody/cash sub-book inside a fund (a brokerage,
+bank, wallet, …). It is real, not decorative:
+
+- **CRUD:** `portfolio_create_account` / `portfolio_list_accounts` /
+  `portfolio_update_account` / `portfolio_delete_account` and
+  `GET|POST /portfolio/{id}/accounts`,
+  `PATCH|DELETE /portfolio/{id}/accounts/{accountId}`. An empty account can be
+  deleted; one with transactions is refused (`ACCOUNT_IN_USE`) so history is
+  never orphaned. `externalId` is unique per fund (`ACCOUNT_EXISTS`).
+- **Transactions carry `account_id`.** A transaction without one belongs to a
+  synthetic **Unassigned** bucket that `read` reports explicitly.
+- **`read` returns `accounts`**, each with `cash`, `netDeposits`, `dividends`,
+  `transactionCount`, `openLots` and open `positions` (quantity, cost basis,
+  average cost, realized P&L). `accountCashTotal` is checked against the
+  portfolio's aggregate cash (`accountsReconcile`).
+- **Lots are account-scoped.** `portfolio_calculate_tax_lots` /
+  `GET …/tax-lots?account_id=` compute lots from that account's transactions
+  only, and `portfolio_add_position` / `_remove_position` / `_update_position`
+  accept `account_id`. An account-scoped SELL can only consume that account's
+  lots: an oversell is refused even when the portfolio total across accounts
+  would cover it.
+- **Account cash is native-currency** (the transaction's `cash_impact()`), not
+  FX-translated; the portfolio's base-currency valuation remains the aggregate
+  `valuation`/`cash` block.
+
+**Not fund administration.** This separates custody and accounting inside a
+fund; it does **not** model NAV per unit, subscriptions/redemptions, management
+or performance fees, capital accounts or an investor registry. "Fund" remains
+the product label for a portfolio book unless a real fund-administration layer
+is explicitly scoped.
+
 ## Materialized positions
 
 `PortfolioPosition` is a per-symbol DERIVED cache rebuilt incrementally on every
@@ -461,6 +559,11 @@ every symbol. A test asserts the cache always equals a fresh ledger recompute.
 
 ## Known limits (honest)
 
+- **Accounts are custody/cash separation, not fund administration.** There is no
+  NAV per unit, subscription/redemption ledger, management/performance fee,
+  high-water mark, capital account or investor registry. The "fund" label is a
+  portfolio book.
+
 - **Options / derivatives pricing** is not modelled: an option/future held as a
   position is carried at cost and priced only if a market price is supplied by
   the gateway. A dedicated option-pricing/lot model is not implemented.
@@ -469,7 +572,9 @@ every symbol. A test asserts the cache always equals a fresh ledger recompute.
 - **Crypto validator lifecycle** (delegation, epoch rewards) is not fully
   modelled beyond the reward, slashing and custody events above.
 - **Tax rules** remain caller-configured rates (jurisdiction-neutral); no
-  jurisdiction tables are bundled.
+  jurisdiction tables are bundled. Wash-sale reporting is a candidate flag over
+  a caller-supplied window; it does not disallow a loss or adjust replacement
+  basis.
 - **Risk** needs enough price history; without it the report is `UNAVAILABLE`.
 - **Performance** needs ≥2 snapshots; without them it is `UNAVAILABLE`.
 - **Multi-user security** is enforced whenever an actor is asserted; the

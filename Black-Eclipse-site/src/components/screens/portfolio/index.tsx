@@ -84,7 +84,11 @@ export function PortfolioScreen() {
 
   const handleUpdate = useCallback(async (
     fundId: string,
-    patch: { name?: string; goalValue?: number | null },
+    patch: {
+      name?: string;
+      goalValue?: number | null;
+      costBasisMethod?: Fund['costBasisMethod'];
+    },
   ) => {
     try {
       await updateEngineFund(fundId, patch);
@@ -137,6 +141,7 @@ export function PortfolioScreen() {
             fund={openFund}
             onBack={() => setOpenFundId(null)}
             onAddTransaction={(tx) => handleAddTransaction(openFund, tx)}
+            onSetCostBasis={(method) => handleUpdate(openFund.id, { costBasisMethod: method })}
           />
         ) : (
           <FundManager

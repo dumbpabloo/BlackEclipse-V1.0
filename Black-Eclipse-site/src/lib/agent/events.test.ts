@@ -750,3 +750,27 @@ describe('clarification.requested (human-in-the-loop question)', () => {
     expect(done).toEqual({ kind: 'delegation_done', delegationId: 'dlg_best', winner: 0 });
   });
 });
+
+describe('worker notices (waiting / reconnecting)', () => {
+  it('names a provider admission wait instead of a generic spinner', () => {
+    const queued = normalizeHarnessEvent('model.queued', {
+      type: 'model.queued',
+      data: { reason: 'concurrency', provider: 'opencode-go' },
+    });
+    expect(queued).toEqual({ kind: 'notice', text: 'Waiting for provider capacity…' });
+
+    const cooldown = normalizeHarnessEvent('model.queued', {
+      type: 'model.queued',
+      data: { reason: 'credential_cooldown' },
+    });
+    expect(cooldown?.kind).toBe('notice');
+  });
+
+  it('surfaces a stalled provider stream as a notice', () => {
+    const stalled = normalizeHarnessEvent('model.stalled', {
+      type: 'model.stalled',
+      data: { idleTimeoutS: 90 },
+    });
+    expect(stalled?.kind).toBe('notice');
+  });
+});

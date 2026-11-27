@@ -23,7 +23,12 @@ def test_all_tools_register():
     reg = _registry()
     names = set(reg.names())
     assert set(PORTFOLIO_READ_TOOLS) | set(PORTFOLIO_WRITE_TOOLS) | set(PORTFOLIO_CONSEQUENTIAL_TOOLS) <= names
-    assert len(names) == 40
+    assert {
+        "portfolio_audit_log", "portfolio_audit_verify", "portfolio_realized_gains",
+        "portfolio_create_account", "portfolio_list_accounts",
+        "portfolio_update_account", "portfolio_delete_account",
+    } <= names
+    assert len(names) == 47
 
 
 def test_write_tools_declare_an_effect():

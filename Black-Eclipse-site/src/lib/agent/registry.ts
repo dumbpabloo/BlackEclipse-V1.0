@@ -9,6 +9,18 @@ import { isTransientFetchError } from '@/lib/fetch-retry';
 
 export { unwrapEventPayload } from './events';
 
+/**
+ * One identity per browser tab/webview. The desktop app runs every tab inside
+ * ONE origin, so the server cannot derive a per-tab rate-limit key from the
+ * request address. Sent only with the chat POST; the limiter combines it with
+ * the host.
+ */
+const CLIENT_ID =
+  (typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `tab-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  ).replace(/[^A-Za-z0-9_-]/g, '');
+
 // ── Active-run recovery ──────────────────────────────────────────────────────
 // A dropped SSE connection must not start a SECOND run. We remember the run id
 // the server started, per conversation, and on a stream failure poll the run's
@@ -237,6 +249,7 @@ function buildPayload(messages: ChatMessage[], options?: ChatOptions) {
     query,
     history,
     chatId: options?.chatId,
+    workspaceRootId: options?.workspaceRootId,
     agentId: options?.agentId,
     runId,
     resumeRunId: options?.resumeRunId,
@@ -347,6 +360,43 @@ function retryDelayMs(attempt: number): number {
   return Math.min(RUNTIME_START_RETRY_CAP_MS, RUNTIME_START_RETRY_BASE_MS * 2 ** attempt);
 }
 
+/**
+ * Longest the chat stream may go without a frame before the client treats it as
+ * dead. The runtime sends a keep-alive every 15 s while a run is active, so a
+ * 45 s silence means the socket/relay died (or the runtime was replaced) — not
+ * that the model is thinking. Without this, a dead stream left the bubble
+ * "working" until the 6-minute stall watchdog caught it.
+ */
+const STREAM_IDLE_MS = 45_000;
+
+/** Test-only override; production reads the constant. */
+function streamIdleMs(): number {
+  const override = (globalThis as { __BE_STREAM_IDLE_MS__?: unknown }).__BE_STREAM_IDLE_MS__;
+  return typeof override === 'number' && override > 0 ? override : STREAM_IDLE_MS;
+}
+
+class StreamIdleError extends Error {
+  constructor() {
+    super('the agent stopped sending progress');
+    this.name = 'StreamIdleError';
+  }
+}
+
+async function readWithIdle(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  idleMs: number,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const idle = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new StreamIdleError()), idleMs);
+  });
+  try {
+    return await Promise.race([reader.read(), idle]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -393,7 +443,7 @@ async function postChatStream(
     try {
       const res = await fetch('/api/harness/chat/stream', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-be-client': CLIENT_ID },
         body: JSON.stringify(payload),
         signal: options?.signal,
       });
@@ -481,13 +531,16 @@ async function chatStreaming(messages: ChatMessage[], options?: ChatOptions): Pr
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readWithIdle(reader, streamIdleMs());
       if (done) break;
       parse(decoder.decode(value, { stream: true }));
     }
   } catch (err) {
     if (options?.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    // Stop reading the dead socket before polling the durable run.
+    void reader.cancel().catch(() => undefined);
     if (streamRunId) {
+      options?.onEvent?.({ kind: 'notice', text: 'Connection lost — reconnecting to the agent…' });
       try {
         return await recoverRun(streamRunId, options?.signal);
       } catch (recoverErr) {

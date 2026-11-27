@@ -281,3 +281,29 @@ async def test_guardrail_halt_stops_the_turn_with_a_controlled_final():
         name == "tool.completed" and payload.get("toolCallId") == "c9"
         for name, payload in deps.emitter.events
     )
+
+
+@pytest.mark.asyncio
+async def test_a_serial_tool_is_bounded_by_the_run_deadline():
+    """A serial (non-parallel-safe) call has an outer deadline.
+
+    The batch budget used to apply only to parallel-safe groups, so one hung
+    serial tool left the run silent until the stall watchdog (observed
+    2026-11-26). The run's remaining time is now the backstop.
+    """
+    reg = ToolRegistry()
+
+    async def slow(_args, _ctx):
+        await asyncio.sleep(5)
+        return "late"
+
+    _add(reg, "slow_read", slow, permission="read", parallel_safe=False)
+    deps = _deps(reg, parallel="on")
+    deps.deadline = RunDeadline(0.15)
+
+    start = time.monotonic()
+    result = await ToolTurn(deps).run(_state(("slow_read", {}, "c0")))
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 2.0
+    assert "timed out" in _message_texts(result)[0].lower()

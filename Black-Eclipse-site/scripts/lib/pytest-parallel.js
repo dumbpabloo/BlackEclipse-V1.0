@@ -19,7 +19,8 @@ const path = require("path");
  * @param {object} opts
  * @param {string} opts.py       interpreter
  * @param {string} opts.cwd      working directory for pytest
- * @param {object} opts.env      child environment (PYTHONPATH included)
+ * @param {object|function(number):object} opts.env  child environment (or a
+ *   per-worker factory, so parallel workers never share one test SQLite file)
  * @param {string[]} opts.files  test files, relative to cwd
  * @param {number} opts.workers  parallel processes
  * @param {string[]} opts.args   extra pytest arguments (empty for the gate)
@@ -40,7 +41,11 @@ async function runParallel({ py, cwd, env, files, workers, args = [] }) {
       const log = path.join(logDir, `worker-${worker}-${index}.log`);
       logs.push(log);
       const out = fs.openSync(log, "w");
-      const child = spawn(py, ["-m", "pytest", ...args, ...chunk], { cwd, env, stdio: ["ignore", out, out] });
+      // `env` may be a factory: concurrent workers must not share one SQLite
+      // file, or their startup migrations race (duplicate column) and a chunk
+      // fails during COLLECTION before a single test runs.
+      const chunkEnv = typeof env === "function" ? env(worker) : env;
+      const child = spawn(py, ["-m", "pytest", ...args, ...chunk], { cwd, env: chunkEnv, stdio: ["ignore", out, out] });
       child.on("close", (code) => {
         fs.closeSync(out);
         resolve(code ?? 1);

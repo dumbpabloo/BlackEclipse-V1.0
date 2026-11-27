@@ -56,6 +56,16 @@ describe('selectBotRunTransitions', () => {
     });
   });
 
+  it('never notifies for a quiet completed run, but still tracks it', () => {
+    const prev = seedBotRuns([view({ automationId: 'a', executionId: 'e1', state: 'running' })]);
+    const { notifications, next } = selectBotRunTransitions(
+      [view({ automationId: 'a', executionId: 'e1', state: 'completed', output: '[[no-update]]' })],
+      prev,
+    );
+    expect(notifications).toEqual([]);
+    expect(next.get('a')).toEqual({ executionId: 'e1', state: 'completed' });
+  });
+
   it('never notifies on first sight of an automation (even if terminal)', () => {
     const { notifications } = selectBotRunTransitions(
       [view({ automationId: 'new', executionId: 'e9', state: 'completed' })],

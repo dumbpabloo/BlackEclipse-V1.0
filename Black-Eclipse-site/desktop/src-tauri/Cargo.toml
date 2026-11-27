@@ -23,6 +23,15 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 window-vibrancy = "0.6"
+# Failed-navigation interception. WebView2 renders its own (Edge/Bing branded)
+# error page when a navigation fails, and the shell then owns no document to
+# style. `NavigationCompleted` is the only WebView2 signal that reports the
+# failure, so the shell navigates back to the bundled splash instead.
+# Same version Tauri already resolves (see Cargo.lock) — no upgrade.
+webview2-com = "0.39"
+# BOOL/PWSTR for the two values the NavigationCompleted args expose. Same
+# windows-core Tauri resolves, so no second COM stack is linked.
+windows-core = "0.62"
 
 # The shell is a thin Tauri wrapper, so its build time matters far more than a
 # few megabytes: `lto = true` + `codegen-units = 1` is the slowest configuration

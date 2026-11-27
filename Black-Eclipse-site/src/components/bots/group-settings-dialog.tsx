@@ -18,7 +18,7 @@ import { BotAvatar } from '@/components/bots/bot-avatar';
 import { avatarFor, useBotAvatarStore, useHydrateBotAvatars } from '@/lib/bots/avatar-store';
 import { fileToAvatarDataUrl } from '@/lib/bots/image';
 import { useBotGroupsStore } from '@/lib/bots/groups-store';
-import type { BotGroup } from '@/lib/bots/groups-store';
+import type { BotGroup, GroupMode } from '@/lib/bots/groups-store';
 import { scheduleSummary } from '@/lib/bots/state';
 import type { AutomationView } from '@/lib/harness/clients/automation-browser';
 
@@ -38,10 +38,14 @@ export function GroupSettingsDialog({ open, onOpenChange, group, bots }: GroupSe
   const avatars = useBotAvatarStore((s) => s.avatars);
   const renameGroup = useBotGroupsStore((s) => s.renameGroup);
   const setGroupImage = useBotGroupsStore((s) => s.setGroupImage);
+  const setGroupMode = useBotGroupsStore((s) => s.setGroupMode);
+  const setGroupLead = useBotGroupsStore((s) => s.setGroupLead);
   const setMembers = useBotGroupsStore((s) => s.setMembers);
 
   const [name, setName] = useState(group.name);
   const [image, setImage] = useState<string | null>(group.image ?? null);
+  const [mode, setMode] = useState<GroupMode>(group.mode === 'roundtable' ? 'roundtable' : 'parallel');
+  const [leadId, setLeadId] = useState<string | null>(group.leadId ?? null);
   const [selected, setSelected] = useState<string[]>(group.memberIds);
   const [query, setQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +57,8 @@ export function GroupSettingsDialog({ open, onOpenChange, group, bots }: GroupSe
     if (!open) return;
     setName(group.name);
     setImage(group.image ?? null);
+    setMode(group.mode === 'roundtable' ? 'roundtable' : 'parallel');
+    setLeadId(group.leadId ?? null);
     setSelected(
       botsRef.current.length > 0
         ? group.memberIds.filter((id) => botsRef.current.some((b) => b.id === id))
@@ -103,7 +109,9 @@ export function GroupSettingsDialog({ open, onOpenChange, group, bots }: GroupSe
     if (valid.length < MIN_MEMBERS) { setError(t('bots.groups.minMembers')); return; }
     renameGroup(group.id, name.trim());
     setGroupImage(group.id, image);
+    setGroupMode(group.id, mode);
     setMembers(group.id, valid);
+    setGroupLead(group.id, leadId && valid.includes(leadId) ? leadId : null);
     onOpenChange(false);
   };
 
@@ -153,7 +161,73 @@ export function GroupSettingsDialog({ open, onOpenChange, group, bots }: GroupSe
             className="hidden"
             onChange={(e) => { void onUpload(e.target.files?.[0]); e.target.value = ''; }}
           />
+
+          <div className="space-y-1.5">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {t('bots.groups.modeLabel')}
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {([
+                ['parallel', t('bots.groups.modeParallel'), t('bots.groups.modeParallelHint')],
+                ['roundtable', t('bots.groups.modeRoundtable'), t('bots.groups.modeRoundtableHint')],
+              ] as const).map(([value, label, hint]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setMode(value)}
+                  aria-pressed={mode === value}
+                  className={cn(
+                    'rounded-xl border px-3 py-2 text-left transition-colors',
+                    mode === value
+                      ? 'border-primary/50 bg-primary/10'
+                      : 'border-border/30 hover:bg-white/[0.04]',
+                  )}
+                >
+                  <span className="block text-xs font-semibold text-foreground">{label}</span>
+                  <span className="mt-0.5 block text-[10px] leading-snug text-muted-foreground">{hint}</span>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
+
+        {mode === 'roundtable' && selected.length > 0 && (
+          <div className="space-y-1.5">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {t('bots.groups.leadLabel')}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                onClick={() => setLeadId(null)}
+                className={cn(
+                  'rounded-lg border px-2.5 py-1 text-[11px]',
+                  !leadId ? 'border-primary/50 bg-primary/10 text-foreground' : 'border-border/30 text-muted-foreground',
+                )}
+              >
+                {t('bots.groups.leadNone')}
+              </button>
+              {selected.map((id) => {
+                const bot = bots.find((b) => b.id === id);
+                if (!bot) return null;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setLeadId(id)}
+                    className={cn(
+                      'rounded-lg border px-2.5 py-1 text-[11px]',
+                      leadId === id ? 'border-primary/50 bg-primary/10 text-foreground' : 'border-border/30 text-muted-foreground',
+                    )}
+                  >
+                    {bot.name}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[10px] text-muted-foreground">{t('bots.groups.leadHint')}</p>
+          </div>
+        )}
 
         <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
           <Users size={12} /> {t('bots.groups.membersTitle')} · {selected.length}/{MAX_MEMBERS}

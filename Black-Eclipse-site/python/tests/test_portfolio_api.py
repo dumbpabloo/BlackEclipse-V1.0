@@ -89,9 +89,116 @@ def test_rebalance_route_returns_a_proposal(client):
 def test_tax_lots_route(client):
     pid = client.post("/portfolio/create", json={"name": "T"}).json()["id"]
     client.post(f"/portfolio/{pid}/position", json={"symbol": "AAPL", "quantity": "10", "price": "100"})
+    client.post(f"/portfolio/{pid}/transaction",
+                json={"type": "SELL", "symbol": "AAPL", "quantity": "4", "price": "150"})
     resp = client.get(f"/portfolio/{pid}/tax-lots")
     assert resp.status_code == 200
-    assert resp.json()["symbols"][0]["symbol"] == "AAPL"
+    body = resp.json()
+    assert body["symbols"][0]["symbol"] == "AAPL"
+    # The Funds UI's Tax Lots & Realized Gains widget reads these fields; keep
+    # the contract pinned here rather than only in the TypeScript types.
+    assert "totalRealizedPnl" in body
+    assert body["symbols"][0]["matches"], "a disposal must produce a realized lot match"
+    match = body["symbols"][0]["matches"][0]
+    for key in ("proceeds", "costBasis", "realizedPnl", "acquiredAt", "disposedAt", "holdingDays"):
+        assert key in match, f"missing {key} in lot match"
+    assert match["holdingDays"] is not None
+    # Currency travels with the lot so the UI can label native amounts.
+    assert body["symbols"][0]["openLots"][0]["currency"] == "USD"
+
+
+def test_update_persists_cost_basis_method(client):
+    pid = client.post("/portfolio/create", json={"name": "HIFO fund"}).json()["id"]
+    patched = client.patch(f"/portfolio/{pid}", json={"cost_basis_method": "HIFO"})
+    assert patched.status_code == 200, patched.text
+    # Re-read the query surface: the method must be the engine's persisted one,
+    # not a display-only toggle.
+    read = client.post(f"/portfolio/{pid}/query", json={"include": ["positions"]})
+    assert read.status_code == 200
+    assert read.json()["portfolio"]["costBasisMethod"] == "HIFO"
+
+
+def test_account_routes_and_account_scoped_cash(client):
+    pid = client.post("/portfolio/create", json={"name": "Accounts"}).json()["id"]
+
+    created = client.post(f"/portfolio/{pid}/accounts", json={
+        "name": "Broker A", "kind": "brokerage", "external_id": "EXT-1",
+    })
+    assert created.status_code == 200, created.text
+    account = created.json()
+    assert account["id"].startswith("acct_")
+
+    listed = client.get(f"/portfolio/{pid}/accounts")
+    assert [row["id"] for row in listed.json()["accounts"]] == [account["id"]]
+
+    updated = client.patch(f"/portfolio/{pid}/accounts/{account['id']}",
+                           json={"name": "Broker Prime"})
+    assert updated.status_code == 200
+    assert updated.json()["name"] == "Broker Prime"
+
+    client.post(f"/portfolio/{pid}/transaction", json={
+        "type": "DEPOSIT", "symbol": "CASH", "gross_amount": "1000",
+        "account_id": account["id"],
+    })
+    client.post(f"/portfolio/{pid}/position", json={
+        "symbol": "AAPL", "quantity": "2", "price": "100",
+        "account_id": account["id"],
+    })
+
+    query = client.post(f"/portfolio/{pid}/query", json={"include": ["positions", "cash"]})
+    assert query.status_code == 200, query.text
+    body = query.json()
+    row = next(item for item in body["accounts"] if item["id"] == account["id"])
+    assert float(row["cash"]) == 800.0
+    assert float(row["positions"][0]["quantity"]) == 2.0
+    assert body["accountsReconcile"] is True
+
+    lots = client.get(f"/portfolio/{pid}/tax-lots",
+                      params={"account_id": account["id"]})
+    assert lots.status_code == 200
+    assert lots.json()["accountId"] == account["id"]
+
+    in_use = client.delete(f"/portfolio/{pid}/accounts/{account['id']}")
+    assert in_use.status_code == 409
+
+
+def test_audit_log_and_verify_routes(client):
+    pid = client.post("/portfolio/create", json={"name": "Audit"}).json()["id"]
+    client.post(f"/portfolio/{pid}/position", json={"symbol": "AAPL", "quantity": "1", "price": "100"})
+
+    trail = client.get(f"/portfolio/{pid}/audit")
+    assert trail.status_code == 200
+    events = trail.json()["events"]
+    assert events and events[0]["hash"]
+    assert events[0]["prevHash"]
+
+    verified = client.get(f"/portfolio/{pid}/audit/verify")
+    assert verified.status_code == 200
+    body = verified.json()
+    assert body["ok"] is True, body
+    assert body["status"] == "OK"
+    assert body["checked"] == len(events)
+
+
+def test_realized_gains_route(client):
+    pid = client.post("/portfolio/create", json={"name": "Tax"}).json()["id"]
+    client.post(f"/portfolio/{pid}/transaction", json={
+        "type": "BUY", "symbol": "AAPL", "quantity": "10", "price": "100",
+        "trade_date": "2025-01-01",
+    })
+    client.post(f"/portfolio/{pid}/transaction", json={
+        "type": "SELL", "symbol": "AAPL", "quantity": "10", "price": "150",
+        "trade_date": "2026-02-01",
+    })
+
+    resp = client.get(f"/portfolio/{pid}/realized-gains")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["method"] == "FIFO"
+    assert body["years"][0]["taxYear"] == "2026"
+    assert body["years"][0]["currency"] == "USD"
+    assert len(body["disposals"]) == 1
+    assert body["washSale"]["applied"] is False
 
 
 def test_corporate_action_route(client):

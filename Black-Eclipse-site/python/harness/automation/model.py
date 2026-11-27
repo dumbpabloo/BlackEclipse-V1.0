@@ -26,7 +26,7 @@ _CAMEL = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forb
 
 LifecycleState = Literal["draft", "validating", "active", "paused", "disabled", "archived"]
 
-TriggerKind = Literal["cron", "interval", "one_time", "event", "condition", "manual"]
+TriggerKind = Literal["cron", "interval", "one_time", "event", "condition", "webhook", "manual"]
 
 ActionKind = Literal[
     "execute_task",
@@ -43,6 +43,8 @@ ActionKind = Literal[
     "custom_action",
     # A bot whose brain is a saved quant strategy (strategy trading bot).
     "run_strategy",
+    # A bot whose brain is an external ACP agent process (Gemini/Claude Code/…).
+    "run_external_agent",
 ]
 
 # Execution states are DISTINCT from lifecycle states (§6).
@@ -74,12 +76,12 @@ LIFECYCLE_STATES: tuple[str, ...] = (
     "draft", "validating", "active", "paused", "disabled", "archived",
 )
 TRIGGER_KINDS: tuple[str, ...] = (
-    "cron", "interval", "one_time", "event", "condition", "manual",
+    "cron", "interval", "one_time", "event", "condition", "webhook", "manual",
 )
 ACTION_KINDS: tuple[str, ...] = (
     "execute_task", "execute_workflow", "run_agent", "run_team", "delegate_agent",
     "call_tool", "create_task", "send_notification", "generate_report", "run_code",
-    "browser_action", "custom_action", "run_strategy",
+    "browser_action", "custom_action", "run_strategy", "run_external_agent",
 )
 EXECUTION_STATES: tuple[str, ...] = (
     "triggered", "queued", "running", "waiting", "retrying", "completed", "failed",
@@ -158,6 +160,10 @@ class Trigger(BaseModel):
     event_type: Optional[str] = Field(None, max_length=200)
     event_filter: dict[str, Any] = Field(default_factory=dict)
     condition: Optional[ConditionSpec] = None    # condition trigger
+    #: Webhook triggers are fired by an external caller through
+    #: `/automations/webhook/{id}` with this bearer token. Generated on create;
+    #: never inferred from the id.
+    webhook_secret: Optional[str] = Field(None, max_length=128)
     timezone: str = "UTC"
     start_at: Optional[str] = None
     end_at: Optional[str] = None
@@ -379,7 +385,13 @@ class AutomationDefinition(BaseModel):
     breaker_reset_by: Optional[str] = None
 
     def public(self) -> dict[str, Any]:
-        """The wire view (camelCase). No secrets are ever stored, so nothing to strip."""
+        """The operator wire view (camelCase).
+
+        Credentials are stored as vault references, never values. The ONE
+        exception is a webhook's generated bearer token: the operator must be
+        able to copy it, and every automation route is operator-gated. The
+        public webhook door never reads this view.
+        """
         return self.model_dump(by_alias=True)
 
 

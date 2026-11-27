@@ -106,7 +106,15 @@ if (extra.length === 0 && !process.argv.includes("--serial")) {
     .map((entry) => path.relative(root, path.join(testRoot, entry)));
 
   console.log(`[test] python: ${files.length} files, ${workers} workers`);
-  runParallel({ py, cwd: root, env: childEnv, files, workers })
+  // One SQLite pair PER WORKER. Sharing one file let two processes run startup
+  // migrations at the same time (`ALTER TABLE` duplicate column) and fail a
+  // chunk during collection.
+  const envForWorker = (worker) => ({
+    ...childEnv,
+    AGENT_MEMORY_DB_PATH: path.join(isolatedMemoryDir, `agent-memory-${worker}.db`),
+    ECLIPSE_MEMORY_DB_PATH: path.join(isolatedMemoryDir, `eclipse-memory-${worker}.db`),
+  });
+  runParallel({ py, cwd: root, env: envForWorker, files, workers })
     .then((code) => process.exit(code))
     .catch(() => process.exit(1));
 } else {

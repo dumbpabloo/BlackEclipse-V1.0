@@ -1,7 +1,7 @@
 ---
 title: Hermes vs Eclipse — Feature Gap Matrix
 status: Current
-last-verified: 2026-11-12
+last-verified: 2026-11-26
 legend: "Status: ✅ implemented · ◐ partial · ○ stub · — absent. Gap: A architectural · I implementation · F feature. Priority: P0–P3."
 ---
 
@@ -122,8 +122,8 @@ Hermes repository root.
 | | Hermes | Eclipse |
 |---|---|---|
 | Status | ✅ | ✅ |
-| Evidence | `tools/terminal_tool_backends.py` (6 built-in + plugin backends), `tools/process_registry.py`, `tools/checkpoint_manager.py` | `BE/code/sandbox.py`, `BE/terminal/*`, `BE/code/fs/*`, `BE/git/*`, `BE/code/worktree.py` |
-| Strength | Remote backends, background watch, rollback | Policy, secret scrub, git risk, process ownership |
+| Evidence | `tools/terminal_tool_backends.py` (6 built-in + plugin backends), `tools/process_registry.py`, `tools/checkpoint_manager.py` | `BE/code/sandbox.py`, `BE/terminal/*`, `BE/code/fs/*`, `BE/git/*`, `BE/code/worktree.py`; per-bot roots in `BE/code/workspace.py` (`bot:<id>` / `.black-eclipse/bots/<id>`) |
+| Strength | Remote backends, background watch, rollback | Policy, secret scrub, git risk, process ownership, per-bot workspace isolation across chat and scheduled runs |
 | Gap | **I** — Eclipse `code/shell.py` bypass; no remote; no file rollback | **I** — Hermes less policy depth |
 | Priority | — | P0 (bypass), P1 (rollback), P2 (remote) |
 
@@ -152,8 +152,8 @@ Hermes repository root.
 | | Hermes | Eclipse |
 |---|---|---|
 | Status | ✅ | ✅ (three paths) |
-| Evidence | `cron/`, no-agent mode, event triggers, preflight | `BE/jobs/*`, `BE/automation/*`, Graph Studio schedules |
-| Strength | One product surface, preflight, skips tokens on misconfig | Conditions, misfire, breaker, DAG |
+| Evidence | `cron/`, no-agent mode, event triggers, preflight | `BE/jobs/*`, `BE/automation/*`, Graph Studio schedules; headless host `scripts/bots-headless.js` |
+| Strength | One product surface, preflight, skips tokens on misconfig | Conditions, misfire, breaker, DAG, always-on Python-only host |
 | Gap | **A** — Eclipse has multiple schedule owners | **I** — Hermes less workflow-native |
 | Priority | — | P1 (consolidate) |
 
@@ -162,8 +162,8 @@ Hermes repository root.
 | | Hermes | Eclipse |
 |---|---|---|
 | Status | ✅ | ✅ |
-| Evidence | `hermes_state*.py`, FTS5+trigram, admissions, lineage | `BE/persistence.py`, `BE/session_index.py`, `BE/routers/sessions.py` |
-| Strength | Canonical writer, admission ledger, recovery | Run lineage, filters, per-run index |
+| Evidence | `hermes_state*.py`, FTS5+trigram, admissions, lineage | `BE/persistence.py`, `BE/session_index.py`, `BE/routers/sessions.py`; per-bot/per-room transcripts `BotChatMessage`/`BotGroupMessage` + `BotRoom` |
+| Strength | Canonical writer, admission ledger, recovery | Run lineage, filters, per-run index, durable bot transcripts |
 | Gap | **I** — Eclipse summary not injected; no canonical writer rule | **I** — Hermes no run lineage |
 | Priority | — | P2 |
 
@@ -192,8 +192,8 @@ Hermes repository root.
 | | Hermes | Eclipse |
 |---|---|---|
 | Status | ◐ (metrics/logs) | ✅ |
-| Evidence | `hermes_cli/observability/*`, `agent/insights.py`, `agent/trace_upload.py` | `BE/observability/*`, `BE/event_system/*`, `BE/run_observability.py`, `BE/run_outcome.py` |
-| Strength | Product metrics, failure classifier, trace upload | Span tree, SLO, exporters, replay, audit |
+| Evidence | `hermes_cli/observability/*`, `agent/insights.py`, `agent/trace_upload.py` | `BE/observability/*`, `BE/event_system/*`, `BE/run_observability.py`, `BE/run_outcome.py`; bot audit `AutomationAudit` + `/automations/audit` + Bots Audit section |
+| Strength | Product metrics, failure classifier, trace upload | Span tree, SLO, exporters, replay, audit, bot CRUD/lifecycle audit |
 | Gap | **A** — no run-span/SLO in Hermes; **I** — Eclipse two buses/seq bug | — |
 | Priority | — | P0 (seq), P1 (unify) |
 
@@ -206,6 +206,18 @@ Hermes repository root.
 | Strength | Failover, 18+ providers, 3 modes, aux routing | Capability/quality scoring, cost, health |
 | Gap | **I** — Eclipse router unused on live path | **I** — Hermes less scoring |
 | Priority | — | **P0** |
+
+## 19a. External agent interop (ACP)
+
+| | Hermes | Eclipse |
+|---|---|---|
+| Status | ✅ (own runtime + provider adapters) | ✅ (minimal ACP client) |
+| Evidence | `acp_adapter/`, provider plugins | `BE/acp_client.py` (initialize, session/new, session/load, session/prompt, `session/update`), `run_external_agent` action, Bots detail field, `test_acp_client.py` |
+| Strength | Mature own loop; broad providers | External CLI/agent as a bot brain without adopting its loop |
+| Gap | **I** — Hermes does not drive an arbitrary ACP agent as a bot | **I** — no full editor integration; MCP tool-call bridging is session setup, not a client-side tool proxy |
+| Priority | — | P2 (full SDK surface) |
+
+Opt-in fs/terminal is explicitly negotiated (`fsRead`/`fsWrite`/`terminal`), path-confined to the bot workspace, and denied by default; MCP server descriptors are passed to `session/new`/`session/load`. Session resume uses `session/load` when advertised.
 
 ## 20. Context compression and token efficiency
 

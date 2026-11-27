@@ -1,7 +1,7 @@
 ---
 title: Agent-to-Agent (A2A) Subsystem
 status: Current
-last-verified: 2026-10-08
+last-verified: 2026-11-26
 ---
 
 # Agent-to-Agent (A2A) Subsystem
@@ -121,6 +121,11 @@ The Agent Studio **graph / live-execution / event-stream** views (spec §41) are
 not built; the `/a2a/*` routes and the Tasks screen expose the underlying data.
 Cross-run agent conversations remain durable messages a later run consumes — the
 runtime is not a continuously-listening daemon.
+
+The Bots scheduler dock does expose a compact **Teammates** panel over the same
+routes (`/api/a2a/*`, `src/components/bots/bots-team-panel.tsx`): it lists the
+registered agents and newest envelopes and can post a `STATUS` message. That is
+a visibility/send surface, not a replacement for the Agent Studio views.
 
 ## Tests
 

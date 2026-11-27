@@ -28,6 +28,7 @@ from typing import Any, Callable, Optional
 
 from langchain_core.messages import BaseMessage, ToolMessage
 
+from .async_timeout import await_bounded
 from .schemas import HarnessError
 from .tool_guardrails import GuardrailDecision, ToolGuardrail
 from .tools import ToolResult
@@ -628,7 +629,7 @@ class ToolTurn:
         started = time.monotonic()
         if d.parallel_mode != "on":
             for slot in pending:
-                slot.result = await self._execute_one(slot)
+                slot.result = await self._execute_serial(slot)
                 slot.dispatched = True
             await self._emit_batch(pending, groups, started, concurrency=1)
             return
@@ -640,11 +641,35 @@ class ToolTurn:
                 resolve_parallel_safe(d.registry, slot.name) for slot in group
             ):
                 for slot in group:
-                    slot.result = await self._execute_one(slot)
+                    slot.result = await self._execute_serial(slot)
                     slot.dispatched = True
                 continue
             await self._execute_batch(group, semaphore)
         await self._emit_batch(pending, groups, started, concurrency=concurrency)
+
+    async def _execute_serial(self, slot: _Slot) -> ToolResult:
+        """Execute one serial call under a real outer deadline.
+
+        The tool's own `await_bounded` is the first bound, but a handler that
+        blocks the loop or suppresses cancellation could still outlive it. The
+        batch deadline used to apply ONLY to parallel-safe groups, so a serial
+        tool had no backstop and the run was left silent until the stall
+        watchdog. This keeps the run's own remaining budget authoritative.
+        """
+        d = self.d
+        remaining = max(0.0, d.deadline.remaining())
+        # The RUN's remaining budget is the outer backstop. Do NOT clamp a serial
+        # tool to the 120 s batch budget: a long-running tool's own timeout is
+        # authoritative, and the batch budget only governs multi-call groups.
+        budget = remaining
+        if budget <= 0:
+            return self._timeout_result(slot, "the run or batch deadline expired before dispatch")
+        try:
+            return await await_bounded(self._execute_one(slot), budget)
+        except asyncio.TimeoutError:
+            return self._timeout_result(
+                slot, f"the run deadline of {int(budget)}s expired while this tool was running"
+            )
 
     async def _emit_batch(
         self, pending: list[_Slot], groups: list[list[_Slot]],
@@ -701,8 +726,8 @@ class ToolTurn:
                     )
                     return
                 try:
-                    slot.result = await asyncio.wait_for(
-                        self._execute_one(slot, isolated=True), timeout=budget,
+                    slot.result = await await_bounded(
+                        self._execute_one(slot, isolated=True), budget,
                     )
                 except asyncio.TimeoutError:
                     slot.result = self._timeout_result(

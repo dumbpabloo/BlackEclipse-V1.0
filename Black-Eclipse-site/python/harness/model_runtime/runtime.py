@@ -209,12 +209,9 @@ class ModelRuntime:
         self._observer = observer
 
     def _emit(self, event_type: str, data: dict[str, Any]) -> None:
-        if self._observer is None:
-            return
-        try:
-            self._observer(event_type, data)
-        except Exception:  # noqa: BLE001 - observability must never break a run
-            pass
+        from .run_events import emit_model_event  # noqa: PLC0415 - avoid an import cycle
+
+        emit_model_event(self._observer, event_type, data)
 
     # ── registries / discovery (spec §9–10) ─────────────────────────────────
     def register_provider(self, provider: Any) -> None:

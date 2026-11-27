@@ -22,55 +22,14 @@ import { rebalanceColumns } from '@/lib/workspace/pack';
 import type { WorkspaceColumn, WorkspaceLayout, WorkspaceSection, WidgetPlacement } from '@/lib/workspace/types';
 import type { WidgetDefinition } from '@/lib/workspace/widget-def';
 import { baseChartOption, useEChart } from './use-echart';
-import type { FundData } from './use-fund-data';
-import type { Fund } from '@/lib/portfolio/types';
+import { EmptyNote, Tile, WidgetHeader, type WidgetProps } from './widget-primitives';
+import { TaxLotsWidget } from './tax-lots-widget';
 
-export interface WidgetProps {
-  fund: Fund;
-  data: FundData;
-}
+export type { WidgetProps } from './widget-primitives';
 
 const UP = 'text-emerald-400';
 const DOWN = 'text-rose-400';
 const toneClass = (n: number) => (n > 0 ? UP : n < 0 ? DOWN : 'text-muted-foreground');
-
-function WidgetHeader({ icon: Icon, title, hint }: { icon: React.ComponentType<{ size?: number; className?: string }>; title: string; hint?: string }) {
-  return (
-    <div className="flex items-center justify-between gap-2 border-b border-border/10 pb-2.5 mb-3">
-      <div className="flex items-center gap-2 min-w-0">
-        <Icon size={14} className="text-primary shrink-0" />
-        <h3 className="font-serif text-sm font-semibold text-foreground truncate">{title}</h3>
-      </div>
-      {hint && <span className="font-mono text-[9px] text-muted-foreground/70 shrink-0">{hint}</span>}
-    </div>
-  );
-}
-
-function EmptyNote({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex flex-1 items-center justify-center py-8 text-center">
-      <p className="text-xs text-muted-foreground/70 italic">{children}</p>
-    </div>
-  );
-}
-
-const Tile = React.forwardRef<HTMLDivElement, {
-  label: string; value: string; tone?: string; sub?: string; loading?: boolean;
-}>(function Tile({ label, value, tone, sub, loading }, ref) {
-  return (
-    <div ref={ref} className="flex min-w-0 flex-col justify-center rounded-xl glass-card-subtle p-3">
-      <p className="text-[9px] uppercase tracking-widest font-bold text-muted-foreground truncate">{label}</p>
-      {loading ? (
-        <span className="mt-1.5 block h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground/70" aria-hidden />
-      ) : (
-        <>
-          <p className={cn('mt-1 font-mono text-sm font-bold truncate', tone ?? 'text-foreground')}>{value}</p>
-          {sub && <p className={cn('font-mono text-[10px] truncate', tone ?? 'text-muted-foreground')}>{sub}</p>}
-        </>
-      )}
-    </div>
-  );
-});
 
 // ── KPI board ────────────────────────────────────────────────────────────────
 
@@ -88,6 +47,26 @@ export function KpiBoardWidget({ data }: WidgetProps) {
         <Tile label="Holdings" value={String(holdingsCount)} sub={`Realized ${fmtUsd(s.realizedPnL)}`} />
       </div>
       {holdingsCount === 0 && <EmptyNote>No open positions — add a transaction to this fund.</EmptyNote>}
+      {data.engine.dataQuality && data.engine.dataQuality.status !== 'OK' && (
+        <p
+          className="mt-2 shrink-0 rounded-lg border border-amber-400/20 bg-amber-400/5 px-2 py-1 font-mono text-[9px] leading-relaxed text-amber-300/90"
+          title={(data.engine.dataQuality.warnings ?? []).join(' · ')}
+        >
+          Data quality {data.engine.dataQuality.status}
+          {data.engine.dataQuality.missingPrices.length > 0
+            ? ` · no price: ${data.engine.dataQuality.missingPrices.join(', ')}`
+            : ''}
+          {data.engine.dataQuality.missingFX.length > 0
+            ? ` · no FX: ${data.engine.dataQuality.missingFX.join(', ')}`
+            : ''}
+        </p>
+      )}
+      {data.engine.source === 'preview' && (
+        <p className="mt-2 shrink-0 rounded-lg border border-amber-400/20 bg-amber-400/5 px-2 py-1 font-mono text-[9px] leading-relaxed text-amber-300/90">
+          Preview only — the Python portfolio engine has not answered, so cost basis and realized P&amp;L
+          may differ from the book of record.
+        </p>
+      )}
     </div>
   );
 }
@@ -921,6 +900,7 @@ export const FUND_WIDGETS: WidgetDefinition[] = [
   { id: 'correlation-matrix', category: 'portfolio', label: 'Correlation Matrix', desc: 'Pairwise return correlation between holdings (date-aligned).', icon: 'grid', sizes: ['large', 'full'] },
   { id: 'risk-matrix', category: 'portfolio', label: 'Risk Matrix', desc: 'Per-holding volatility, beta and contribution to portfolio risk.', icon: 'activity', sizes: ['large', 'full'] },
   { id: 'holdings', category: 'portfolio', label: 'Holdings', desc: 'Open positions with cost basis and P/L.', icon: 'table', sizes: ['large', 'full'] },
+  { id: 'tax-lots', category: 'portfolio', label: 'Tax Lots & Realized Gains', desc: 'Engine open lots, realized disposals and holding periods.', icon: 'layers', sizes: ['large', 'full'] },
   { id: 'rebalance', category: 'portfolio', label: 'Rebalancing', desc: 'Drift vs target weights with trim/add actions.', icon: 'layers', sizes: ['large', 'full'] },
   { id: 'ledger', category: 'portfolio', label: 'Transactions', desc: 'Full transaction ledger + cash.', icon: 'layers', sizes: ['large', 'full'] },
   { id: 'risk-metrics', category: 'portfolio', label: 'Risk Metrics', desc: 'Beta, volatility, Sharpe, drawdown.', icon: 'activity', sizes: ['medium', 'large'] },
@@ -950,6 +930,7 @@ export function renderFundWidget(widgetId: string, props: WidgetProps): React.Re
     case 'correlation-matrix': return <CorrelationMatrixWidget {...props} />;
     case 'risk-matrix': return <RiskMatrixWidget {...props} />;
     case 'holdings': return <HoldingsWidget {...props} />;
+    case 'tax-lots': return <TaxLotsWidget {...props} />;
     case 'rebalance': return <RebalanceWidget {...props} />;
     case 'ledger': return <TransactionsWidget {...props} />;
     case 'risk-metrics': return <RiskWidget {...props} />;
@@ -971,6 +952,7 @@ const FUND_WIDGET_FRAME: Record<string, number> = {
   'correlation-matrix': 420,
   'risk-matrix': 400,
   'holdings': 380,
+  'tax-lots': 400,
   'ledger': 380,
   'health': 360,
   'monte-carlo': 380,
@@ -1024,7 +1006,8 @@ export function defaultFundLayout(): WorkspaceLayout {
       board(['portfolio-heatmap', 'correlation-matrix'], 2),
       board(['risk-matrix', 'risk-metrics', 'health']),
       board(['holdings', 'ai-insights']),
-      board(['ledger', 'monte-carlo']),
+      board(['tax-lots', 'ledger']),
+      board(['monte-carlo'], 1),
       board(['rebalance'], 1),
     ],
   };

@@ -8,12 +8,29 @@ uses. Behavior is unchanged.
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from typing import Any
 
 from langchain_core.messages import BaseMessage
 
 from .async_timeout import await_bounded
+
+#: Longest gap allowed BETWEEN streamed chunks after the first token. A provider
+#: that stops mid-answer is indistinguishable from a hang, and the outer call
+#: deadline is minutes away (observed 2026-11-26: a stream went quiet after 196
+#: chars and the run was only settled by the stall watchdog at 6.5 minutes).
+DEFAULT_CHUNK_IDLE_TIMEOUT_S = 90.0
+
+
+def _chunk_idle_timeout_s(override: float | None = None) -> float:
+    if override is not None and override > 0:
+        return float(override)
+    try:
+        value = float((os.environ.get("HARNESS_MODEL_IDLE_S") or "").strip())
+        return value if value > 0 else DEFAULT_CHUNK_IDLE_TIMEOUT_S
+    except (TypeError, ValueError):
+        return DEFAULT_CHUNK_IDLE_TIMEOUT_S
 
 
 async def ainvoke_streaming(
@@ -24,6 +41,7 @@ async def ainvoke_streaming(
     finalizing: bool,
     *,
     first_token_timeout_s: float | None = None,
+    chunk_idle_timeout_s: float | None = None,
 ) -> Any:
     """Invoke the model, streaming tokens live when it supports it.
 
@@ -42,6 +60,7 @@ async def ainvoke_streaming(
     ever yields the closing answer.
     """
     abandoned = False
+    idle_timeout_s = _chunk_idle_timeout_s(chunk_idle_timeout_s)
 
     async def _stream() -> Any:
         nonlocal abandoned
@@ -53,14 +72,24 @@ async def ainvoke_streaming(
         iterator = model.astream(messages).__aiter__()
         while True:
             try:
-                if first and first_token_timeout_s is not None:
+                if first:
+                    # Wait at most the first-token budget for the FIRST chunk; a
+                    # provider that never starts is a different failure from one
+                    # that stalls mid-answer.
                     chunk = await await_bounded(
                         iterator.__anext__(),
-                        min(float(first_token_timeout_s), float(timeout_s)),
+                        min(float(first_token_timeout_s or timeout_s), float(timeout_s)),
                         on_timeout=_abandon,
                     )
                 else:
-                    chunk = await iterator.__anext__()
+                    # Bound every chunk after the first. Without this, a stalled
+                    # provider stream is only noticed by the outer call deadline
+                    # (or, worse, by the stall watchdog minutes later).
+                    chunk = await await_bounded(
+                        iterator.__anext__(),
+                        min(idle_timeout_s, float(timeout_s)),
+                        on_timeout=_abandon,
+                    )
             except StopAsyncIteration:
                 break
             except asyncio.TimeoutError:
@@ -69,6 +98,17 @@ async def ainvoke_streaming(
                         await emitter.emit("model.first_token_timeout", {
                             "timeoutS": float(first_token_timeout_s or timeout_s),
                             "finalizing": finalizing,
+                        })
+                    except Exception:  # noqa: BLE001 - telemetry must not mask the timeout
+                        pass
+                else:
+                    # Persist this as a durable event: the watchdog and the UI
+                    # both need to see why a stream went quiet.
+                    try:
+                        await emitter.emit("model.stalled", {
+                            "idleTimeoutS": idle_timeout_s,
+                            "finalizing": finalizing,
+                            "partialChars": len(message_text(aggregated)) if aggregated is not None else 0,
                         })
                     except Exception:  # noqa: BLE001 - telemetry must not mask the timeout
                         pass
@@ -171,6 +211,7 @@ def message_text(message: Any) -> str:
 
 
 __all__ = [
+    "DEFAULT_CHUNK_IDLE_TIMEOUT_S",
     "ainvoke_streaming",
     "merge_chunks",
     "message_text",

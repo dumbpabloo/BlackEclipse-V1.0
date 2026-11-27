@@ -43,6 +43,8 @@ _ACTION_REQUIRES = {
     "custom_action": "tool_name",
     # Required fields live on `action.config` and are checked by `_validate_trading`.
     "run_strategy": None,
+    # The command lives on `action.config.externalAgent`; the objective is the prompt.
+    "run_external_agent": "objective",
 }
 
 # Obvious secret material that must never be embedded in a definition (§29).

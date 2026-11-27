@@ -21,8 +21,17 @@ import json
 import sqlite3
 from typing import Any, Iterable, Optional, Sequence
 
+from ..audit_chain import GENESIS, event_hash, verify_chain
 from ..persistence import now_iso
-from .errors import DATABASE_FAILURE, DUPLICATE_ENTRY, ENTRY_NOT_FOUND, LedgerError
+from .errors import (
+    ATTACHMENT_EXISTS,
+    ATTACHMENT_NOT_FOUND,
+    BUDGET_NOT_FOUND,
+    DATABASE_FAILURE,
+    DUPLICATE_ENTRY,
+    ENTRY_NOT_FOUND,
+    LedgerError,
+)
 from .models import Account, JournalEntry, JournalLine, Ledger, Period
 from .money import D, ZERO
 
@@ -128,9 +137,34 @@ CREATE TABLE IF NOT EXISTS LedgerAuditEvent (
   actor      TEXT,
   detail     TEXT NOT NULL DEFAULT '{}',
   createdAt  TEXT NOT NULL,
+  prevHash   TEXT,
+  hash       TEXT,
   FOREIGN KEY (ledgerId) REFERENCES Ledger(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_ledger_audit ON LedgerAuditEvent(ledgerId, createdAt);
+
+-- A source-document reference on a journal entry. This stores only the
+-- artifact id + the content hash frozen at attach time; the bytes live in the
+-- ONE artifact store and are never copied here.
+CREATE TABLE IF NOT EXISTS LedgerAttachment (
+  id           TEXT PRIMARY KEY,
+  ledgerId     TEXT NOT NULL,
+  entryId      TEXT NOT NULL,
+  artifactId   TEXT NOT NULL,
+  artifactName TEXT,
+  mimeType     TEXT,
+  sizeBytes    INTEGER,
+  checksum     TEXT NOT NULL,
+  note         TEXT,
+  attachedBy   TEXT,
+  createdAt    TEXT NOT NULL,
+  FOREIGN KEY (ledgerId) REFERENCES Ledger(id) ON DELETE CASCADE,
+  FOREIGN KEY (entryId) REFERENCES JournalEntry(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ledger_attachment
+  ON LedgerAttachment(entryId, artifactId);
+CREATE INDEX IF NOT EXISTS idx_ledger_attachment_entry
+  ON LedgerAttachment(ledgerId, entryId);
 
 CREATE TABLE IF NOT EXISTS LedgerRule (
   id             TEXT PRIMARY KEY,
@@ -147,6 +181,36 @@ CREATE TABLE IF NOT EXISTS LedgerRule (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_ledger_rule_version ON LedgerRule(ledgerId, name, version);
 CREATE INDEX IF NOT EXISTS idx_ledger_rule_active ON LedgerRule(ledgerId, active);
+
+-- A budget is a named set of account + dimension targets over a period. It is
+-- planning data, never a posting; actuals are derived from the journal.
+CREATE TABLE IF NOT EXISTS LedgerBudget (
+  id          TEXT PRIMARY KEY,
+  ledgerId    TEXT NOT NULL,
+  name        TEXT NOT NULL,
+  startDate   TEXT NOT NULL,
+  endDate     TEXT NOT NULL,
+  currency    TEXT NOT NULL DEFAULT '',
+  note        TEXT,
+  status      TEXT NOT NULL DEFAULT 'ACTIVE',
+  createdBy   TEXT,
+  createdAt   TEXT NOT NULL,
+  FOREIGN KEY (ledgerId) REFERENCES Ledger(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_budget ON LedgerBudget(ledgerId, startDate);
+
+CREATE TABLE IF NOT EXISTS LedgerBudgetLine (
+  id           TEXT PRIMARY KEY,
+  budgetId     TEXT NOT NULL,
+  ledgerId     TEXT NOT NULL,
+  accountCode  TEXT NOT NULL,
+  amount       TEXT NOT NULL,
+  dimensions   TEXT NOT NULL DEFAULT '{}',
+  memo         TEXT,
+  FOREIGN KEY (budgetId) REFERENCES LedgerBudget(id) ON DELETE CASCADE,
+  FOREIGN KEY (ledgerId) REFERENCES Ledger(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_budget_line ON LedgerBudgetLine(budgetId);
 
 CREATE TABLE IF NOT EXISTS LedgerImportBatch (
   id              TEXT PRIMARY KEY,
@@ -258,6 +322,23 @@ def _loads(value: Any, default: Any) -> Any:
 
 def _dumps(value: Any) -> str:
     return json.dumps(value or {}, ensure_ascii=False, default=str)
+
+
+def _ledger_audit_payload(row: Any) -> dict[str, Any]:
+    """The immutable fields sealed by one audit event's hash.
+
+    `detail` is the STORED JSON text, not a re-serialization, so verification
+    is stable even if the writer's JSON formatting changes in a later release.
+    """
+    return {
+        "id": row["id"],
+        "ledgerId": row["ledgerId"],
+        "kind": row["kind"],
+        "subjectId": row["subjectId"],
+        "actor": row["actor"],
+        "detail": row["detail"],
+        "createdAt": row["createdAt"],
+    }
 
 
 def _dec(value: Any) -> Any:
@@ -373,13 +454,47 @@ class LedgerStore:
         added after the first release must be ALTER-ed in. Only adds; never drops
         or rewrites data.
         """
-        wanted = {"JournalLine": {"baseOnly": "INTEGER NOT NULL DEFAULT 0"}}
+        wanted = {
+            "JournalLine": {"baseOnly": "INTEGER NOT NULL DEFAULT 0"},
+            "LedgerAuditEvent": {"prevHash": "TEXT", "hash": "TEXT"},
+        }
         for table, columns in wanted.items():
             existing = {row["name"] for row in
                         self._db.execute(f"PRAGMA table_info({table})").fetchall()}
             for column, decl in columns.items():
                 if column not in existing:
                     self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        self._seal_audit_chain()
+
+    def _seal_audit_chain(self) -> None:
+        """Seal audit rows written before the chain existed.
+
+        This adds integrity metadata only; event content is never changed. A
+        ledger with no unsealed rows is skipped, so normal boot does no writes.
+        """
+        pending = self._db.execute(
+            "SELECT COUNT(*) AS n FROM LedgerAuditEvent WHERE hash IS NULL"
+        ).fetchone()
+        if not pending or not int(pending["n"] or 0):
+            return
+        ledger_ids = [row["ledgerId"] for row in self._db.execute(
+            "SELECT DISTINCT ledgerId FROM LedgerAuditEvent WHERE hash IS NULL"
+        ).fetchall()]
+        for ledger_id in ledger_ids:
+            previous = GENESIS
+            rows = self._db.execute(
+                "SELECT * FROM LedgerAuditEvent WHERE ledgerId=? ORDER BY rowid ASC",
+                (ledger_id,),
+            ).fetchall()
+            for row in rows:
+                payload = _ledger_audit_payload(row)
+                sealed = event_hash(previous, payload)
+                self._db.execute(
+                    "UPDATE LedgerAuditEvent SET prevHash=?, hash=? WHERE id=?",
+                    (previous, sealed, row["id"]),
+                )
+                previous = sealed
+        self._db.commit()
 
     # ── Ledgers ──────────────────────────────────────────────────────────────
     def create_ledger(
@@ -430,6 +545,9 @@ class LedgerStore:
         exists = self._db.execute("SELECT 1 FROM Ledger WHERE id=?", (ledger_id,)).fetchone()
         if not exists:
             return False
+        self._db.execute(
+            "DELETE FROM LedgerAttachment WHERE ledgerId=?", (ledger_id,)
+        )
         self._db.execute(
             "DELETE FROM JournalLine WHERE ledgerId=?", (ledger_id,)
         )
@@ -707,7 +825,8 @@ class LedgerStore:
             "SELECT l.accountCode AS accountCode, l.baseDebit AS baseDebit, "
             "l.baseCredit AS baseCredit, l.debit AS debit, l.credit AS credit, "
             "l.currency AS currency, l.entryId AS entryId, e.entryDate AS entryDate, "
-            "e.status AS status, e.externalId AS externalId, e.memo AS memo "
+            "e.status AS status, e.source AS source, e.externalId AS externalId, "
+            "l.dimensions AS dimensions, e.memo AS memo "
             "FROM JournalLine l JOIN JournalEntry e ON e.id=l.entryId WHERE l.ledgerId=?"
         )
         args: list[Any] = [ledger_id]
@@ -733,11 +852,107 @@ class LedgerStore:
                 "entryId": row["entryId"],
                 "entryDate": row["entryDate"],
                 "status": row["status"],
+                "source": row["source"],
                 "externalId": row["externalId"],
+                "dimensions": _loads(row["dimensions"], {}),
                 "memo": row["memo"],
             }
             for row in rows
         ]
+
+    # ── Budgets ──────────────────────────────────────────────────────────────
+    def insert_budget(
+        self,
+        budget_id: str,
+        ledger_id: str,
+        name: str,
+        start_date: str,
+        end_date: str,
+        *,
+        lines: Sequence[dict[str, Any]],
+        currency: str = "",
+        note: Optional[str] = None,
+        created_by: Optional[str] = None,
+    ) -> dict[str, Any]:
+        created_at = now_iso()
+        self._db.execute(
+            """INSERT INTO LedgerBudget
+               (id, ledgerId, name, startDate, endDate, currency, note, status,
+                createdBy, createdAt)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)""",
+            (budget_id, ledger_id, name, start_date, end_date, currency, note,
+             created_by, created_at),
+        )
+        for line in lines:
+            self._db.execute(
+                """INSERT INTO LedgerBudgetLine
+                   (id, budgetId, ledgerId, accountCode, amount, dimensions, memo)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (line["id"], budget_id, ledger_id, line["accountCode"],
+                 line["amount"], _dumps(line.get("dimensions") or {}), line.get("memo")),
+            )
+        self._db.commit()
+        return self.require_budget(ledger_id, budget_id)
+
+    def _budget_row(self, row: Any, lines: Sequence[Any]) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "ledgerId": row["ledgerId"],
+            "name": row["name"],
+            "startDate": row["startDate"],
+            "endDate": row["endDate"],
+            "currency": row["currency"],
+            "note": row["note"],
+            "status": row["status"],
+            "createdBy": row["createdBy"],
+            "createdAt": row["createdAt"],
+            "lines": [
+                {
+                    "id": line["id"],
+                    "accountCode": line["accountCode"],
+                    "amount": line["amount"],
+                    "dimensions": _loads(line["dimensions"], {}),
+                    "memo": line["memo"],
+                }
+                for line in lines
+            ],
+        }
+
+    def get_budget(self, ledger_id: str, budget_id: str) -> Optional[dict[str, Any]]:
+        row = self._db.execute(
+            "SELECT * FROM LedgerBudget WHERE id=? AND ledgerId=?", (budget_id, ledger_id)
+        ).fetchone()
+        if row is None:
+            return None
+        lines = self._db.execute(
+            "SELECT * FROM LedgerBudgetLine WHERE budgetId=? ORDER BY rowid ASC",
+            (budget_id,),
+        ).fetchall()
+        return self._budget_row(row, lines)
+
+    def require_budget(self, ledger_id: str, budget_id: str) -> dict[str, Any]:
+        budget = self.get_budget(ledger_id, budget_id)
+        if budget is None:
+            raise LedgerError(
+                BUDGET_NOT_FOUND,
+                f"budget {budget_id} not found in ledger {ledger_id}",
+                {"budgetId": budget_id, "ledgerId": ledger_id},
+            )
+        return budget
+
+    def list_budgets(self, ledger_id: str, limit: int = 100) -> list[dict[str, Any]]:
+        rows = self._db.execute(
+            "SELECT * FROM LedgerBudget WHERE ledgerId=? ORDER BY startDate DESC, rowid DESC LIMIT ?",
+            (ledger_id, max(1, min(int(limit), 500))),
+        ).fetchall()
+        out = []
+        for row in rows:
+            lines = self._db.execute(
+                "SELECT * FROM LedgerBudgetLine WHERE budgetId=? ORDER BY rowid ASC",
+                (row["id"],),
+            ).fetchall()
+            out.append(self._budget_row(row, lines))
+        return out
 
     # ── Rules (append-only versions) ─────────────────────────────────────────
     def insert_rule(self, rule: Any) -> Any:
@@ -1076,10 +1291,26 @@ class LedgerStore:
         import uuid
 
         event = event_id or f"lev_{uuid.uuid4().hex[:20]}"
+        created_at = now_iso()
+        detail_text = _dumps(detail)
+        last = self._db.execute(
+            "SELECT hash FROM LedgerAuditEvent WHERE ledgerId=? AND hash IS NOT NULL "
+            "ORDER BY rowid DESC LIMIT 1",
+            (ledger_id,),
+        ).fetchone()
+        previous = last["hash"] if last and last["hash"] else GENESIS
+        payload = {
+            "id": event, "ledgerId": ledger_id, "kind": kind,
+            "subjectId": subject_id, "actor": actor,
+            "detail": detail_text, "createdAt": created_at,
+        }
+        sealed = event_hash(previous, payload)
         self._db.execute(
-            """INSERT INTO LedgerAuditEvent (id, ledgerId, kind, subjectId, actor, detail, createdAt)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (event, ledger_id, kind, subject_id, actor, _dumps(detail), now_iso()),
+            """INSERT INTO LedgerAuditEvent
+               (id, ledgerId, kind, subjectId, actor, detail, createdAt, prevHash, hash)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (event, ledger_id, kind, subject_id, actor, detail_text, created_at,
+             previous, sealed),
         )
         self._db.commit()
         return event
@@ -1097,9 +1328,112 @@ class LedgerStore:
                 "actor": row["actor"],
                 "detail": _loads(row["detail"], {}),
                 "createdAt": row["createdAt"],
+                "prevHash": row["prevHash"],
+                "hash": row["hash"],
             }
             for row in rows
         ]
+
+    def verify_audit(self, ledger_id: str) -> dict[str, Any]:
+        """Recompute the ledger's audit chain in append order."""
+        rows = self._db.execute(
+            "SELECT * FROM LedgerAuditEvent WHERE ledgerId=? ORDER BY rowid ASC",
+            (ledger_id,),
+        ).fetchall()
+        result = verify_chain(rows, payload_of=_ledger_audit_payload)
+        result["ledgerId"] = ledger_id
+        return result
+
+    # ── Source-document attachments ──────────────────────────────────────────
+    def insert_attachment(
+        self,
+        attachment_id: str,
+        ledger_id: str,
+        entry_id: str,
+        artifact_id: str,
+        *,
+        checksum: str,
+        artifact_name: Optional[str] = None,
+        mime_type: Optional[str] = None,
+        size_bytes: Optional[int] = None,
+        note: Optional[str] = None,
+        attached_by: Optional[str] = None,
+    ) -> dict[str, Any]:
+        try:
+            self._db.execute(
+                """INSERT INTO LedgerAttachment
+                   (id, ledgerId, entryId, artifactId, artifactName, mimeType,
+                    sizeBytes, checksum, note, attachedBy, createdAt)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (attachment_id, ledger_id, entry_id, artifact_id, artifact_name,
+                 mime_type, size_bytes, checksum, note, attached_by, now_iso()),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise LedgerError(
+                ATTACHMENT_EXISTS,
+                "this document is already attached to the entry",
+                {"entryId": entry_id, "artifactId": artifact_id},
+            ) from exc
+        self._db.commit()
+        return self.require_attachment(ledger_id, attachment_id)
+
+    def _attachment_row(self, row: Any) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "ledgerId": row["ledgerId"],
+            "entryId": row["entryId"],
+            "artifactId": row["artifactId"],
+            "artifactName": row["artifactName"],
+            "mimeType": row["mimeType"],
+            "sizeBytes": row["sizeBytes"],
+            "checksum": row["checksum"],
+            "note": row["note"],
+            "attachedBy": row["attachedBy"],
+            "createdAt": row["createdAt"],
+        }
+
+    def get_attachment(self, attachment_id: str) -> Optional[dict[str, Any]]:
+        row = self._db.execute(
+            "SELECT * FROM LedgerAttachment WHERE id=?", (attachment_id,)
+        ).fetchone()
+        return self._attachment_row(row) if row else None
+
+    def require_attachment(self, ledger_id: str, attachment_id: str) -> dict[str, Any]:
+        row = self._db.execute(
+            "SELECT * FROM LedgerAttachment WHERE id=? AND ledgerId=?",
+            (attachment_id, ledger_id),
+        ).fetchone()
+        if row is None:
+            raise LedgerError(
+                ATTACHMENT_NOT_FOUND,
+                f"attachment {attachment_id} not found in ledger {ledger_id}",
+                {"attachmentId": attachment_id, "ledgerId": ledger_id},
+            )
+        return self._attachment_row(row)
+
+    def list_attachments(self, ledger_id: str, *, entry_id: Optional[str] = None,
+                         limit: int = 200) -> list[dict[str, Any]]:
+        if entry_id:
+            rows = self._db.execute(
+                "SELECT * FROM LedgerAttachment WHERE ledgerId=? AND entryId=? "
+                "ORDER BY rowid ASC LIMIT ?",
+                (ledger_id, entry_id, max(1, int(limit))),
+            ).fetchall()
+        else:
+            rows = self._db.execute(
+                "SELECT * FROM LedgerAttachment WHERE ledgerId=? "
+                "ORDER BY rowid ASC LIMIT ?",
+                (ledger_id, max(1, int(limit))),
+            ).fetchall()
+        return [self._attachment_row(row) for row in rows]
+
+    def delete_attachment(self, ledger_id: str, attachment_id: str) -> bool:
+        cursor = self._db.execute(
+            "DELETE FROM LedgerAttachment WHERE id=? AND ledgerId=?",
+            (attachment_id, ledger_id),
+        )
+        self._db.commit()
+        return bool(cursor.rowcount)
 
 
 __all__ = ["LedgerStore"]

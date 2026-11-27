@@ -18,15 +18,24 @@ What it does NOT own: arithmetic. Money rules live in `money.py`, posting rules 
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Optional, Sequence
 
+from . import budgeting
 from . import statements as stmts
 from .accounts import accounts_from_template, build_account, template_accounts
 from .errors import (
     ACCOUNT_EXISTS,
     ACCOUNT_NOT_FOUND,
     ALREADY_REVERSED,
+    ARTIFACT_NOT_FOUND,
+    BUDGET_INVALID,
+    DIMENSION_REQUIRED,
+    RETAINED_EARNINGS_MISSING,
+    YEAR_END_NOT_READY,
+    ARTIFACT_STORE_UNAVAILABLE,
+    ARTIFACT_UNHASHED,
+    ATTACHMENT_NOT_FOUND,
     ENTRY_NOT_FOUND,
     INVALID_ACCOUNT,
     INVALID_ENTRY,
@@ -42,7 +51,7 @@ from .errors import (
 )
 from .journal import reverse_journal_lines, validate_lines
 from .models import JournalEntry, JournalLine, Ledger, LineSpec, Period, money
-from .money import ZERO
+from .money import D, ZERO, q_money
 from .periods import (
     build_period,
     fiscal_position,
@@ -408,7 +417,12 @@ class LedgerService:
     def get_entry(self, ledger_id: str, entry_id: str, *,
                   actor_id: Optional[str] = None) -> dict[str, Any]:
         self._require(ledger_id, actor_id=actor_id)
-        return self.store.require_entry(entry_id).to_dict()
+        entry = self._require_entry_in_ledger(ledger_id, entry_id)
+        payload = entry.to_dict()
+        # Evidence travels with the entry it supports, so an auditor reading one
+        # posting sees its source documents without a second lookup.
+        payload["attachments"] = self.store.list_attachments(ledger_id, entry_id=entry.id)
+        return payload
 
     def trial_balance(
         self,
@@ -466,6 +480,375 @@ class LedgerService:
         movement = self.store.postings(ledger_id, start=start_iso, end=end_iso)
         return stmts.cash_flow(accounts, movement, opening=opening,
                                start=start_iso, end=end_iso)
+
+    def cash_flow_indirect(
+        self,
+        ledger_id: str,
+        *,
+        start: object = None,
+        end: object = None,
+        actor_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        self._require(ledger_id, actor_id=actor_id)
+        start_iso, end_iso = self._default_range(ledger_id, start, end)
+        accounts = self.store.list_accounts(ledger_id)
+        opening = self.store.postings(ledger_id, end=_day_before(start_iso))
+        movement = self.store.postings(ledger_id, start=start_iso, end=end_iso)
+        return stmts.cash_flow_indirect(accounts, movement, opening=opening,
+                                        start=start_iso, end=end_iso)
+
+    # ── Year-end close ───────────────────────────────────────────────────────
+    def _default_fiscal_year(self, ledger: Ledger) -> int:
+        """The most recently completed fiscal year as of today."""
+        now = today()
+        fiscal_year, _ = fiscal_position(ledger.fiscal_year_start_month, now)
+        _, year_end = period_bounds(
+            ledger.fiscal_year_start_month, fiscal_year, 12
+        )
+        return fiscal_year if now > year_end else fiscal_year - 1
+
+    def _year_end_plan(self, ledger: Ledger, fiscal_year: int) -> dict[str, Any]:
+        """Compute the closing entry without writing it.
+
+        The closing entry is dated the FIRST day of the next fiscal year, so the
+        closed year's income statement is never rewritten. P&L statements omit
+        `source=year_end_close`, while the balance sheet and trial balance include
+        it — the transfer is real, it just is not new-year activity.
+        """
+        start_month = ledger.fiscal_year_start_month
+        year_start, _ = period_bounds(start_month, fiscal_year, 1)
+        _, year_end = period_bounds(start_month, fiscal_year, 12)
+        next_start, _ = period_bounds(start_month, fiscal_year + 1, 1)
+        start_iso = iso(year_start)
+        end_iso = iso(year_end)
+        closing_date = iso(next_start)
+        external_id = f"ye:{end_iso}"
+
+        accounts = self.store.list_accounts(ledger.id)
+        # Cumulative through the year end: PRIOR closing entries must be included
+        # so their revenue/expense balances are already zero. The current year has
+        # no closing entry yet, so what remains is this year's P&L.
+        postings = self.store.postings(ledger.id, end=end_iso)
+        balances = stmts.build_balances(accounts, (), postings)
+        retained = next(
+            (a for a in accounts
+             if a.active and a.type == "EQUITY" and a.subtype == "RETAINED"),
+            None,
+        )
+        if retained is None:
+            raise LedgerError(
+                RETAINED_EARNINGS_MISSING,
+                "the chart has no active retained-earnings account (EQUITY/RETAINED)",
+                {"ledgerId": ledger.id},
+            )
+
+        lines: list[dict[str, Any]] = []
+        debit_total = ZERO
+        credit_total = ZERO
+        revenue_total = ZERO
+        expense_total = ZERO
+        for balance in sorted(balances.values(), key=lambda b: b.account.code):
+            account = balance.account
+            if account.type not in ("REVENUE", "EXPENSE"):
+                continue
+            if account.type == "REVENUE":
+                revenue_total += -balance.net
+            else:
+                expense_total += balance.net
+            zeroing = -balance.net
+            if zeroing > ZERO:
+                lines.append({"account_code": account.code, "debit": money(zeroing),
+                              "memo": f"Close {account.code} {account.name}"})
+                debit_total += zeroing
+            elif zeroing < ZERO:
+                lines.append({"account_code": account.code, "credit": money(-zeroing),
+                              "memo": f"Close {account.code} {account.name}"})
+                credit_total += -zeroing
+
+        net_income = revenue_total - expense_total
+        balance_due = debit_total - credit_total
+        if balance_due > ZERO:
+            lines.append({"account_code": retained.code, "credit": money(balance_due),
+                          "memo": f"Retained earnings FY{fiscal_year}"})
+            credit_total += balance_due
+        elif balance_due < ZERO:
+            lines.append({"account_code": retained.code, "debit": money(-balance_due),
+                          "memo": f"Retained earnings FY{fiscal_year}"})
+            debit_total += -balance_due
+        existing = self.store.find_by_external(
+            ledger.id, stmts.YEAR_END_CLOSE_SOURCE, external_id
+        )
+        if existing is not None and existing.status == "REVERSED":
+            # A reversal is how a close is corrected. The original external id is
+            # spent, so a re-close uses a fresh id rather than deduping to the
+            # reversed entry. Date the re-close on/after its reversal so the
+            # journal order stays chronological.
+            reversal = (
+                self.store.get_entry(existing.reversed_by_entry_id, include_lines=False)
+                if existing.reversed_by_entry_id else None
+            )
+            if reversal is not None and reversal.entry_date > closing_date:
+                closing_date = reversal.entry_date
+            existing = None
+            external_id = f"ye:{end_iso}:reclose:{self.store.next_entry_no(ledger.id)}"
+        if not lines and existing is not None:
+            # Already closed: the P&L is zero, so there is nothing left to move.
+            return {
+                "fiscalYear": int(fiscal_year),
+                "startDate": start_iso,
+                "endDate": end_iso,
+                "closingDate": closing_date,
+                "externalId": external_id,
+                "netIncome": money(ZERO),
+                "retainedAccount": {"code": retained.code, "name": retained.name},
+                "lines": [],
+                "totals": {"debit": money(ZERO), "credit": money(ZERO)},
+                "alreadyClosed": True,
+                "existingEntry": existing.to_dict(),
+            }
+        if not lines:
+            raise LedgerError(
+                YEAR_END_NOT_READY,
+                f"no revenue or expense balances to close for FY{fiscal_year}",
+                {"fiscalYear": fiscal_year, "startDate": start_iso, "endDate": end_iso},
+            )
+        if debit_total != credit_total:
+            raise LedgerError(
+                "UNBALANCED_ENTRY",
+                f"year-end plan does not balance: debits {money(debit_total)} "
+                f"vs credits {money(credit_total)}",
+                {"fiscalYear": fiscal_year},
+            )
+        return {
+            "fiscalYear": int(fiscal_year),
+            "startDate": start_iso,
+            "endDate": end_iso,
+            "closingDate": closing_date,
+            "externalId": external_id,
+            "netIncome": money(q_money(net_income)),
+            "retainedAccount": {"code": retained.code, "name": retained.name},
+            "lines": lines,
+            "totals": {
+                "debit": money(q_money(debit_total)),
+                "credit": money(q_money(credit_total)),
+            },
+            "alreadyClosed": existing is not None,
+            "existingEntry": existing.to_dict() if existing else None,
+        }
+
+    def preview_fiscal_year_close(
+        self,
+        ledger_id: str,
+        *,
+        fiscal_year: Optional[int] = None,
+        actor_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        ledger = self._require(ledger_id, actor_id=actor_id)
+        year = int(fiscal_year) if fiscal_year not in (None, "") else self._default_fiscal_year(ledger)
+        plan = self._year_end_plan(ledger, year)
+        plan["status"] = "ALREADY_CLOSED" if plan["alreadyClosed"] else "READY"
+        return plan
+
+    def close_fiscal_year(
+        self,
+        ledger_id: str,
+        *,
+        fiscal_year: Optional[int] = None,
+        actor_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Post the closing entry and roll current earnings into retained earnings.
+
+        Idempotent by `(source, externalId)`: a second call returns the existing
+        entry as `ALREADY_CLOSED` rather than double-posting. A correction is a
+        reversal, like every other entry.
+        """
+        ledger = self._require(ledger_id, actor_id=actor_id)
+        year = int(fiscal_year) if fiscal_year not in (None, "") else self._default_fiscal_year(ledger)
+        plan = self._year_end_plan(ledger, year)
+        if plan["alreadyClosed"]:
+            return {**plan, "status": "ALREADY_CLOSED", "entry": plan["existingEntry"]}
+
+        entry = self.post(
+            ledger_id,
+            entry_date=plan["closingDate"],
+            memo=f"Year-end close FY{year}: transfer current earnings to retained earnings",
+            lines=plan["lines"],
+            source=stmts.YEAR_END_CLOSE_SOURCE,
+            external_id=plan["externalId"],
+            actor_id=actor_id,
+        )
+        self.store.audit(
+            ledger_id, "YEAR_END_CLOSED", subject_id=entry.get("id"), actor=actor_id,
+            detail={
+                "fiscalYear": year,
+                "startDate": plan["startDate"],
+                "endDate": plan["endDate"],
+                "netIncome": plan["netIncome"],
+                "retainedAccount": plan["retainedAccount"]["code"],
+            },
+        )
+        return {**plan, "status": "CLOSED", "entry": entry}
+
+    # ── Budgets, dimensions, runway ──────────────────────────────────────────
+    def create_budget(
+        self,
+        ledger_id: str,
+        *,
+        name: str,
+        start: object,
+        end: object,
+        lines: Sequence[dict[str, Any]],
+        note: Optional[str] = None,
+        currency: Optional[str] = None,
+        actor_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        ledger = self._require(ledger_id, actor_id=actor_id)
+        start_iso = iso(parse_date(start, field="start"))
+        end_iso = iso(parse_date(end, field="end"))
+        if start_iso > end_iso:
+            raise LedgerError(UNSUPPORTED_DATE_RANGE, "`start` is after `end`",
+                              {"start": start_iso, "end": end_iso})
+        accounts = {account.code: account for account in self.store.list_accounts(ledger_id)}
+        if not lines:
+            raise LedgerError(BUDGET_INVALID, "a budget needs at least one line", {})
+        prepared = []
+        for index, line in enumerate(lines):
+            code = str(line.get("account_code") or line.get("accountCode") or "").strip()
+            if code not in accounts:
+                raise LedgerError(ACCOUNT_NOT_FOUND, f"unknown account {code!r}",
+                                  {"accountCode": code, "line": index})
+            raw_amount = line.get("amount")
+            amount = D(raw_amount)
+            if amount < ZERO:
+                raise LedgerError(BUDGET_INVALID, "a budget amount cannot be negative",
+                                  {"accountCode": code, "line": index})
+            dimensions = line.get("dimensions") or {}
+            if not isinstance(dimensions, dict):
+                raise LedgerError(BUDGET_INVALID, "`dimensions` must be an object",
+                                  {"accountCode": code, "line": index})
+            prepared.append({
+                "id": f"bl_{uuid.uuid4().hex[:20]}",
+                "accountCode": code,
+                "amount": money(amount),
+                "dimensions": {
+                    str(key).strip(): str(value).strip()
+                    for key, value in dimensions.items() if str(key).strip()
+                },
+                "memo": line.get("memo"),
+            })
+        budget = self.store.insert_budget(
+            f"bud_{uuid.uuid4().hex[:20]}", ledger_id,
+            str(name or "").strip() or "Budget",
+            start_iso, end_iso, lines=prepared,
+            currency=str(currency or ledger.base_currency or "USD").upper(),
+            note=note, created_by=actor_id,
+        )
+        self.store.audit(
+            ledger_id, "BUDGET_CREATED", subject_id=budget["id"], actor=actor_id,
+            detail={"name": budget["name"], "startDate": start_iso,
+                    "endDate": end_iso, "lines": len(prepared)},
+        )
+        return budget
+
+    def list_budgets(self, ledger_id: str, *, limit: int = 100,
+                     actor_id: Optional[str] = None) -> list[dict[str, Any]]:
+        self._require(ledger_id, actor_id=actor_id)
+        return self.store.list_budgets(ledger_id, limit=limit)
+
+    def get_budget(self, ledger_id: str, budget_id: str, *,
+                   actor_id: Optional[str] = None) -> dict[str, Any]:
+        self._require(ledger_id, actor_id=actor_id)
+        return self.store.require_budget(ledger_id, budget_id)
+
+    def budget_vs_actual(self, ledger_id: str, budget_id: str, *,
+                         actor_id: Optional[str] = None) -> dict[str, Any]:
+        self._require(ledger_id, actor_id=actor_id)
+        budget = self.store.require_budget(ledger_id, budget_id)
+        accounts = self.store.list_accounts(ledger_id)
+        postings = self.store.postings(
+            ledger_id, start=budget["startDate"], end=budget["endDate"]
+        )
+        return budgeting.budget_vs_actual(
+            budget=budget, accounts=accounts, postings=postings
+        )
+
+    def dimension_summary(
+        self,
+        ledger_id: str,
+        dimension: str,
+        *,
+        start: object = None,
+        end: object = None,
+        actor_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        self._require(ledger_id, actor_id=actor_id)
+        key = str(dimension or "").strip()
+        if not key:
+            raise LedgerError(DIMENSION_REQUIRED, "`dimension` is required",
+                              {"dimension": dimension})
+        start_iso, end_iso = self._default_range(ledger_id, start, end)
+        accounts = self.store.list_accounts(ledger_id)
+        postings = self.store.postings(ledger_id, start=start_iso, end=end_iso)
+        result = budgeting.dimension_summary(
+            accounts=accounts, postings=postings, dimension=key
+        )
+        result["startDate"] = start_iso
+        result["endDate"] = end_iso
+        return result
+
+    def cash_runway(
+        self,
+        ledger_id: str,
+        *,
+        as_of: object = None,
+        history_days: int = 90,
+        horizon_days: int = 90,
+        actor_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        self._require(ledger_id, actor_id=actor_id)
+        as_of_iso = iso(parse_date(as_of)) if as_of else iso(today())
+        since = (date.fromisoformat(as_of_iso) - timedelta(days=max(1, int(history_days)))).isoformat()
+        accounts = self.store.list_accounts(ledger_id)
+        cash_codes = {account.code for account in accounts if account.is_cash}
+        cash_rows = self.store.postings(ledger_id, end=as_of_iso)
+        opening_cash = sum(
+            (D(row.get("baseDebit")) - D(row.get("baseCredit"))
+             for row in cash_rows if row.get("accountCode") in cash_codes),
+            ZERO,
+        )
+        flow = self.cash_flow(ledger_id, start=since, end=as_of_iso, actor_id=actor_id)
+        receivables = self.aging(ledger_id, kind="AR", as_of=as_of_iso, actor_id=actor_id)
+        payables = self.aging(ledger_id, kind="AP", as_of=as_of_iso, actor_id=actor_id)
+        result = budgeting.cash_runway(
+            opening_cash=opening_cash,
+            operating_cash_flow=D(flow["operating"]),
+            open_receivables=D(receivables["openTotal"]),
+            open_payables=D(payables["openTotal"]),
+            history_days=int(history_days),
+            horizon_days=int(horizon_days),
+        )
+        result["asOf"] = as_of_iso
+        result["operatingWindow"] = {"startDate": since, "endDate": as_of_iso}
+        result["receivables"] = {
+            "openTotal": receivables["openTotal"],
+            "buckets": receivables["buckets"],
+            "reconciled": receivables["reconciled"],
+        }
+        result["payables"] = {
+            "openTotal": payables["openTotal"],
+            "buckets": payables["buckets"],
+            "reconciled": payables["reconciled"],
+        }
+        result["checks"] = list(result["checks"]) + [
+            {"name": "receivables-reconcile-to-control",
+             "ok": bool(receivables["reconciled"]),
+             "detail": f"AR open {receivables['openTotal']}"},
+            {"name": "payables-reconcile-to-control",
+             "ok": bool(payables["reconciled"]),
+             "detail": f"AP open {payables['openTotal']}"},
+        ]
+        result["balanced"] = all(check["ok"] for check in result["checks"])
+        return result
 
     # ── Periods ──────────────────────────────────────────────────────────────
     def list_periods(self, ledger_id: str, *, actor_id: Optional[str] = None) -> list[dict[str, Any]]:
@@ -549,6 +932,158 @@ class LedgerService:
                   actor_id: Optional[str] = None) -> list[dict[str, Any]]:
         self._require(ledger_id, actor_id=actor_id)
         return self.store.list_audit(ledger_id, limit=limit)
+
+    def verify_audit(self, ledger_id: str, *,
+                     actor_id: Optional[str] = None) -> dict[str, Any]:
+        """Prove the audit trail has not been edited, reordered or truncated.
+
+        A broken chain names the first bad event; a legacy unsealed trail says
+        so instead of claiming a verification it did not perform.
+        """
+        self._require(ledger_id, actor_id=actor_id)
+        return self.store.verify_audit(ledger_id)
+
+    # ── Source-document attachments ──────────────────────────────────────────
+    def _require_entry_in_ledger(self, ledger_id: str, entry_id: str) -> JournalEntry:
+        entry = self.store.require_entry(str(entry_id or ""))
+        if entry.ledger_id != ledger_id:
+            raise LedgerError(
+                ENTRY_NOT_FOUND,
+                f"entry {entry_id} is not in ledger {ledger_id}",
+                {"entryId": entry_id, "ledgerId": ledger_id},
+            )
+        return entry
+
+    def attach_document(
+        self,
+        ledger_id: str,
+        entry_id: str,
+        artifact_id: str,
+        *,
+        artifact_service: Any = None,
+        note: Optional[str] = None,
+        actor_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Attach an artifact (receipt/invoice/statement) to a posted entry.
+
+        Only the artifact id and its content hash are stored; the bytes stay in
+        the ONE artifact store. A document without a checksum is refused,
+        because an unverifiable reference is not evidence.
+        """
+        self._require(ledger_id, actor_id=actor_id)
+        entry = self._require_entry_in_ledger(ledger_id, entry_id)
+        if artifact_service is None:
+            raise LedgerError(
+                ARTIFACT_STORE_UNAVAILABLE,
+                "the artifact store is unavailable; cannot attach a document",
+                {"artifactId": artifact_id},
+            )
+        try:
+            artifact = artifact_service.get(str(artifact_id))
+        except Exception as exc:  # noqa: BLE001 - a missing artifact is a named refusal
+            raise LedgerError(
+                ARTIFACT_NOT_FOUND,
+                f"artifact {artifact_id} was not found",
+                {"artifactId": artifact_id},
+            ) from exc
+        checksum = getattr(artifact, "checksum", None)
+        if not checksum:
+            raise LedgerError(
+                ARTIFACT_UNHASHED,
+                "the artifact has no content hash; it cannot be attached as evidence",
+                {"artifactId": artifact_id},
+            )
+        attachment = self.store.insert_attachment(
+            f"latt_{uuid.uuid4().hex[:20]}",
+            ledger_id,
+            entry.id,
+            str(getattr(artifact, "id", artifact_id)),
+            checksum=str(checksum),
+            artifact_name=getattr(artifact, "name", None),
+            mime_type=getattr(artifact, "mime_type", None),
+            size_bytes=getattr(artifact, "size_bytes", None),
+            note=str(note or "").strip()[:500] or None,
+            attached_by=actor_id,
+        )
+        self.store.audit(
+            ledger_id, "DOCUMENT_ATTACHED", subject_id=entry.id, actor=actor_id,
+            detail={"attachmentId": attachment["id"],
+                    "artifactId": attachment["artifactId"],
+                    "checksum": attachment["checksum"]},
+        )
+        return attachment
+
+    def list_attachments(
+        self,
+        ledger_id: str,
+        *,
+        entry_id: Optional[str] = None,
+        limit: int = 200,
+        actor_id: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        self._require(ledger_id, actor_id=actor_id)
+        if entry_id:
+            self._require_entry_in_ledger(ledger_id, entry_id)
+        return self.store.list_attachments(ledger_id, entry_id=entry_id, limit=limit)
+
+    def detach_document(
+        self,
+        ledger_id: str,
+        attachment_id: str,
+        *,
+        actor_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        self._require(ledger_id, actor_id=actor_id)
+        attachment = self.store.require_attachment(ledger_id, attachment_id)
+        removed = self.store.delete_attachment(ledger_id, attachment_id)
+        self.store.audit(
+            ledger_id, "DOCUMENT_DETACHED", subject_id=attachment["entryId"], actor=actor_id,
+            detail={"attachmentId": attachment["id"],
+                    "artifactId": attachment["artifactId"],
+                    "checksum": attachment["checksum"]},
+        )
+        return {"removed": removed, "attachment": attachment}
+
+    def verify_attachment(
+        self,
+        ledger_id: str,
+        attachment_id: str,
+        *,
+        artifact_service: Any = None,
+        actor_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Compare the frozen checksum with the artifact's current content hash."""
+        self._require(ledger_id, actor_id=actor_id)
+        attachment = self.store.require_attachment(ledger_id, attachment_id)
+        if artifact_service is None:
+            raise LedgerError(
+                ARTIFACT_STORE_UNAVAILABLE,
+                "the artifact store is unavailable; cannot verify the document",
+                {"attachmentId": attachment_id},
+            )
+        try:
+            artifact = artifact_service.get(attachment["artifactId"])
+        except Exception:  # noqa: BLE001 - a deleted artifact is evidence of loss
+            return {
+                "status": "MISSING", "ok": False,
+                "attachmentId": attachment["id"], "entryId": attachment["entryId"],
+                "artifactId": attachment["artifactId"],
+                "storedChecksum": attachment["checksum"],
+                "currentChecksum": None,
+                "reason": "ARTIFACT_MISSING",
+            }
+        current = getattr(artifact, "checksum", None)
+        matched = bool(current) and str(current) == attachment["checksum"]
+        return {
+            "status": "MATCHED" if matched else "CHANGED",
+            "ok": matched,
+            "attachmentId": attachment["id"],
+            "entryId": attachment["entryId"],
+            "artifactId": attachment["artifactId"],
+            "storedChecksum": attachment["checksum"],
+            "currentChecksum": current,
+            "reason": None if matched else "CHECKSUM_MISMATCH",
+        }
 
     # ── Categorisation rules ─────────────────────────────────────────────────
     def create_rule(

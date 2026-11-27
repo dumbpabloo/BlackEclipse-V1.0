@@ -29,6 +29,7 @@ def client():
 OPERATOR_ROUTES = [
     ("GET", "/automations", None),
     ("GET", "/automations/metrics", None),
+    ("GET", "/automations/audit", None),
     ("GET", "/automations/statuses", None),
     ("POST", "/automations", {"name": "x", "trigger": {"type": "manual"}, "action": {"type": "run_agent", "objective": "x"}}),
     ("GET", "/automations/nope", None),
@@ -61,6 +62,57 @@ def test_every_operator_route_refuses_a_non_operator(monkeypatch, method, path, 
 def test_every_operator_route_allows_loopback(client, method, path, body):
     res = client.request(method, path, json=body)
     assert res.status_code != 403, f"{method} {path}: {res.text}"
+
+
+def test_bot_audit_records_crud_lifecycle_and_run(client):
+    created = client.post("/automations", json={
+        "name": "Audited bot",
+        "state": "draft",
+        "trigger": {"type": "manual"},
+        "action": {"type": "send_notification", "notificationTemplate": "hi"},
+    }).json()["automation"]
+    bot_id = created["id"]
+
+    client.patch(f"/automations/{bot_id}", json={"name": "Audited bot 2"})
+    client.post(f"/automations/{bot_id}/enable")
+    client.post(f"/automations/{bot_id}/run")
+    client.delete(f"/automations/{bot_id}")
+
+    events = client.get(f"/automations/audit?automationId={bot_id}").json()["events"]
+    actions = {event["action"] for event in events}
+    assert {"created", "updated", "lifecycle", "run", "deleted"} <= actions
+    # Deleting the bot retains its audit trail.
+    assert any(event["action"] == "deleted" for event in events)
+
+
+def test_webhook_token_is_generated_and_required(client):
+    created = client.post("/automations", json={
+        "name": "External wake",
+        "state": "active",
+        "trigger": {"type": "webhook"},
+        "action": {"type": "send_notification", "notificationTemplate": "wake"},
+    }).json()["automation"]
+    automation_id = created["id"]
+    secret = created["trigger"]["webhookSecret"]
+    assert secret and len(secret) >= 24
+
+    assert client.post(f"/automations/webhook/{automation_id}", json={}).status_code == 403
+    assert client.post(
+        f"/automations/webhook/{automation_id}",
+        json={}, headers={"x-eclipse-webhook-token": "wrong"},
+    ).status_code == 403
+
+    fired = client.post(
+        f"/automations/webhook/{automation_id}",
+        json={"deliveryId": "ext-1"},
+        headers={"x-eclipse-webhook-token": secret},
+    )
+    assert fired.status_code == 200, fired.text
+    assert fired.json()["executionId"]
+
+    # An edit must not silently rotate the caller's token.
+    updated = client.patch(f"/automations/{automation_id}", json={"name": "External wake 2"}).json()
+    assert updated["automation"]["trigger"]["webhookSecret"] == secret
 
 
 def test_create_validate_dry_run_and_history(client):

@@ -10,9 +10,10 @@ legacy `/jobs` routes are a thin adapter over the SAME service (ADR-H114).
 
 from __future__ import annotations
 
+import hmac
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
 from ..automation.service import AutomationError
 from ..deps import require_operator, service
@@ -54,6 +55,44 @@ def create_automation(body: dict[str, Any] = Body(...), _: bool = Depends(requir
     return {"success": True, "automation": definition.public()}
 
 
+@router.post("/automations/webhook/{automation_id}")
+async def automation_webhook(
+    automation_id: str,
+    request: Request,
+    body: dict[str, Any] = Body(default={}),
+) -> dict[str, Any]:
+    """Fire an active WEBHOOK bot from an external caller.
+
+    Deliberately NOT operator-gated: the whole point is a CI job, a trading
+    system or another service waking the bot. Authorization is the per-bot
+    bearer token generated at create time, compared in constant time. The token
+    never appears in a URL the runtime logs (header preferred); `?token=` is
+    accepted for callers that cannot set headers.
+    """
+    svc = _svc()
+    definition = svc.get(automation_id)
+    if definition is None or definition.trigger.type != "webhook":
+        raise HTTPException(status_code=404, detail="webhook bot not found")
+    if definition.state != "active":
+        raise HTTPException(status_code=409, detail="webhook bot is not active")
+    expected = definition.trigger.webhook_secret or ""
+    supplied = (
+        request.headers.get("x-eclipse-webhook-token")
+        or request.query_params.get("token")
+        or ""
+    )
+    if not expected or not supplied or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(status_code=403, detail="invalid webhook token")
+    delivery_id = request.headers.get("x-request-id") or body.get("deliveryId")
+    execution_id = await svc.run_webhook(
+        automation_id,
+        delivery_id=str(delivery_id)[:200] if delivery_id else None,
+    )
+    if execution_id is None:
+        raise HTTPException(status_code=409, detail="webhook bot could not run")
+    return {"success": True, "executionId": execution_id}
+
+
 @router.get("/automations/monitors")
 def list_monitors(_: bool = Depends(require_operator)) -> dict[str, Any]:
     """The closed catalogue of proactive portfolio monitors."""
@@ -82,6 +121,19 @@ def automation_statuses(ids: Optional[str] = None, _: bool = Depends(require_ope
     """
     wanted = [part for part in (ids or "").split(",") if part] or None
     return {"success": True, "statuses": _svc().statuses(ids=wanted)}
+
+
+@router.get("/automations/audit")
+def automation_audit(
+    automationId: Optional[str] = None,  # noqa: N803 - wire name
+    limit: int = 200,
+    _: bool = Depends(require_operator),
+) -> dict[str, Any]:
+    """The bot CRUD/lifecycle/run audit trail (newest first)."""
+    return {
+        "success": True,
+        "events": _svc().audit(automationId, limit=limit),
+    }
 
 
 @router.get("/automations/{automation_id}")

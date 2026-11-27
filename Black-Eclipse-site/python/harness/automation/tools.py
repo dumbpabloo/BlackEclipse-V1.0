@@ -234,7 +234,7 @@ def _build_trigger(args: dict[str, Any]) -> dict[str, Any]:
 
 #: Trigger kinds that make a bot run BY ITSELF. A manual bot only runs when the
 #: user (or `bot_run`) asks, so it needs no schedule approval.
-_AUTONOMOUS_TRIGGERS = ("cron", "interval", "one_time", "event", "condition")
+_AUTONOMOUS_TRIGGERS = ("cron", "interval", "one_time", "event", "condition", "webhook")
 
 #: Pending delete confirmations, keyed by proposal id. In-process and single-use:
 #: the reference persists proposals to disk, but a confirmation that outlives the
@@ -709,7 +709,7 @@ def register_automation_tools(registry: ToolRegistry) -> list[str]:
             name="bot_create",
             description="Create a persistent autonomous bot (a scheduled agent) that runs in the "
             "background even after the browser closes. Set triggerType to manual, one_time, "
-            "interval, cron, event or condition; provide objective; optionally name, agentId (any installed "
+            "interval, cron, event, condition or webhook; provide objective; optionally name, agentId (any installed "
             "preset), description, state, workspaceRoot, autonomy, and the execution, retry, "
             "concurrency, limits, delivery and permissions blocks the Bots UI also exposes. "
             "A bot gets the SAME tool surface as an interactive turn of its agent.",
@@ -723,7 +723,7 @@ def register_automation_tools(registry: ToolRegistry) -> list[str]:
                     "code-agent). An unknown id is refused.",
                 },
                 "state": {"type": "string", "enum": ["draft", "active", "paused", "disabled"]},
-                "triggerType": {"type": "string", "enum": ["manual", "one_time", "interval", "cron", "event", "condition"]},
+                "triggerType": {"type": "string", "enum": ["manual", "one_time", "interval", "cron", "event", "condition", "webhook"]},
                 "cron": {"type": "string"}, "intervalSeconds": {"type": "integer"},
                 "runAt": {"type": "string"}, "timezone": {"type": "string"},
                 "eventType": {"type": "string", "description": "Dotted event name for an event trigger, e.g. 'automation.completed'."},
@@ -765,7 +765,7 @@ def register_automation_tools(registry: ToolRegistry) -> list[str]:
             input_schema=_obj({
                 "botId": {"type": "string"}, "name": {"type": "string"}, "objective": {"type": "string"},
                 "agentId": {"type": "string"},
-                "triggerType": {"type": "string", "enum": ["manual", "one_time", "interval", "cron", "event", "condition"]},
+                "triggerType": {"type": "string", "enum": ["manual", "one_time", "interval", "cron", "event", "condition", "webhook"]},
                 "cron": {"type": "string"}, "intervalSeconds": {"type": "integer"},
                 "runAt": {"type": "string"}, "timezone": {"type": "string"},
                 "eventType": {"type": "string", "description": "Dotted event name for an event trigger, e.g. 'automation.completed'."},

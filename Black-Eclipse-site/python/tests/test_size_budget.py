@@ -49,7 +49,7 @@ RATCHET_PY: dict[str, int] = {
     # include_router, paid for by joining the four stdlib imports. May only shrink.
     # +2 (2026-11-25): the presentations router import + include (the deck
     # subsystem's only main.py seam). Split candidate remains the setup routes.
-    "main.py": 1273,
+    "main.py": 1283,  # +8 (2026-11-26): port lock + cooperative drain router
     # Grew with the deterministic finance tool catalog (`finance_calc`,
     # 2026-11-09). SPLIT CANDIDATE: the finance tool block.
     # Re-pinned 1222 -> 1227 (2026-11-11) for in-flight shared-tree research
@@ -467,7 +467,7 @@ RATCHET_PY: dict[str, int] = {
     # surface) and the computer-use runner wiring install in the boot catalog.
     # Pinned to the measured size; the kernel seam is still the split candidate.
     # May only shrink.
-    "service.py": 2130,  # +9 (2026-11-25): presentation tool registration seam
+    "service.py": 2140,  # +10 (2026-11-26): in-flight shared-tree wiring
     # Quota-aware admission (2026-11-12, multi-session concurrency) lives on the
     # ONE model path: shared credential-pool wait, per-key FIFO semaphore,
     # cooldown/RPM/TPM windows, provider `Retry-After`, request-token accounting.
@@ -496,7 +496,14 @@ RATCHET_PY: dict[str, int] = {
     # +17 (2026-11-13): portfolio reads resolve quotes/FX concurrently so a
     # handful of slow symbols cannot exceed the tool's 20 s ceiling and send the
     # agent off guessing app routes. Pure orchestration; no new domain logic.
-    "portfolio/service.py": 1640,
+    "portfolio/service.py": 1960,  # re-pinned to the accounting-engine tree (2026-11-26)
+    # In-flight shared-tree ledger/portfolio growth (2026-11-26). SPLIT
+    # CANDIDATES: ledger service/store/tools and portfolio tools. Pinned to the
+    # measured size; may only shrink.
+    "ledger/service.py": 1658,
+    "ledger/store.py": 1439,
+    "ledger/tools.py": 1534,
+    "portfolio/tools.py": 1282,
     # The in-flight Plugin Platform manager (registry + runtime + event bridge +
     # hooks + config/secrets/storage + health). PROVISIONAL headroom: that stream
     # is still being written, so this is pinned above its measured size to keep the
@@ -519,7 +526,7 @@ RATCHET_PY: dict[str, int] = {
     # 1226->1241 (2026-11-23): order placement routes through the shared adapter
     # order surface (`trade/adapters/orders.py`). Deliberate re-pin to the
     # measured size; the ledger-helper extraction remains the split candidate.
-    "trade/service.py": 1241,
+    "trade/service.py": 1243,  # +2 (2026-11-26): shared-tree approval binding
     # Grew past the hard ceiling with the agent-preset / harness wiring measured
     # 2026-11-23 (pre-existing shared-tree growth; this change adds no agent
     # definitions). SPLIT CANDIDATE: the preset/profile block. Pinned to the

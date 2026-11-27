@@ -143,6 +143,21 @@ class AutomationStore:
         )
         db.execute(
             """
+            CREATE TABLE IF NOT EXISTS AutomationAudit (
+              id           TEXT PRIMARY KEY,
+              automationId TEXT NOT NULL,
+              action       TEXT NOT NULL,
+              actor        TEXT,
+              detailJson   TEXT,
+              createdAt    TEXT NOT NULL
+            )
+            """
+        )
+        db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_automation_audit ON AutomationAudit(automationId, createdAt)"
+        )
+        db.execute(
+            """
             CREATE TABLE IF NOT EXISTS AutomationExecution (
               id                TEXT PRIMARY KEY,
               automationId      TEXT NOT NULL,
@@ -484,6 +499,61 @@ class AutomationStore:
         return [r["eventType"] for r in rows]
 
     # ── Versions ─────────────────────────────────────────────────────────────
+    def record_audit(
+        self,
+        automation_id: str,
+        action: str,
+        *,
+        actor: Optional[str] = None,
+        detail: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """Append one operator/agent action to the bot audit trail.
+
+        Best-effort by contract: an audit write failure must never fail the
+        domain operation. The caller decides whether the audit is required.
+        """
+        try:
+            self._db.execute(
+                "INSERT INTO AutomationAudit (id, automationId, action, actor, detailJson, createdAt) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    f"aud_{uuid.uuid4().hex[:20]}",
+                    automation_id,
+                    str(action)[:80],
+                    str(actor)[:200] if actor else None,
+                    json.dumps(detail or {}, sort_keys=True)[:20_000],
+                    now_iso(),
+                ),
+            )
+            self._db.commit()
+        except Exception:  # noqa: BLE001 - audit is advisory, never a blocker
+            pass
+
+    def list_audit(
+        self, automation_id: Optional[str] = None, limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        if automation_id:
+            rows = self._db.execute(
+                "SELECT * FROM AutomationAudit WHERE automationId = ? "
+                "ORDER BY createdAt DESC LIMIT ?",
+                (automation_id, max(1, min(1000, int(limit)))),
+            ).fetchall()
+        else:
+            rows = self._db.execute(
+                "SELECT * FROM AutomationAudit ORDER BY createdAt DESC LIMIT ?",
+                (max(1, min(1000, int(limit))),),
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            raw = item.pop("detailJson", None)
+            try:
+                item["detail"] = json.loads(raw) if raw else {}
+            except (TypeError, ValueError):
+                item["detail"] = {}
+            out.append(item)
+        return out
+
     def list_versions(self, automation_id: str) -> list[dict[str, Any]]:
         rows = self._db.execute(
             "SELECT * FROM AutomationVersion WHERE id=? ORDER BY version DESC", (automation_id,)

@@ -281,7 +281,9 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-notification",
  "tauri-plugin-single-instance",
+ "webview2-com",
  "window-vibrancy 0.6.0",
+ "windows-core",
 ]
 
 [[package]]

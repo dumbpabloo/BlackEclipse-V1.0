@@ -20,7 +20,11 @@ from . import analytics
 from .accounting import AccountingResult, compute_accounting, lot_selection_error
 from .analytics import _pct
 from .errors import (
+    ACCOUNT_EXISTS,
+    ACCOUNT_IN_USE,
+    ACCOUNT_NOT_FOUND,
     BASIS_UNAVAILABLE,
+    INVALID_ACCOUNT,
     INVALID_AMOUNT,
     INVALID_PRICE,
     INVALID_TARGET,
@@ -34,6 +38,7 @@ from .errors import (
     PortfolioError,
 )
 from .market_adapter import MarketAdapter
+from .tax_report import build_realized_gains_report
 from .models import (
     ACQUISITIONS,
     BASIS_ADJUSTING,
@@ -127,8 +132,136 @@ class PortfolioService:
         )
         return updated or record
 
+    # ── Accounts (custody / cash separation) ─────────────────────────────────
+    def _require_account(self, portfolio_id: str, account_id: str) -> dict[str, Any]:
+        account = self.store.get_account(str(account_id or ""))
+        if account is None or account.get("portfolioId") != portfolio_id:
+            raise PortfolioError(
+                ACCOUNT_NOT_FOUND,
+                f"account {account_id} not found in portfolio {portfolio_id}",
+                {"accountId": account_id, "portfolioId": portfolio_id},
+            )
+        return account
+
+    def create_account(
+        self,
+        portfolio_id: str,
+        name: str,
+        *,
+        kind: str = "brokerage",
+        institution: Optional[str] = None,
+        currency: Optional[str] = None,
+        external_id: Optional[str] = None,
+        actor_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        portfolio = self._require_portfolio(portfolio_id, actor_id)
+        clean_name = str(name or "").strip()
+        if not clean_name:
+            raise PortfolioError(INVALID_ACCOUNT, "`name` is required", {})
+        external = str(external_id).strip() if external_id else None
+        if external:
+            for existing in self.store.list_accounts(portfolio_id):
+                if existing.get("externalId") == external:
+                    raise PortfolioError(
+                        ACCOUNT_EXISTS,
+                        f"account external id {external!r} is already in this portfolio",
+                        {"externalId": external, "accountId": existing["id"]},
+                    )
+        account = self.store.create_account(
+            new_id("acct"), portfolio_id, clean_name,
+            kind=str(kind or "brokerage"),
+            institution=institution,
+            currency=(currency or portfolio.get("baseCurrency") or "USD").upper(),
+            external_id=external,
+        )
+        self.store.append_audit(
+            new_id("audit"), portfolio_id, "ACCOUNT_CREATED", actor=actor_id,
+            after={"accountId": account["id"], "name": account["name"],
+                   "currency": account["currency"]},
+        )
+        return account
+
+    def list_accounts(self, portfolio_id: str, *,
+                      actor_id: Optional[str] = None) -> list[dict[str, Any]]:
+        self._require_portfolio(portfolio_id, actor_id)
+        return self.store.list_accounts(portfolio_id)
+
+    def update_account(
+        self,
+        portfolio_id: str,
+        account_id: str,
+        fields: dict[str, Any],
+        *,
+        actor_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        self._require_portfolio(portfolio_id, actor_id)
+        existing = self._require_account(portfolio_id, account_id)
+        external = fields.get("external_id", fields.get("externalId", existing.get("externalId")))
+        external = str(external).strip() if external else None
+        if external:
+            for other in self.store.list_accounts(portfolio_id):
+                if other["id"] != account_id and other.get("externalId") == external:
+                    raise PortfolioError(
+                        ACCOUNT_EXISTS,
+                        f"account external id {external!r} is already in this portfolio",
+                        {"externalId": external, "accountId": other["id"]},
+                    )
+        name = str(fields.get("name") or existing["name"]).strip()
+        if not name:
+            raise PortfolioError(INVALID_ACCOUNT, "`name` cannot be empty", {})
+        updated = self.store.create_account(
+            account_id, portfolio_id, name,
+            kind=str(fields.get("kind") or existing.get("kind") or "brokerage"),
+            institution=fields.get("institution", existing.get("institution")),
+            currency=str(fields.get("currency") or existing.get("currency") or "USD").upper(),
+            external_id=external,
+        )
+        self.store.append_audit(
+            new_id("audit"), portfolio_id, "ACCOUNT_UPDATED", actor=actor_id,
+            before={"name": existing.get("name"), "kind": existing.get("kind")},
+            after={"accountId": account_id, "name": updated["name"], "kind": updated["kind"]},
+        )
+        return updated
+
+    def delete_account(self, portfolio_id: str, account_id: str, *,
+                       actor_id: Optional[str] = None) -> dict[str, Any]:
+        self._require_portfolio(portfolio_id, actor_id)
+        account = self._require_account(portfolio_id, account_id)
+        in_use = [
+            tx.id for tx in self.store.list_transactions(portfolio_id)
+            if tx.account_id == account_id
+        ]
+        if in_use:
+            raise PortfolioError(
+                ACCOUNT_IN_USE,
+                "this account has transactions; reassign or delete them first",
+                {"accountId": account_id, "transactions": len(in_use)},
+            )
+        removed = self.store.delete_account(portfolio_id, account_id)
+        self.store.append_audit(
+            new_id("audit"), portfolio_id, "ACCOUNT_DELETED", actor=actor_id,
+            before={"accountId": account_id, "name": account.get("name")},
+            after={"removed": removed},
+        )
+        return {"deleted": removed, "accountId": account_id}
+
     def list_portfolios(self, owner_id: Optional[str] = None) -> list[dict[str, Any]]:
         return self.store.list_portfolios(owner_id)
+
+    def audit_log(self, portfolio_id: str, *, limit: int = 200,
+                  actor_id: Optional[str] = None) -> list[dict[str, Any]]:
+        self._require_portfolio(portfolio_id, actor_id)
+        return self.store.list_audit(portfolio_id, limit=limit)
+
+    def verify_audit(self, portfolio_id: str, *,
+                     actor_id: Optional[str] = None) -> dict[str, Any]:
+        """Prove the portfolio audit trail has not been edited or reordered.
+
+        The same SHA-256 chain rule as the General Ledger; a broken chain names
+        the first bad event instead of returning a bare boolean.
+        """
+        self._require_portfolio(portfolio_id, actor_id)
+        return self.store.verify_audit(portfolio_id)
 
     def get_portfolio_record(self, portfolio_id: str,
                              actor_id: Optional[str] = None) -> Optional[dict[str, Any]]:
@@ -192,6 +325,11 @@ class PortfolioService:
             return _failed(built)
         tx = built
         warnings: list[str] = []
+        if tx.account_id:
+            try:
+                self._require_account(portfolio_id, tx.account_id)
+            except PortfolioError as exc:
+                return _failed(exc)
 
         validation = self._validate(tx, portfolio)
         if validation is not None:
@@ -207,6 +345,10 @@ class PortfolioService:
         if tx.symbol and is_disposal:
             method = self._method(portfolio)
             existing = self.store.list_transactions(portfolio_id, symbol=tx.symbol)
+            if tx.account_id:
+                # An account-scoped disposal can only consume that account's lots;
+                # shares in another custody account cannot cover it.
+                existing = [row for row in existing if row.account_id == tx.account_id]
             probe = compute_accounting(portfolio_id, tx.symbol, [*existing, tx], method,
                                        currency=tx.currency)
             if probe.has_errors():
@@ -223,7 +365,10 @@ class PortfolioService:
             after={"transactionId": stored.id, "type": stored.transaction_type.value,
                    "symbol": stored.symbol, "duplicate": duplicate},
         )
-        position = self._position_for(portfolio_id, stored.symbol, portfolio) if stored.symbol else None
+        position = (
+            self._position_for(portfolio_id, stored.symbol, portfolio, account_id=stored.account_id)
+            if stored.symbol else None
+        )
         return {
             "status": "SUCCESS",
             "duplicate": duplicate,
@@ -258,7 +403,14 @@ class PortfolioService:
         symbol = str(payload.get("symbol") or "").upper()
         if not symbol:
             return _failed(PortfolioError(INVALID_TRANSACTION, "symbol is required"))
-        result = self._symbol_accounting(portfolio_id, symbol, self._method(portfolio))
+        account_id = payload.get("account_id") or payload.get("accountId")
+        if account_id:
+            try:
+                self._require_account(portfolio_id, str(account_id))
+            except PortfolioError as exc:
+                return _failed(exc)
+        result = self._symbol_accounting(portfolio_id, symbol, self._method(portfolio),
+                                         account_id=account_id)
         qty = result.remaining_qty
         if qty <= 0:
             return _failed(PortfolioError(
@@ -281,6 +433,7 @@ class PortfolioService:
             "quantity": str(qty),
             "price": str(price),
             "currency": result.currency,
+            "account_id": account_id,
             "source": payload.get("source", "manual"),
             "created_by": payload.get("created_by"),
             "reason": payload.get("reason"),
@@ -320,10 +473,19 @@ class PortfolioService:
             return _failed(PortfolioError(INVALID_TRANSACTION, "target_quantity is required"))
         if target < 0:
             return _failed(PortfolioError(NEGATIVE_QUANTITY, "target_quantity cannot be negative"))
-        result = self._symbol_accounting(portfolio_id, symbol, self._method(portfolio))
+        account_id = payload.get("account_id") or payload.get("accountId")
+        if account_id:
+            try:
+                self._require_account(portfolio_id, str(account_id))
+            except PortfolioError as exc:
+                return _failed(exc)
+        result = self._symbol_accounting(portfolio_id, symbol, self._method(portfolio),
+                                         account_id=account_id)
         delta = target - result.remaining_qty
         if delta == 0:
-            return {"status": "SUCCESS", "changed": False, "position": self._position_for(portfolio_id, symbol, portfolio)}
+            return {"status": "SUCCESS", "changed": False,
+                    "position": self._position_for(portfolio_id, symbol, portfolio,
+                                                   account_id=account_id)}
         before = {"quantity": str(result.remaining_qty)}
         outcome = self.add_transaction(portfolio_id, {
             "type": TransactionType.ADJUSTMENT.value,
@@ -331,6 +493,7 @@ class PortfolioService:
             "quantity": str(delta),
             "price": payload.get("price"),
             "currency": result.currency,
+            "account_id": account_id,
             "source": payload.get("source", "correction"),
             "created_by": payload.get("created_by"),
             "reason": reason,
@@ -368,8 +531,11 @@ class PortfolioService:
 
     # ── Accounting ───────────────────────────────────────────────────────────
     def _symbol_accounting(self, portfolio_id: str, symbol: str,
-                           method: CostBasisMethod, currency: Optional[str] = None) -> AccountingResult:
+                           method: CostBasisMethod, currency: Optional[str] = None,
+                           account_id: Optional[str] = None) -> AccountingResult:
         txs = self.store.list_transactions(portfolio_id, symbol=symbol)
+        if account_id is not None:
+            txs = [tx for tx in txs if tx.account_id == account_id]
         cur = currency or (txs[-1].currency if txs else "USD")
         return compute_accounting(portfolio_id, symbol, txs, method, currency=cur)
 
@@ -394,13 +560,25 @@ class PortfolioService:
         )
 
     def _position_state(self, portfolio_id: str, symbol: str,
-                        method: CostBasisMethod) -> dict[str, Any]:
+                        method: CostBasisMethod,
+                        account_id: Optional[str] = None) -> dict[str, Any]:
         """Fast per-symbol state from the materialized cache, self-healing if absent.
 
         The cache is DERIVED and never authoritative: a missing row is recomputed
         from the ledger and persisted, so a manually-edited/empty cache still reads
-        correctly.
+        correctly. An account-scoped read bypasses the aggregate cache (there is
+        one cache row per portfolio+symbol, not per account).
         """
+        if account_id is not None:
+            scoped = self._symbol_accounting(portfolio_id, symbol, method,
+                                             account_id=account_id)
+            return {
+                "quantity": scoped.remaining_qty,
+                "cost_basis": scoped.remaining_cost_basis,
+                "average_cost": scoped.average_cost,
+                "realized": scoped.realized_pnl,
+                "currency": scoped.currency,
+            }
         row = self.store.get_materialized_position(portfolio_id, symbol)
         if row is not None:
             return {
@@ -420,6 +598,80 @@ class PortfolioService:
             "currency": result.currency,
         }
 
+    def _account_view(self, portfolio_id: str, account: dict[str, Any],
+                      txs: Sequence[Transaction], method: CostBasisMethod,
+                      base: str) -> dict[str, Any]:
+        cash = ZERO
+        net_deposits = ZERO
+        dividends = ZERO
+        for tx in txs:
+            cash += tx.cash_impact()
+            if tx.transaction_type == TransactionType.DEPOSIT:
+                net_deposits += tx.cash_impact()
+            elif tx.transaction_type == TransactionType.WITHDRAWAL:
+                net_deposits -= abs(tx.cash_impact())
+            elif tx.transaction_type in (TransactionType.DIVIDEND, TransactionType.INTEREST):
+                dividends += tx.cash_impact()
+        positions = []
+        open_lot_count = 0
+        for symbol in _symbols(txs):
+            symbol_txs = [tx for tx in txs if tx.symbol == symbol]
+            result = compute_accounting(
+                portfolio_id, symbol, symbol_txs, method,
+                currency=(account.get("currency") or base or "USD").upper(),
+            )
+            open_lot_count += len(result.open_lots)
+            if result.remaining_qty > 0:
+                positions.append({
+                    "symbol": symbol,
+                    "quantity": qty_str(result.remaining_qty),
+                    "costBasis": money_str(result.remaining_cost_basis),
+                    "averageCost": (money_str(result.average_cost)
+                                    if result.average_cost is not None else None),
+                    "realizedPnl": money_str(result.realized_pnl),
+                    "currency": result.currency,
+                    "openLots": len(result.open_lots),
+                })
+        return {
+            "id": account.get("id"),
+            "name": account.get("name") or "Unassigned",
+            "kind": account.get("kind") or "",
+            "institution": account.get("institution"),
+            "currency": (account.get("currency") or base or "USD").upper(),
+            "externalId": account.get("externalId"),
+            "synthetic": bool(account.get("synthetic")),
+            "cash": money_str(cash),
+            "netDeposits": money_str(net_deposits),
+            "dividends": money_str(dividends),
+            "transactionCount": len(txs),
+            "openLots": open_lot_count,
+            "positions": positions,
+        }
+
+    def _accounts_view(self, portfolio_id: str, accounts: Sequence[dict[str, Any]],
+                       txs: Sequence[Transaction], method: CostBasisMethod,
+                       base: str) -> tuple[list[dict[str, Any]], Any]:
+        groups: dict[str, list[Transaction]] = {account["id"]: [] for account in accounts}
+        unassigned: list[Transaction] = []
+        for tx in txs:
+            if tx.account_id and tx.account_id in groups:
+                groups[tx.account_id].append(tx)
+            else:
+                unassigned.append(tx)
+        rows = [
+            self._account_view(portfolio_id, account, groups[account["id"]], method, base)
+            for account in accounts
+        ]
+        if unassigned:
+            rows.append(self._account_view(
+                portfolio_id,
+                {"id": None, "name": "Unassigned", "kind": "unassigned",
+                 "currency": base, "synthetic": True},
+                unassigned, method, base,
+            ))
+        total = sum((D(row["cash"]) for row in rows), ZERO)
+        return rows, total
+
     def rebuild_all(self, portfolio_id: str, *, actor_id: Optional[str] = None) -> dict[str, Any]:
         """Recompute and persist every symbol's lots/matches and materialized row."""
         try:
@@ -436,8 +688,10 @@ class PortfolioService:
             self.store.delete_materialized_position(portfolio_id, stale)
         return {"status": "SUCCESS", "symbols": len(symbols)}
 
-    def _position_for(self, portfolio_id: str, symbol: str, portfolio: dict[str, Any]) -> Optional[dict[str, Any]]:
-        result = self._symbol_accounting(portfolio_id, symbol, self._method(portfolio))
+    def _position_for(self, portfolio_id: str, symbol: str, portfolio: dict[str, Any],
+                      account_id: Optional[str] = None) -> Optional[dict[str, Any]]:
+        result = self._symbol_accounting(portfolio_id, symbol, self._method(portfolio),
+                                         account_id=account_id)
         return {
             "symbol": symbol,
             "quantity": qty_str(result.remaining_qty),
@@ -574,6 +828,12 @@ class PortfolioService:
             "calculationVersion": CALCULATION_VERSION,
             "provenance": _provenance(base, positions),
         }
+        account_rows, account_cash_total = self._accounts_view(
+            portfolio_id, self.store.list_accounts(portfolio_id), txs, method, base
+        )
+        response["accounts"] = account_rows
+        response["accountCashTotal"] = money_str(account_cash_total)
+        response["accountsReconcile"] = account_cash_total == cash
         if "pnl" in include_set:
             response["pnl"] = analytics.pnl(all_positions, cash=cash, net_deposits=net_deposits, dividends=dividends)
         if "allocation" in include_set:
@@ -622,22 +882,84 @@ class PortfolioService:
 
     # ── Tax lots ─────────────────────────────────────────────────────────────
     def calculate_tax_lots(self, portfolio_id: str, *, symbol: Optional[str] = None,
-                           persist: bool = False, actor_id: Optional[str] = None) -> dict[str, Any]:
+                           persist: bool = False, account_id: Optional[str] = None,
+                           actor_id: Optional[str] = None) -> dict[str, Any]:
         portfolio = self._require_portfolio(portfolio_id, actor_id)
         method = self._method(portfolio)
-        symbols = [symbol] if symbol else _symbols(self.store.list_transactions(portfolio_id))
+        txs = self.store.list_transactions(portfolio_id)
+        if account_id:
+            self._require_account(portfolio_id, str(account_id))
+            txs = [tx for tx in txs if tx.account_id == account_id]
+        symbols = [symbol] if symbol else _symbols(txs)
         out = []
         for sym in symbols:
-            result = self._symbol_accounting(portfolio_id, sym, method)
-            if persist:
+            result = self._symbol_accounting(portfolio_id, sym, method,
+                                             account_id=account_id)
+            # The cache is aggregate (portfolio+symbol); an account-scoped view is
+            # a report and must not overwrite it.
+            if persist and not account_id:
                 self.store.replace_accounting(portfolio_id, sym, result.open_lots, result.matches)
             out.append(result.to_dict())
         return {
             "portfolioId": portfolio_id,
+            "accountId": account_id,
             "method": method.value,
             "symbols": out,
             "totalRealizedPnl": money_str(sum((D(row["realizedPnl"]) for row in out), ZERO)),
         }
+
+    def realized_gains(
+        self,
+        portfolio_id: str,
+        *,
+        tax_year: Optional[int] = None,
+        long_term_days: int = 365,
+        wash_sale_window_days: int = 30,
+        include_wash_sale: bool = True,
+        actor_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Realized gains by tax year and holding term, with wash-sale candidates.
+
+        This is a report over the engine's lot matches. It does not apply a
+        jurisdiction's rule or adjust basis; a wash-sale candidate names the
+        replacement purchase it found and leaves the decision to the user.
+        """
+        portfolio = self._require_portfolio(portfolio_id, actor_id)
+        method = self._method(portfolio)
+        base = (portfolio.get("baseCurrency") or "USD").upper()
+        txs = self.store.list_transactions(portfolio_id)
+        symbols = _symbols(txs)
+        matches: list[dict[str, Any]] = []
+        for symbol in symbols:
+            result = self._symbol_accounting(portfolio_id, symbol, method)
+            matches.extend(match.to_dict() for match in result.matches)
+        acquisitions = [
+            {
+                "id": tx.id,
+                "symbol": tx.symbol,
+                "date": tx.effective_date(),
+                "quantity": qty_str(tx.quantity),
+                "type": tx.transaction_type.value,
+            }
+            for tx in txs
+            if tx.symbol and tx.transaction_type in ACQUISITIONS
+        ]
+        currencies = {
+            symbol: (_currency_of(txs, symbol) or base).upper() for symbol in symbols
+        }
+        year = None if tax_year in (None, "") else int(tax_year)
+        return build_realized_gains_report(
+            portfolio_id=portfolio_id,
+            method=method.value,
+            base_currency=base,
+            matches=matches,
+            acquisitions=acquisitions,
+            currency_by_symbol=currencies,
+            tax_year=year,
+            long_term_days=long_term_days,
+            wash_sale_window_days=wash_sale_window_days,
+            include_wash_sale=bool(include_wash_sale),
+        )
 
     # ── Rebalancing ──────────────────────────────────────────────────────────
     async def rebalance(self, portfolio_id: str, payload: dict[str, Any],

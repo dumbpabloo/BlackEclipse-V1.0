@@ -949,6 +949,7 @@ function StockChatContent() {
         role: 'assistant',
         content: turnText(turn),
         status: turn.status,
+        statusNote: turn.statusNote,
         activities: turn.activities, changes: turn.changes,
         delegations: turn.delegations,
         research: turn.research, vision: turn.vision, images: turn.images,

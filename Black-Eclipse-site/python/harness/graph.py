@@ -2059,6 +2059,9 @@ async def execute_run(
         await emitter.emit("run.cancelled", {"reason": "cancelled"})
         return _result(request.runId, "cancelled", store, None)
     except LeaseLost:
+        from .run_supervision import settle_lost_run  # noqa: PLC0415
+
+        await settle_lost_run(store, request.runId, runtime_id, emitter)
         return _lease_lost_result()
     except CheckpointWriteFailed as exc:
         error = HarnessError(code="CHECKPOINT_WRITE_FAILED", message=str(exc))

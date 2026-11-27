@@ -214,10 +214,30 @@ def resolve_workspace(
     (the refusal is honest) — it never silently falls back to another folder.
 
     An optional `request.workspace` remains a NARROWING/confirmation: its `root`
-    must realpath to exactly the resolved root, otherwise the run gets no
-    workspace at all.
+    must realpath to the resolved root OR to a real subdirectory of it. A
+    subdirectory can only narrow what the run may touch (a per-bot folder, a
+    project inside the checkout); a sibling/outside path is still refused, so a
+    caller can never widen the server-resolved workspace.
     """
-    if root_id:
+    if root_id and root_id.startswith("bot:"):
+        # Server-derived per-bot root, shared by that bot's chat turn and its
+        # scheduled runs. It is not user-supplied: the id is sanitized and the
+        # folder is always under the server-resolved `.black-eclipse/bots/`.
+        base = default_root()
+        if base is None:
+            return None
+        bot_id = "".join(
+            ch if ch.isalnum() or ch in "-_" else "_"
+            for ch in root_id[4:]
+        )[:120]
+        if not bot_id:
+            return None
+        root = base / ".black-eclipse" / "bots" / bot_id
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return None
+    elif root_id:
         root = trusted_root_path(root_id)
         if root is None:
             return None
@@ -232,7 +252,15 @@ def resolve_workspace(
         except (OSError, ValueError):
             return None
         if confirmed != root:
-            return None
+            try:
+                inside = root in confirmed.parents
+            except (OSError, ValueError):
+                inside = False
+            if not inside or not confirmed.is_dir():
+                return None
+            # Narrow the run to the confirmed subdirectory. This cannot widen
+            # authority: the path is already inside the server-resolved root.
+            root = confirmed
     strategy = "checkout"
     base_revision = _git_head(root)
     return ResolvedWorkspace(

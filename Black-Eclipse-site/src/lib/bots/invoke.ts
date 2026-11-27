@@ -46,6 +46,11 @@ export function groupMemberChatId(groupId: string, botId: string): string {
   return `group-${groupId}-${botId}`;
 }
 
+/** The server-owned workspace root for this bot's chat and scheduled runs. */
+export function botWorkspaceRootId(botId: string): string {
+  return `bot:${botId}`;
+}
+
 /** The standing identity/instructions line for a bot answering as itself. */
 export function botPersona(bot: AutomationView): string {
   const instructions = bot.action.objective ?? bot.description ?? '';
@@ -233,6 +238,7 @@ export async function runBotTurn(args: RunBotTurnArgs): Promise<string> {
   return getAgentProvider().chat(messages, undefined, {
     agentId: bot.action.agentId || 'eclipse-agent',
     chatId: botChatId(bot.id),
+    workspaceRootId: botWorkspaceRootId(bot.id),
     memoryScope: 'conversation',
     model: model || pin.model,
     ...(model ? {} : { modelProvider: pin.provider }),
@@ -269,6 +275,7 @@ export async function runGroupMemberTurn(args: RunGroupMemberTurnArgs): Promise<
   return getAgentProvider().chat(buildGroupMemberMessages(group, bot, text, prior), undefined, {
     agentId: bot.action.agentId || 'eclipse-agent',
     chatId: groupMemberChatId(group.id, bot.id),
+    workspaceRootId: botWorkspaceRootId(bot.id),
     memoryScope: 'conversation',
     model: model || pin.model,
     ...(model ? {} : { modelProvider: pin.provider }),

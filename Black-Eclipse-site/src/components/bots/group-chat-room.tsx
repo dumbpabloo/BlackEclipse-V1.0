@@ -20,6 +20,7 @@ import { Markdown } from '@/components/chat/markdown';
 import { ParallelAgentsPanel } from '@/components/chat/parallel-agents-panel';
 import { ApprovalCard } from '@/components/chat/approval-card';
 import { ClarificationCard } from '@/components/chat/clarification-card';
+import { TradeApprovalBanner } from '@/components/chat/trade-approval-banner';
 import type { HarnessUiEvent } from '@/lib/agent/events';
 import type { DelegationView } from '@/lib/agent/response-model';
 import {
@@ -384,7 +385,7 @@ export function GroupChatRoom({ group, bots, active = true, onDeleted, onChanged
    * share or merge a reply.
    */
   const runMember = useCallback(
-    async (bot: AutomationView, text: string, prior: GroupMessage[], controllers: AbortController[]) => {
+    async (bot: AutomationView, text: string, prior: GroupMessage[], controllers: AbortController[]): Promise<string> => {
       const replyId = newId();
       append(group.id, {
         id: replyId, role: 'assistant', content: '', at: new Date().toISOString(),
@@ -457,6 +458,7 @@ export function GroupChatRoom({ group, bots, active = true, onDeleted, onChanged
         );
         setMemberMood(bot.id, final ? 'happy' : 'sad');
         restMember(bot.id);
+        return final;
       } catch (err) {
         if (controller.signal.aborted) {
           updateMessage(group.id, replyId, {
@@ -474,6 +476,7 @@ export function GroupChatRoom({ group, bots, active = true, onDeleted, onChanged
         }
         setMemberMood(bot.id, 'sad');
         restMember(bot.id);
+        return streamed;
       }
     },
     [append, updateMessage, group, setMemberMood, restMember],
@@ -502,9 +505,49 @@ export function GroupChatRoom({ group, bots, active = true, onDeleted, onChanged
     const controllers: AbortController[] = [];
     controllersRef.current = controllers;
     try {
-      // All targeted bots answer independently and in parallel; each streams
-      // into its own message so no reply is combined.
-      await Promise.all(targets.map((bot) => runMember(bot, text, prior, controllers)));
+      if (group.mode === 'roundtable') {
+        // Roundtable: members answer in order, and each later member receives
+        // the replies already produced in THIS round. That is the difference
+        // between three independent opinions and an actual discussion. The
+        // round is still one reply per member; nothing is merged or hidden.
+        let roundPrior: GroupMessage[] = prior;
+        for (const bot of targets) {
+          const reply = await runMember(bot, text, roundPrior, controllers);
+          if (!reply.trim()) continue;
+          roundPrior = [
+            ...roundPrior,
+            {
+              id: `round-${bot.id}-${Date.now()}`,
+              role: 'assistant',
+              content: reply,
+              at: new Date().toISOString(),
+              authorId: bot.id,
+              authorName: bot.name,
+            },
+          ];
+        }
+        // An optional chair turns independent replies into one decision. It is
+        // a normal member turn (same identity, tools and memory), not a hidden
+        // merge: its synthesis is visible in the room like any other reply.
+        const lead = members.find((member) => member.id === group.leadId);
+        const replies = roundPrior.slice(prior.length).filter((m) => m.role === 'assistant');
+        if (lead && replies.length >= 2) {
+          const digest = replies
+            .map((m) => `${m.authorName ?? 'Member'}: ${m.content}`)
+            .join('\n\n');
+          const synthesis = [
+            `Chair the roundtable. The user asked: "${text}".`,
+            'Members replied:',
+            digest,
+            'Write one decision-oriented synthesis: the recommendation, the strongest disagreement or risk, and what still needs the operator. Do not invent facts and do not hide a disagreement.',
+          ].join('\n\n');
+          await runMember(lead, synthesis, roundPrior, controllers);
+        }
+      } else {
+        // Independent takes: all targeted bots answer in parallel; each streams
+        // into its own message so no reply is combined.
+        await Promise.all(targets.map((bot) => runMember(bot, text, prior, controllers)));
+      }
     } finally {
       controllersRef.current = [];
       setSending(false);
@@ -781,6 +824,9 @@ export function GroupChatRoom({ group, bots, active = true, onDeleted, onChanged
 
       {/* Composer */}
       <div ref={setComposerEl} className="border-t border-border/10 p-3">
+        {/* A member can call `order_preview`; the exact order must be
+            confirmable in the room that produced it, not only in a bot chat. */}
+        <TradeApprovalBanner />
         {pendingApproval && (
           <ApprovalCard
             approval={pendingApproval}

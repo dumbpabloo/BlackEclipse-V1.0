@@ -3,11 +3,11 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
     <title>Black Eclipse</title>
     <style>
       :root {
         --bg: #08080a;
-        --panel: rgba(24, 24, 27, 0.72);
         --line: rgba(255, 255, 255, 0.08);
         --text: #fafafa;
         --muted: rgba(250, 250, 250, 0.55);
@@ -48,7 +48,7 @@
          (<= 0.55), 18px blur with a saturation boost, inset top highlight and a
          soft drop shadow. A higher alpha here would read as a flat panel. */
       .card {
-        width: min(420px, 100%);
+        width: min(440px, 100%);
         padding: 34px 34px 28px;
         border-radius: 16px;
         border: 1px solid var(--line);
@@ -65,11 +65,19 @@
         from { opacity: 0; transform: translateY(8px) scale(0.995); }
         to { opacity: 1; transform: none; }
       }
+      /* Boot: the orbit mark (a lit ring turning around a dark core). It is the
+         intentional "Eclipse is waking up" signal and pairs with the loading
+         bar below; do not replace it with the static logo on this state. */
       .mark {
         width: 64px;
         height: 64px;
-        margin: 0 auto 18px;
+        margin: 0 auto 16px;
         position: relative;
+      }
+      .mark .orb {
+        position: absolute;
+        inset: 0;
+        display: block;
       }
       .mark .ring {
         position: absolute;
@@ -89,6 +97,31 @@
         box-shadow: 0 0 22px rgba(180, 255, 66, 0.14);
       }
       @keyframes spin { to { transform: rotate(360deg); } }
+      /* The real Black Eclipse mark (public/branding/FAVICON.svg), inlined so
+         the offline screen never depends on a network fetch or a second asset
+         being packaged. Only shown when booting has failed. */
+      .mark .logo {
+        display: none;
+        width: 64px;
+        height: 64px;
+        border-radius: 14px;
+        filter: grayscale(0.30) drop-shadow(0 8px 26px rgba(255, 138, 122, 0.12));
+      }
+      body[data-state="offline"] .mark .orb { display: none; }
+      body[data-state="offline"] .mark .logo { display: block; }
+      .kicker {
+        display: none;
+        margin: 0 0 10px;
+        padding: 3px 9px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 138, 122, 0.28);
+        background: rgba(255, 138, 122, 0.10);
+        color: var(--danger);
+        font-size: 9.5px;
+        font-weight: 700;
+        letter-spacing: 0.09em;
+      }
+      body[data-state="offline"] .kicker { display: inline-block; }
       h1 {
         font-size: 17px;
         font-weight: 600;
@@ -98,6 +131,7 @@
       .phase {
         min-height: 18px;
         font-size: 12.5px;
+        line-height: 1.55;
         color: var(--muted);
         margin: 0 0 20px;
         transition: color 160ms ease;
@@ -129,12 +163,17 @@
         color: var(--faint);
         letter-spacing: 0.02em;
       }
-      /* Error state */
-      body[data-state="error"] .bar { animation: none; width: 100%; background: var(--danger); opacity: 0.75; }
-      body[data-state="error"] .phase { color: var(--danger); }
-      body[data-state="error"] .mark .ring { animation-play-state: paused; filter: grayscale(1) opacity(0.5); }
+      /* Offline / unavailable state. Everything here is local, so this screen
+         renders even when the machine has no network at all. */
+      body[data-state="offline"] .bar {
+        animation: none;
+        width: 100%;
+        background: var(--danger);
+        opacity: 0.7;
+      }
+      body[data-state="offline"] .phase { color: var(--muted); }
       .actions { display: none; gap: 8px; justify-content: center; margin-top: 18px; flex-wrap: wrap; }
-      body[data-state="error"] .actions { display: flex; }
+      body[data-state="offline"] .actions { display: flex; }
       /* The log location is only useful when something failed: show it then,
          and let the user open the folder or copy the details in one click. */
       .logpath {
@@ -152,7 +191,7 @@
         user-select: text;
         text-align: left;
       }
-      body[data-state="error"] .logpath { display: block; }
+      body[data-state="offline"] .logpath { display: block; }
       .copied { color: var(--brand) !important; }
       button {
         font: inherit;
@@ -217,12 +256,25 @@
     </div>
     <div class="stage">
       <div class="card">
-        <div class="mark"><div class="ring"></div><div class="core"></div></div>
+        <div class="mark">
+          <span class="orb" aria-hidden="true"><span class="ring"></span><span class="core"></span></span>
+          <svg class="logo" viewBox="0 0 32 32" role="img" aria-label="Black Eclipse">
+            <defs><clipPath id="be-tile"><rect width="32" height="32" rx="7"/></clipPath></defs>
+            <rect width="32" height="32" rx="7" fill="#0A0A0B"/>
+            <g clip-path="url(#be-tile)" transform="translate(0 2) scale(0.875)" fill="#FFFFFF">
+              <path d="M5.28819e-05 0.0302584V4.85285C7.48655 4.10281 15.6114 11.2282 11.9555 20.1499C11.3768 19.8413 10.7981 19.5371 10.2193 19.2373C6.84222 17.4675 3.43618 15.7574 0.00120795 14.1068V17.4814C2.93539 18.9232 5.89349 20.3122 8.87551 21.6483C15.0209 24.4031 21.2556 26.9283 27.5796 29.2239C23.8178 26.2012 16.4459 24.6872 17.4286 18.5793C19.5236 7.1348 9.47971 -0.545003 5.28819e-05 0.0302584Z"/>
+              <path d="M0.0001557 26.9616V31.8936C4.96916 32.4677 10.2599 30.7523 14.171 25.9182L9.64648 23.708C6.97679 26.6422 3.37186 27.5386 0.0001557 26.9616Z"/>
+              <path d="M1.22528 6.94554C0.893222 6.94592 0.00183846 7.00224 0.00183846 7.00224L0.00758217 15.8974L0.00183846 24.8298C0.555488 24.9317 1.34697 24.945 1.90992 24.9459C3.17149 24.954 4.41834 24.6747 5.55594 24.1293C6.77128 23.5442 7.82342 22.6622 8.68978 21.5076C9.06759 21.0051 9.4003 20.4702 9.68405 19.9092C9.80327 19.6545 9.90976 19.4011 10.0018 19.1568C10.5712 17.6718 10.7698 16.196 10.5921 14.77C10.4271 13.4547 9.94509 12.1991 9.1875 11.1113C8.32692 9.85947 7.12489 8.80791 5.71162 8.0706C4.32813 7.34153 2.78967 6.95568 1.22586 6.94554M1.22586 6.71405C7.06817 6.71405 12.8902 12.2653 10.2182 19.2373C10.1227 19.4931 10.0133 19.7518 9.89181 20.0105C9.60159 20.5844 9.26112 21.1315 8.8744 21.6454C7.02245 24.1137 4.46561 25.1757 1.91166 25.1757C1.2701 25.1747 0.63027 25.1092 0.00183846 24.9801V6.79739C0.00183846 6.79739 0.816429 6.71384 1.22586 6.71405Z"/>
+              <path d="M22.9343 6.6598C22.9476 9.71146 27.5879 9.71088 27.6012 6.6598C27.585 3.60813 22.9476 3.60813 22.9343 6.6598Z"/>
+            </g>
+          </svg>
+        </div>
+        <p class="kicker" id="kicker" hidden></p>
         <h1>Black Eclipse</h1>
         <p class="phase" id="phase">Starting…</p>
         <div class="track"><div class="bar"></div></div>
         <div class="actions">
-          <button class="primary" id="retry">Try again</button>
+          <button class="primary" id="reopen">Try again</button>
           <button id="copy">Copy details</button>
           <button id="log">Open log folder</button>
         </div>
@@ -233,7 +285,8 @@
     <script>
       (function () {
         var phase = document.getElementById("phase");
-        var retry = document.getElementById("retry");
+        var kicker = document.getElementById("kicker");
+        var retry = document.getElementById("reopen");
         var logBtn = document.getElementById("log");
         var copyBtn = document.getElementById("copy");
         var logPath = document.getElementById("logpath");
@@ -241,6 +294,28 @@
         var tauri = window.__TAURI__;
         var lastMessage = "";
         var logInfo = { log: "", dir: "" };
+
+        // One piece of copy per reason the shell reports. These are written for
+        // a local-first desktop app: the app runs on this device, so a missing
+        // network is not the same failure as a stopped local service.
+        var COPY = {
+          local: {
+            kicker: "SERVICE STOPPED",
+            text: "The local service stopped or didn’t answer. Your data is safe — nothing was deleted."
+          },
+          offline: {
+            kicker: "OFFLINE",
+            text: "Black Eclipse runs on this device. Live data will resume when your connection returns."
+          },
+          timeout: {
+            kicker: "TIMED OUT",
+            text: "The local service didn’t answer in time. Nothing was lost — try again."
+          },
+          other: {
+            kicker: "UNAVAILABLE",
+            text: "Something interrupted the page before it could load. Your data is safe — try again."
+          }
+        };
 
         function invoke(command, args) {
           if (tauri && tauri.core && tauri.core.invoke) {
@@ -273,14 +348,33 @@
         document.getElementById("win-close").addEventListener("click", function () {
           windowAction("close");
         });
-        function setPhase(text) {
-          if (text) phase.textContent = text;
+
+        function setKicker(text) {
+          if (text) {
+            kicker.textContent = text;
+            kicker.hidden = false;
+          } else {
+            kicker.textContent = "";
+            kicker.hidden = true;
+          }
         }
 
-        function fail(message) {
-          document.body.dataset.state = "error";
-          setPhase(message);
-          lastMessage = message || "";
+        function setBooting(message) {
+          document.body.dataset.state = "booting";
+          document.title = "Black Eclipse";
+          setKicker("");
+          if (message) phase.textContent = message;
+        }
+
+        // `reason` picks the copy; an explicit `message` (from a server error
+        // event) wins over the generic line so real diagnostics are preserved.
+        function showOffline(reason, message) {
+          var copy = COPY[reason] || COPY.other;
+          document.body.dataset.state = "offline";
+          document.title = "Black Eclipse — unavailable";
+          setKicker(copy.kicker);
+          phase.textContent = message || copy.text;
+          lastMessage = phase.textContent || "";
           showLogPath();
         }
 
@@ -309,33 +403,57 @@
           }, 1400);
         }
 
+        // The Dev channel runs on 3101; the port belongs to the shell, not this
+        // static page. Ask for it instead of hard-coding Stable's port.
+        invoke("desktop_info")
+          .then(function (info) {
+            if (info && info.port) {
+              foot.textContent = "Local instance · 127.0.0.1:" + info.port;
+            }
+          })
+          .catch(function () {});
+
+        // A failed navigation is reported by the shell as a fragment. Render it
+        // before waiting for any event, so the offline state is correct on the
+        // very first paint after the guard sends us back here.
+        var reason = "";
+        try {
+          var hash = String(location.hash || "").replace(/^#/, "");
+          var params = new URLSearchParams(hash);
+          reason = params.get("offline") || "";
+        } catch (err) {
+          reason = "";
+        }
+
         if (!tauri || !tauri.event) {
           // Opened outside the shell (e.g. during development): stay legible.
-          setPhase("This screen is shown by the desktop shell.");
-          document.body.dataset.state = "error";
+          showOffline("other", "This screen is shown by the Black Eclipse desktop app.");
           return;
+        }
+
+        if (reason) {
+          showOffline(reason, "");
         }
 
         tauri.event.listen("be-status", function (event) {
           var payload = event.payload || {};
           if (payload.kind === "error") {
-            fail(payload.message || "Something went wrong.");
+            showOffline("local", payload.message || "");
             return;
           }
           if (payload.kind === "ready") {
             document.body.dataset.state = "ready";
             return;
           }
-          document.body.dataset.state = "booting";
-          setPhase(payload.message);
+          setBooting(payload.message || "Starting…");
         });
 
         retry.addEventListener("click", function () {
-          document.body.dataset.state = "booting";
-          setPhase("Starting…");
-          if (tauri.core && tauri.core.invoke) {
-            tauri.core.invoke("desktop_retry").catch(function () {});
-          }
+          // Drop the reason fragment first: a reload after a successful retry
+          // must not show the offline copy again.
+          try { history.replaceState(null, "", location.pathname); } catch (err) {}
+          setBooting("Starting…");
+          invoke("desktop_reopen").catch(function () {});
         });
 
         logBtn.addEventListener("click", function () {
@@ -344,10 +462,10 @@
 
         copyBtn.addEventListener("click", function () {
           var details = [
-            "Black Eclipse failed to start",
+            "Black Eclipse — unavailable",
             "Message: " + (lastMessage || phase.textContent || ""),
             "Log: " + (logInfo.log || "(unknown)"),
-            "Instance: " + (document.getElementById("foot").textContent || ""),
+            "Instance: " + (foot.textContent || ""),
           ].join("\n");
           if (navigator.clipboard && navigator.clipboard.writeText) {
             navigator.clipboard.writeText(details).then(

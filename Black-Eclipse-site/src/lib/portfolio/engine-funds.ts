@@ -7,7 +7,13 @@
 // without a second localStorage ledger.
 
 import { sdkUnlockHeaders } from '@/lib/sdk';
-import type { Fund, Transaction, TxType } from '@/lib/portfolio/types';
+import type { Fund, Transaction } from '@/lib/portfolio/types';
+import {
+  engineTransactionToView,
+  isCashEventType,
+  type EngineTransactionRow,
+} from '@/lib/portfolio/engine-transactions';
+import type { MarksMap, PortfolioRead, TaxLotsResult } from '@/lib/harness/clients/portfolio-client';
 
 interface EnginePortfolio {
   id: string;
@@ -20,20 +26,7 @@ interface EnginePortfolio {
   updatedAt?: string;
 }
 
-interface EngineTransaction {
-  id: string;
-  type: string;
-  symbol?: string | null;
-  quantity?: string | number | null;
-  price?: string | number | null;
-  grossAmount?: string | number | null;
-  netAmount?: string | number | null;
-  fees?: string | number | null;
-  fee?: string | number | null;
-  tradeDate?: string | null;
-  createdAt?: string | null;
-  notes?: string | null;
-}
+type EngineTransaction = EngineTransactionRow;
 
 const DEFAULT_ICON = 'Briefcase';
 const DEFAULT_ACCENT = '#34d399';
@@ -57,33 +50,12 @@ function num(value: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-const TX_ALIASES: Record<string, TxType> = {
-  TRANSFER_IN: 'BUY',
-  TRANSFER_OUT: 'SELL',
-};
-
-function mapTransaction(tx: EngineTransaction): Transaction | null {
-  const rawType = String(tx.type || '').toUpperCase();
-  const type = (rawType in TX_ALIASES ? TX_ALIASES[rawType] : rawType) as TxType;
-  if (!['BUY', 'SELL', 'DEPOSIT', 'WITHDRAWAL', 'DIVIDEND'].includes(type)) return null;
-  const gross = num(tx.grossAmount ?? tx.netAmount);
-  const cashFlow = type === 'DEPOSIT' || type === 'WITHDRAWAL';
-  // The UI cost engine derives dividend income from quantity × price; the
-  // engine stores a gross amount. Map that to 1 × gross so income is preserved.
-  const dividend = type === 'DIVIDEND' && gross > 0;
-  return {
-    id: String(tx.id),
-    type,
-    symbol: String(tx.symbol || (cashFlow ? 'CASH' : '')).toUpperCase(),
-    quantity: cashFlow ? gross || num(tx.quantity) : dividend ? 1 : num(tx.quantity),
-    price: cashFlow ? 1 : dividend ? gross : num(tx.price),
-    fee: num(tx.fees ?? tx.fee),
-    date: String(tx.tradeDate || tx.createdAt || new Date().toISOString()),
-    notes: tx.notes || undefined,
-  };
+/** Preserve every engine row; the pure mapper owns the field conventions. */
+export function mapEngineTransaction(tx: EngineTransaction): Transaction {
+  return engineTransactionToView(tx);
 }
 
-function mapFund(record: EnginePortfolio, transactions: EngineTransaction[]): Fund {
+export function mapEngineFund(record: EnginePortfolio, transactions: EngineTransaction[]): Fund {
   const meta = parseMetadata(record.metadata);
   const goal = meta.goal ?? meta.goalValue;
   return {
@@ -95,7 +67,9 @@ function mapFund(record: EnginePortfolio, transactions: EngineTransaction[]): Fu
     baseCurrency: record.baseCurrency || DEFAULT_CURRENCY,
     costBasisMethod: (record.costBasisMethod as Fund['costBasisMethod']) || 'FIFO',
     createdAt: record.createdAt || new Date().toISOString(),
-    transactions: transactions.map(mapTransaction).filter((tx): tx is Transaction => tx !== null),
+    // Every engine row is preserved — a split or corporate action must never
+    // disappear from the view (it changes quantity and basis).
+    transactions: transactions.map(mapEngineTransaction),
   };
 }
 
@@ -130,9 +104,9 @@ export async function listEngineFunds(): Promise<Fund[]> {
         headers: { ...sdkUnlockHeaders() },
       });
       const body = history.ok ? await history.json().catch(() => ({})) : {};
-      return mapFund(record, historyFunds(body));
+      return mapEngineFund(record, historyFunds(body));
     } catch {
-      return mapFund(record, []);
+      return mapEngineFund(record, []);
     }
   }));
 }
@@ -145,7 +119,7 @@ export async function createEngineFund(input: {
   goalValue: number | null;
   startingCash: number;
   baseCurrency?: string;
-  costBasisMethod?: 'FIFO' | 'LIFO' | 'AVERAGE_COST';
+  costBasisMethod?: Fund['costBasisMethod'];
 }): Promise<string> {
   const baseCurrency = input.baseCurrency || DEFAULT_CURRENCY;
   const created = await json<EnginePortfolio>('/api/portfolio/create', {
@@ -181,7 +155,14 @@ export async function createEngineFund(input: {
 /** Update the fund's user-facing fields; metadata is merged engine-side. */
 export async function updateEngineFund(
   fundId: string,
-  patch: { name?: string; goalValue?: number | null; icon?: string; accent?: string },
+  patch: {
+    name?: string;
+    goalValue?: number | null;
+    icon?: string;
+    accent?: string;
+    /** Persist the engine's cost-basis method (not a display-only toggle). */
+    costBasisMethod?: Fund['costBasisMethod'];
+  },
 ): Promise<void> {
   const metadata: Record<string, unknown> = {};
   if (patch.goalValue !== undefined) metadata.goal = patch.goalValue;
@@ -189,7 +170,11 @@ export async function updateEngineFund(
   if (patch.accent !== undefined) metadata.accent = patch.accent;
   await json(`/api/portfolio/${encodeURIComponent(fundId)}`, {
     method: 'PATCH',
-    body: JSON.stringify({ name: patch.name, metadata }),
+    body: JSON.stringify({
+      name: patch.name,
+      metadata,
+      ...(patch.costBasisMethod ? { cost_basis_method: patch.costBasisMethod } : {}),
+    }),
   });
 }
 
@@ -207,16 +192,42 @@ export async function addEngineFundTransaction(fund: Fund, tx: Transaction): Pro
     trade_date: tx.date,
     notes: tx.notes,
   };
-  if (tx.type === 'DEPOSIT' || tx.type === 'WITHDRAWAL' || tx.type === 'DIVIDEND') {
-    payload.gross_amount = String(tx.quantity * tx.price);
+  if (isCashEventType(tx.type)) {
+    payload.gross_amount = String(tx.grossAmount ?? tx.quantity * tx.price);
+    if (tx.taxes) payload.taxes = String(tx.taxes);
   } else {
     payload.quantity = String(tx.quantity);
     payload.price = String(tx.price);
     payload.fees = String(tx.fee || 0);
+    if (tx.taxes) payload.taxes = String(tx.taxes);
   }
   await json(`/api/portfolio/${encodeURIComponent(fund.id)}/transaction`, {
     method: 'POST',
     body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Read the authoritative engine book for one fund.
+ *
+ * The UI must not recompute positions/cost basis itself. `marks` are live quote
+ * observations passed so the engine values with real prices; when none are
+ * available the engine reports an honest data-quality state rather than zero.
+ */
+export async function readEngineFund(fundId: string, marks?: MarksMap): Promise<PortfolioRead> {
+  return json<PortfolioRead>(`/api/portfolio/${encodeURIComponent(fundId)}/query`, {
+    method: 'POST',
+    body: JSON.stringify({
+      include: ['positions', 'cash', 'pnl'],
+      marks: marks ?? {},
+    }),
+  });
+}
+
+/** Open lots and realized lot matches from the same engine. */
+export async function readEngineTaxLots(fundId: string): Promise<TaxLotsResult> {
+  return json<TaxLotsResult>(`/api/portfolio/${encodeURIComponent(fundId)}/tax-lots`, {
+    method: 'GET',
   });
 }
 

@@ -7,6 +7,9 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { usePortfolioEngine, type LiveAssetInput } from '@/hooks/use-portfolio-engine';
+import { portfolioReadToStats } from '@/lib/portfolio/engine-stats';
+import { readEngineFund, readEngineTaxLots } from '@/lib/portfolio/engine-funds';
+import type { MarksMap, PortfolioRead, TaxLotsResult } from '@/lib/harness/clients/portfolio-client';
 import { usePriceHistories, type HistoryState } from '@/hooks/use-price-histories';
 import {
   computeAttribution, computeHealthScore, buildBrief, buildChanges,
@@ -41,6 +44,20 @@ export interface FundData {
   missingSeries: string[];
   /** Non-USD holdings with no live FX rate — their USD value is a 1:1 estimate. */
   fxMissing: string[];
+  /**
+   * Which book the numbers came from. `engine` is the authoritative Python
+   * Portfolio Accounting Engine; `preview` means the runtime was unavailable
+   * and the client fallback is shown (labelled in the UI, not hidden).
+   */
+  engine: {
+    source: 'engine' | 'preview';
+    loading: boolean;
+    error: string | null;
+    dataQuality: PortfolioRead['dataQuality'] | null;
+  };
+  /** Open lots + realized matches from the engine (null until it answers). */
+  taxLots: TaxLotsResult | null;
+  taxLotsError: string | null;
 }
 
 const BENCHMARK = 'SPY';
@@ -96,8 +113,89 @@ export function useFundData(fund: Fund, taxMethod: 'FIFO' | 'LIFO' = 'FIFO'): Fu
     [symbols, quotes, rates],
   );
 
-  const stats = usePortfolioEngine(fund.transactions, liveAssets, taxMethod);
-  const cash = useMemo(() => computeCash(fund.transactions), [fund.transactions]);
+  // Live quotes are passed to the engine as marks: the engine values the book,
+  // the quote only says what the market price is. They are never fed into a
+  // second cost-basis calculation.
+  const marks = useMemo<MarksMap>(() => {
+    const out: MarksMap = {};
+    for (const [symbol, quote] of Object.entries(quotes)) {
+      if (quote?.price == null || !Number.isFinite(quote.price)) continue;
+      out[symbol] = {
+        price: String(quote.price),
+        currency: quote.currency,
+        source: 'ui-live-quote',
+      };
+    }
+    return out;
+  }, [quotes]);
+
+  const [engine, setEngine] = useState<{
+    read: PortfolioRead | null;
+    error: string | null;
+    loading: boolean;
+  }>({ read: null, error: null, loading: true });
+
+  useEffect(() => {
+    let cancelled = false;
+    setEngine((current) => ({ ...current, loading: true }));
+    readEngineFund(fund.id, marks)
+      .then((read) => {
+        if (!cancelled) setEngine({ read, error: null, loading: false });
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setEngine({
+            read: null,
+            error: err instanceof Error ? err.message : 'portfolio engine unavailable',
+            loading: false,
+          });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+    // `marks` is memoized on the quote snapshot; the method is a dependency so
+    // changing FIFO/HIFO/LIFO re-reads the engine rather than mutating a local
+    // display state.
+  }, [fund.id, fund.costBasisMethod, marks]);
+
+  const previewStats = usePortfolioEngine(fund.transactions, liveAssets, taxMethod);
+  // Engine wins whenever it answered. The client result is a labelled
+  // fallback while the runtime is starting or genuinely unavailable.
+  const stats = useMemo(
+    () => (engine.read ? portfolioReadToStats(engine.read, quotes) : previewStats),
+    [engine.read, quotes, previewStats],
+  );
+
+  const cash = useMemo(
+    () => (engine.read ? Number(engine.read.cash?.balance ?? 0) || 0 : computeCash(fund.transactions)),
+    [engine.read, fund.transactions],
+  );
+
+  const [taxLots, setTaxLots] = useState<TaxLotsResult | null>(null);
+  const [taxLotsError, setTaxLotsError] = useState<string | null>(null);
+  // Boolean, not the read object: quote polling must not refetch lot reports.
+  const engineReady = engine.read != null;
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!engineReady) {
+      setTaxLots(null);
+      setTaxLotsError(null);
+      return () => { cancelled = true; };
+    }
+    readEngineTaxLots(fund.id)
+      .then((lots) => {
+        if (!cancelled) { setTaxLots(lots); setTaxLotsError(null); }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setTaxLots(null);
+          setTaxLotsError(err instanceof Error ? err.message : 'tax lots unavailable');
+        }
+      });
+    return () => { cancelled = true; };
+  }, [fund.id, fund.costBasisMethod, fund.transactions, engineReady]);
 
   const missingSeries = useMemo(
     () => symbols.filter(s => !histories.closes[s] || histories.closes[s].length < 2),
@@ -199,5 +297,13 @@ export function useFundData(fund: Fund, taxMethod: 'FIFO' | 'LIFO' = 'FIFO'): Fu
   return {
     loading, ready, quotes, histories, stats, cash, risk, correlation, riskMatrix,
     health, brief, changes, attribution, missingSeries, fxMissing,
+    engine: {
+      source: engine.read ? 'engine' : 'preview',
+      loading: engine.loading,
+      error: engine.error,
+      dataQuality: engine.read?.dataQuality ?? null,
+    },
+    taxLots,
+    taxLotsError,
   };
 }

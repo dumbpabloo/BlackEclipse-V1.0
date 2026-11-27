@@ -50,6 +50,281 @@ fn app_port() -> u16 {
 /// bundled HTML served over Tauri's own asset protocol.
 const SPLASH: &str = "index.html";
 
+/// The one document the shell owns when the app cannot be shown.
+///
+/// Captured from the built window in `build_window`, because the Tauri asset
+/// origin differs by platform (`tauri://localhost` vs `tauri.localhost`). This
+/// fallback is only used if the capture fails.
+fn default_splash_url() -> tauri::Url {
+    #[cfg(windows)]
+    let raw = "http://tauri.localhost/";
+    #[cfg(not(windows))]
+    let raw = "tauri://localhost/";
+    tauri::Url::parse(raw).expect("static splash URL")
+}
+
+/// True for the splash served by Tauri's asset protocol. A failure here must be
+/// ignored: bouncing off the fallback would only loop.
+fn is_bundled_asset(url: &tauri::Url) -> bool {
+    url.scheme() == "tauri" || url.host_str() == Some("tauri.localhost")
+}
+
+/// True for the local Next server this shell is allowed to show. Everything
+/// else is not a document we can brand, so navigation is handed to the OS.
+fn is_app_origin(url: &tauri::Url) -> bool {
+    if !matches!(url.scheme(), "http" | "https") {
+        return false;
+    }
+    let loopback = matches!(url.host_str(), Some("127.0.0.1") | Some("localhost") | Some("::1"));
+    loopback && url.port() == Some(app_port())
+}
+
+/// Why the window fell back to the offline screen. Kept small and closed so the
+/// splash can own one piece of copy per case instead of echoing a WebView2
+/// error name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OfflineReason {
+    /// The loopback server is down, restarting, or refusing connections.
+    LocalService,
+    /// The machine has no network and a remote page was attempted.
+    Offline,
+    Timeout,
+    Other,
+}
+
+impl OfflineReason {
+    fn key(self) -> &'static str {
+        match self {
+            Self::LocalService => "local",
+            Self::Offline => "offline",
+            Self::Timeout => "timeout",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// Map a WebView2 `COREWEBVIEW2_WEB_ERROR_STATUS` integer to our closed reason
+/// set. The numbers are the stable WebView2 enum values (see
+/// `webview2-com-sys`); using integers keeps this pure and testable without the
+/// COM types.
+fn reason_for_failure(failed_url_is_local: bool, status_code: i32) -> OfflineReason {
+    if failed_url_is_local {
+        // A loopback failure is the local service, never the internet.
+        return OfflineReason::LocalService;
+    }
+    match status_code {
+        7 => OfflineReason::Timeout,                            // TIMEOUT
+        11 | 12 | 13 => OfflineReason::Offline,                 // DISCONNECTED | CANNOT_CONNECT | HOST_NAME_NOT_RESOLVED
+        6 | 9 | 10 => OfflineReason::LocalService,              // SERVER_UNREACHABLE | CONNECTION_ABORTED | CONNECTION_RESET
+        _ => OfflineReason::Other,
+    }
+}
+
+/// Show the branded fallback. Called from WebView2's NavigationCompleted
+/// callback, so the actual navigation is deferred: re-entering WebView2 from
+/// inside its own COM callback is exactly the reentrancy its threading model
+/// warns about.
+fn show_offline_screen(app: &AppHandle, reason: OfflineReason, detail: &str) {
+    let handle = app.clone();
+    let detail = detail.to_string();
+    std::thread::spawn(move || {
+        // Let the failing callback return first.
+        std::thread::sleep(Duration::from_millis(40));
+        let state = handle.state::<AppState>();
+        let mut target = state
+            .splash_url
+            .lock()
+            .ok()
+            .and_then(|url| url.clone())
+            .unwrap_or_else(default_splash_url);
+        let _ = target.set_fragment(Some(&format!("offline={}", reason.key())));
+        log_line(&format!(
+            "[shell] navigation failed ({}): {detail} -> branded offline screen",
+            reason.key()
+        ));
+        if let Some(win) = handle.get_webview_window("main") {
+            let _ = win.navigate(target);
+        }
+        // The splash needs a moment to load; after that a later failure can be
+        // caught again (a permanently broken environment must still be
+        // recoverable, not one-shot).
+        std::thread::sleep(Duration::from_secs(3));
+        state.recovering.store(false, Ordering::SeqCst);
+    });
+}
+
+/// Decide whether a completed navigation failed in a way the shell must replace.
+/// Pure enough to unit test: the COM layer only extracts the two inputs.
+fn recover_from_navigation(app: &AppHandle, source: &str, status_code: i32) {
+    let parsed = tauri::Url::parse(source).ok();
+    if let Some(url) = parsed.as_ref() {
+        if is_bundled_asset(url) {
+            // The fallback itself failed (or is still loading): never loop.
+            return;
+        }
+    }
+    let local = parsed.as_ref().map(is_app_origin).unwrap_or(false);
+    let state = app.state::<AppState>();
+    if state.recovering.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let reason = reason_for_failure(local, status_code);
+    show_offline_screen(app, reason, source);
+}
+
+/// Intercept WebView2's failed navigations on Windows.
+///
+/// This is the fix for the Microsoft-branded "can't reach this page" document:
+/// the handler fires the moment the failure completes, then sends the window
+/// back to the bundled splash with a reason fragment the splash renders in
+/// brand. Without it the failed navigation is a page the shell did not author
+/// and cannot restyle.
+#[cfg(windows)]
+fn install_offline_guard(app: &AppHandle, win: &WebviewWindow) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_WEB_ERROR_STATUS;
+    use webview2_com::{take_pwstr, NavigationCompletedEventHandler};
+    use windows_core::{BOOL, PWSTR};
+
+    let handle = app.clone();
+    let result = win.with_webview(move |platform| {
+        let controller = platform.controller();
+        let webview = match unsafe { controller.CoreWebView2() } {
+            Ok(webview) => webview,
+            Err(err) => {
+                log_line(&format!("[shell] offline guard: no core webview ({err})"));
+                return;
+            }
+        };
+        let app_for_callback = handle.clone();
+        let handler = NavigationCompletedEventHandler::create(Box::new(move |sender, args| {
+            let (Some(sender), Some(args)) = (sender, args) else {
+                return Ok(());
+            };
+            let mut success = BOOL(0);
+            if unsafe { args.IsSuccess(&mut success) }.is_err() || success.as_bool() {
+                return Ok(());
+            }
+            let mut status = COREWEBVIEW2_WEB_ERROR_STATUS::default();
+            let _ = unsafe { args.WebErrorStatus(&mut status) };
+            let mut raw = PWSTR::null();
+            let source = match unsafe { sender.Source(&mut raw) } {
+                Ok(()) => take_pwstr(raw),
+                Err(_) => String::new(),
+            };
+            recover_from_navigation(&app_for_callback, &source, status.0);
+            Ok(())
+        }));
+        let mut token = 0i64;
+        if let Err(err) = unsafe { webview.add_NavigationCompleted(&handler, &mut token) } {
+            log_line(&format!("[shell] offline guard: could not subscribe ({err})"));
+        }
+    });
+    if let Err(err) = result {
+        log_line(&format!("[shell] offline guard unavailable: {err}"));
+    }
+}
+
+/// Cheap HTTP liveness probe against the local Next server.
+///
+/// A TCP connect alone is not enough: a hung event loop still accepts the
+/// socket. The status line is read with a timeout, and only 2xx/3xx counts.
+/// `/api/updates` is the same identity endpoint the bootstrap uses, so the
+/// probe cannot disagree with startup about what "alive" means.
+fn probe_app_health() -> bool {
+    probe_app_health_at(app_port())
+}
+
+fn probe_app_health_at(port: u16) -> bool {
+    use std::io::Read;
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+    let request = format!(
+        "GET /api/updates HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut head = [0u8; 64];
+    match stream.read(&mut head) {
+        Ok(n) if n > 0 => is_ok_status_line(&String::from_utf8_lossy(&head[..n])),
+        _ => false,
+    }
+}
+
+fn is_ok_status_line(head: &str) -> bool {
+    let mut parts = head.split_whitespace();
+    let version = parts.next().unwrap_or("");
+    let status = parts.next().unwrap_or("");
+    version.starts_with("HTTP/1.") && (status.starts_with('2') || status.starts_with('3'))
+}
+
+const WATCHDOG_INTERVAL: Duration = Duration::from_secs(15);
+const WATCHDOG_MISSES: u32 = 3;
+
+/// Mid-session liveness watchdog.
+///
+/// The bootstrap reports a child that EXITS, and the NavigationCompleted guard
+/// catches a failed navigation, but a Next server whose event loop is wedged
+/// keeps the socket open and the last document on screen. Three consecutive
+/// unanswered probes (45 s) replace the window with the same branded fallback.
+/// It only acts while the window is on the app origin, so booting and the
+/// offline screen are never mistaken for a hang.
+fn start_watchdog(app: &AppHandle) {
+    if app.state::<AppState>().watchdog.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let mut misses = 0u32;
+        loop {
+            std::thread::sleep(WATCHDOG_INTERVAL);
+            let state = handle.state::<AppState>();
+            if state.quitting.load(Ordering::SeqCst) {
+                break;
+            }
+            let showing_app = handle
+                .get_webview_window("main")
+                .and_then(|win| win.url().ok())
+                .map(|url| is_app_origin(&url))
+                .unwrap_or(false);
+            if !showing_app {
+                misses = 0;
+                continue;
+            }
+            if probe_app_health() {
+                misses = 0;
+                continue;
+            }
+            misses += 1;
+            log_line(&format!(
+                "[watchdog] local service miss {misses}/{WATCHDOG_MISSES}"
+            ));
+            if misses < WATCHDOG_MISSES {
+                continue;
+            }
+            misses = 0;
+            if state.recovering.swap(true, Ordering::SeqCst) {
+                continue;
+            }
+            log_line("[watchdog] local service unresponsive -> branded offline screen");
+            show_offline_screen(
+                &handle,
+                OfflineReason::LocalService,
+                "watchdog: app did not answer /api/updates",
+            );
+            emit_status(
+                &handle,
+                "error",
+                "The local service stopped responding. Click Try again. Your data is safe.",
+            );
+        }
+    });
+}
+
 /// Injected before any application script runs. WebView2 does not implement
 /// the Notification API, so the app's alerts settings screen would report "not
 /// supported" inside the desktop window. This maps the standard constructor onto
@@ -267,6 +542,19 @@ struct AppState {
     /// Whether a stream was working when the page last spoke. Re-applied on
     /// focus for the same reason as the badge.
     taskbar_working: AtomicBool,
+    /// The bundled splash URL captured when the window was built. A failed
+    /// navigation leaves WebView2 showing its own Edge/Bing error page, which
+    /// the shell cannot style; this is the one document it owns and can return
+    /// to. Captured rather than hard-coded so the Tauri asset origin can differ
+    /// per platform (and future Tauri versions).
+    splash_url: Mutex<Option<tauri::Url>>,
+    /// Set while the shell is replacing a failed navigation, so the
+    /// NavigationCompleted guard never fights itself.
+    recovering: AtomicBool,
+    /// One liveness watchdog per process. It only acts while the window is
+    /// showing the app (never the splash), so a failed boot is not reported as
+    /// a mid-session hang.
+    watchdog: AtomicBool,
 }
 
 fn log_line(line: &str) {
@@ -635,6 +923,9 @@ fn navigate_to_app(app: &AppHandle) {
         };
         let _ = win.navigate(url);
         maybe_run_diagnostics(app);
+        // One watchdog per process. It starts with the first navigation to the
+        // app and idles whenever the window is not on the app origin.
+        start_watchdog(app);
 
         // The notice is injected after the page has had time to render; it is
         // written once, so it never nags on later launches.
@@ -658,6 +949,12 @@ fn show_failure_overlay(app: &AppHandle, message: &str) {
         Some(w) => w,
         None => return,
     };
+    // If a failed navigation already moved the window to the bundled splash, the
+    // splash is rendering the branded offline state (and `emit_status("error")`
+    // updates it). Injecting a second panel over it would stack two failures.
+    if win.url().ok().map(|url| !is_app_origin(&url)).unwrap_or(false) {
+        return;
+    }
     let quoted = serde_json::to_string(message).unwrap_or_else(|_| "\"Server stopped\"".to_string());
     let script = format!(
         r#"(function () {{
@@ -1568,6 +1865,28 @@ fn desktop_retry(app: AppHandle) {
     start_supervisor(app);
 }
 
+/// The branded fallback's primary action.
+///
+/// `desktop_retry` always restarts supervision, which is the right move after a
+/// crash but adds seconds of boot noise when the server is in fact alive and a
+/// single navigation failed. Probe the loopback port first (a TCP connect is the
+/// cheapest honest liveness check) and only start the supervisor when it is
+/// actually down.
+#[tauri::command]
+fn desktop_reopen(app: AppHandle) {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], app_port()));
+    let live = std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(400)).is_ok();
+    log_line(&format!(
+        "[shell] retry: local service {}",
+        if live { "alive" } else { "down" }
+    ));
+    if live {
+        navigate_to_app(&app);
+    } else {
+        start_supervisor(app);
+    }
+}
+
 #[tauri::command]
 fn desktop_info(state: tauri::State<AppState>) -> serde_json::Value {
     serde_json::json!({
@@ -1645,6 +1964,7 @@ fn clamped_bounds(app: &AppHandle, prefs: &Prefs) -> (f64, f64, Option<(f64, f64
 
 fn build_window(app: &AppHandle, prefs: &Prefs) -> tauri::Result<WebviewWindow> {
     let (width, height, position) = clamped_bounds(app, prefs);
+    let app_for_new_window = app.clone();
     let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App(SPLASH.into()))
         .title("Black Eclipse")
         .inner_size(width, height)
@@ -1658,7 +1978,38 @@ fn build_window(app: &AppHandle, prefs: &Prefs) -> tauri::Result<WebviewWindow> 
         // in the app (tab reordering, workspace widgets, chart symbol drops).
         // The app uses HTML5 DnD, never Tauri's DragDropEvent, so opt out.
         .disable_drag_drop_handler()
-        .initialization_script(INIT_SCRIPT);
+        .initialization_script(INIT_SCRIPT)
+        // The window only ever shows documents this shell can brand. A link to
+        // a remote page used to navigate the WebView away from the app (and,
+        // offline, render Edge's own error page). Cancelling it and handing the
+        // URL to the OS browser keeps the app window on-brand; returning false
+        // cancels the navigation without creating an error document.
+        .on_navigation(|url| {
+            if is_bundled_asset(url) || is_app_origin(url) {
+                return true;
+            }
+            if matches!(url.scheme(), "http" | "https") {
+                log_line(&format!("[navigation] external link -> browser: {url}"));
+                open_external(url.as_str());
+            } else {
+                log_line(&format!("[navigation] refused non-web navigation: {url}"));
+            }
+            false
+        })
+        // `window.open` / `target="_blank"` is not hosted by this single-window
+        // shell. Open it in the real browser instead of silently swallowing it.
+        .on_new_window(move |url, _features| {
+            if is_app_origin(&url) {
+                // An in-app popout (the terminal dock) belongs in the one shell
+                // window: the app has no second branded window.
+                if let Some(win) = app_for_new_window.get_webview_window("main") {
+                    let _ = win.navigate(url);
+                }
+            } else if matches!(url.scheme(), "http" | "https") {
+                open_external(url.as_str());
+            }
+            tauri::webview::NewWindowResponse::Deny
+        });
 
     // A transparent window is what lets the acrylic/blur layer show through the
     // WebView. The app paints an opaque background when the glass setting is
@@ -1681,6 +2032,19 @@ fn build_window(app: &AppHandle, prefs: &Prefs) -> tauri::Result<WebviewWindow> 
     }
 
     let win = builder.build()?;
+
+    // Remember the bundled document (the branded fallback) before the app is
+    // ever navigated to it. `url()` is the source WebView2 has already been
+    // given; validate it so a not-yet-committed `about:blank` can never become
+    // the fallback target.
+    let splash = win
+        .url()
+        .ok()
+        .filter(is_bundled_asset)
+        .unwrap_or_else(default_splash_url);
+    if let Ok(mut slot) = app.state::<AppState>().splash_url.lock() {
+        *slot = Some(splash);
+    }
 
     apply_window_glass(&win, prefs.window_glass);
 
@@ -1878,10 +2242,14 @@ fn main() {
             maximized: AtomicBool::new(prefs.maximized),
             taskbar_unread: AtomicI64::new(0),
             taskbar_working: AtomicBool::new(false),
+            splash_url: Mutex::new(None),
+            recovering: AtomicBool::new(false),
+            watchdog: AtomicBool::new(false),
         })
         .invoke_handler(tauri::generate_handler![
             desktop_notify,
             desktop_retry,
+            desktop_reopen,
             desktop_window_action,
             desktop_toggle_fullscreen,
             desktop_devtools,
@@ -1893,6 +2261,12 @@ fn main() {
         .setup(move |app| {
             let handle = app.handle().clone();
             let win = build_window(&handle, &prefs)?;
+
+            // Own every failed navigation from the first page load. Windows is
+            // where WebView2 paints its own Edge/Bing error document; other
+            // platforms use their own system webviews (see the module docs).
+            #[cfg(windows)]
+            install_offline_guard(&handle, &win);
 
             // Launched by the sign-in entry: show on the taskbar, minimized —
             // never hidden, because a hidden window has no taskbar button and
@@ -2313,6 +2687,105 @@ mod download_tests {
         let second = unique_path_in(&dir, "report.pdf");
         assert_eq!(second.file_name().unwrap(), "report (2).pdf");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// The navigation policy is a string contract with the browser: a mistake here
+/// either strands the window on an unbranded page or blocks the app itself.
+/// These are pure URL checks, so they run without a webview.
+#[cfg(test)]
+mod navigation_tests {
+    use super::{
+        is_app_origin, is_bundled_asset, is_ok_status_line, probe_app_health_at,
+        reason_for_failure, OfflineReason,
+    };
+
+    fn url(raw: &str) -> tauri::Url {
+        tauri::Url::parse(raw).expect("test URL")
+    }
+
+    #[test]
+    fn only_the_local_app_port_may_own_the_window() {
+        assert!(is_app_origin(&url("http://127.0.0.1:3100/")));
+        assert!(is_app_origin(&url("http://localhost:3100/alerts")));
+        assert!(!is_app_origin(&url("http://127.0.0.1:3101/")));
+        assert!(!is_app_origin(&url("http://127.0.0.1/")));
+        assert!(!is_app_origin(&url("https://example.com/")));
+        assert!(!is_app_origin(&url("tauri://localhost/")));
+    }
+
+    #[test]
+    fn the_bundled_splash_is_recognized_on_both_asset_origins() {
+        assert!(is_bundled_asset(&url("tauri://localhost/")));
+        assert!(is_bundled_asset(&url("http://tauri.localhost/")));
+        assert!(!is_bundled_asset(&url("http://127.0.0.1:3100/")));
+        assert!(!is_bundled_asset(&url("https://tauri.localhost.evil.example/")));
+    }
+
+    #[test]
+    fn a_loopback_failure_is_never_reported_as_no_internet() {
+        assert_eq!(reason_for_failure(true, 11), OfflineReason::LocalService);
+        assert_eq!(reason_for_failure(true, 13), OfflineReason::LocalService);
+        assert_eq!(reason_for_failure(false, 13), OfflineReason::Offline);
+        assert_eq!(reason_for_failure(false, 12), OfflineReason::Offline);
+        assert_eq!(reason_for_failure(false, 7), OfflineReason::Timeout);
+        assert_eq!(reason_for_failure(false, 0), OfflineReason::Other);
+    }
+
+    /// The guard's target is a CONTRACT with the embedded splash: the fragment
+    /// key, the branded mark and the retry command must all exist, or a failed
+    /// navigation lands on a page that cannot explain itself.
+    #[test]
+    fn the_embedded_splash_can_render_the_offline_state() {
+        let splash = include_str!("../../ui/index.html");
+        assert!(splash.contains("params.get(\"offline\")"), "splash must read #offline=<reason>");
+        assert!(splash.contains("desktop_reopen"), "splash retry must call desktop_reopen");
+        assert!(splash.contains("clipPath id=\"be-tile\""), "splash must carry the brand mark inline");
+        assert!(!splash.contains("data-state=\"error\""), "the old unbranded error state must be gone");
+    }
+
+    #[test]
+    fn the_watchdog_accepts_only_a_served_http_response() {
+        assert!(is_ok_status_line("HTTP/1.1 200 OK\r\n"));
+        assert!(is_ok_status_line("HTTP/1.1 307 Temporary Redirect\r\n"));
+        assert!(!is_ok_status_line("HTTP/1.1 500 Internal Server Error\r\n"));
+        assert!(!is_ok_status_line("HTTP/1.1 404 Not Found\r\n"));
+        assert!(!is_ok_status_line(""));
+        assert!(!is_ok_status_line("garbage"));
+    }
+
+    /// The probe must distinguish a served response from a closed port and from
+    /// a listener that accepts the socket but never answers (the hung event loop
+    /// this watchdog exists for).
+    #[test]
+    fn the_liveness_probe_talks_http_and_gives_up_on_a_silent_socket() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let server = std::thread::spawn(move || {
+            if let Ok((mut socket, _)) = listener.accept() {
+                let mut buf = [0u8; 256];
+                let _ = socket.read(&mut buf);
+                let _ = socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
+            }
+        });
+        assert!(probe_app_health_at(port));
+        server.join().expect("server thread");
+
+        // Nothing is listening on this port any more.
+        assert!(!probe_app_health_at(port));
+
+        // Accept but never reply: connect succeeds, the read timeout fails it.
+        let silent = TcpListener::bind("127.0.0.1:0").expect("bind silent");
+        let silent_port = silent.local_addr().expect("addr").port();
+        let held = std::thread::spawn(move || {
+            let _guard = silent.accept();
+            std::thread::sleep(std::time::Duration::from_secs(5));
+        });
+        assert!(!probe_app_health_at(silent_port));
+        drop(held);
     }
 }
 

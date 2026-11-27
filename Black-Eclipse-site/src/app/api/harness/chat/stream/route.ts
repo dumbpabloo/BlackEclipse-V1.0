@@ -134,9 +134,18 @@ export async function POST(request: Request) {
 
   // Phase 23: this conversation's approved project folder, read SERVER-SIDE so
   // the browser cannot point a run at an arbitrary directory.
-  const workspaceRootId = chatId
+  let workspaceRootId = chatId
     ? await readSessionWorkspaceRootId(chatId).catch(() => undefined)
     : undefined;
+  const rawWorkspaceRootId = body.workspaceRootId;
+  if (
+    typeof rawWorkspaceRootId === "string"
+    && /^bot:[A-Za-z0-9._:-]{1,160}$/.test(rawWorkspaceRootId.trim())
+  ) {
+    workspaceRootId = rawWorkspaceRootId.trim();
+  } else if (!workspaceRootId && chatId.startsWith("bot-")) {
+    workspaceRootId = `bot:${chatId.slice(4)}`;
+  }
   // Bot chats and group-member turns opt into private per-conversation memory.
   // Only the one known value is honoured; anything else is ignored.
   const memoryScope = body.memoryScope === "conversation" ? ("conversation" as const) : undefined;
@@ -253,22 +262,49 @@ export async function POST(request: Request) {
       try {
         // Talk to the runtime directly: a relative fetch has no base URL on the
         // server. The runtime owns the event bus; this relays its frames.
-        const upstream = await fetch(`${HARNESS_PY_URL}/runs/${encodeURIComponent(id)}/stream`, {
-          headers: { Accept: "text/event-stream" },
-        });
-        if (upstream.ok && upstream.body) {
+        //
+        // The relay reconnects with `after=<last durable seq>` if the upstream
+        // drops. A runtime restart kills a live socket; without this, the tab
+        // sat on a dead stream until the client-side idle watchdog noticed.
+        let lastSeq = 0;
+        const idPattern = /^id: (\d+)$/gm;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const upstreamUrl = new URL(`${HARNESS_PY_URL}/runs/${encodeURIComponent(id)}/stream`);
+          if (lastSeq > 0) upstreamUrl.searchParams.set("after", String(lastSeq));
+          const upstream = await fetch(upstreamUrl, {
+            headers: { Accept: "text/event-stream" },
+            signal: request.signal,
+          });
+          if (!upstream.ok || !upstream.body) break;
           const reader = upstream.body.getReader();
           const decoder = new TextDecoder();
           let buffer = "";
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const text = decoder.decode(value, { stream: true });
-            controller.enqueue(encoder.encode(text));
-            buffer += text;
-            if (buffer.includes("event: run.completed") || buffer.includes("event: run.failed")) {
-              finished = true;
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              const text = decoder.decode(value, { stream: true });
+              controller.enqueue(encoder.encode(text));
+              buffer += text;
+              if (buffer.includes("event: run.completed") || buffer.includes("event: run.failed")) {
+                finished = true;
+              }
+              for (const match of text.matchAll(idPattern)) {
+                const seq = Number(match[1]);
+                if (Number.isFinite(seq) && seq > lastSeq) lastSeq = seq;
+              }
             }
+            break;
+          } catch (err) {
+            if (request.signal.aborted) break;
+            if (attempt === 2) {
+              send("client.error", {
+                message: err instanceof Error ? err.message : String(err),
+              });
+              break;
+            }
+            // One short pause, then resume exactly after the last frame we saw.
+            await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
           }
         }
       } catch (err) {

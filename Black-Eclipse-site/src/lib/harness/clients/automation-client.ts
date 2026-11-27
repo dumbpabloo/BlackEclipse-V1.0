@@ -12,13 +12,15 @@ import { redactSecrets } from "../errors";
 export type AutomationState =
   | "draft" | "validating" | "active" | "paused" | "disabled" | "archived";
 export type TriggerKind =
-  | "cron" | "interval" | "one_time" | "event" | "condition" | "manual";
+  | "cron" | "interval" | "one_time" | "event" | "condition" | "webhook" | "manual";
 export type ActionKind =
   | "execute_task" | "execute_workflow" | "run_agent" | "run_team" | "delegate_agent"
   | "call_tool" | "create_task" | "send_notification" | "generate_report"
   | "run_code" | "browser_action" | "custom_action"
   /** A bot whose brain is a saved quant strategy (strategy trading bot). */
-  | "run_strategy";
+  | "run_strategy"
+  /** A bot whose brain is an external ACP agent process. */
+  | "run_external_agent";
 export type ExecutionState =
   | "triggered" | "queued" | "running" | "waiting" | "retrying" | "completed"
   | "failed" | "cancelled" | "timed_out" | "blocked" | "skipped";
@@ -39,6 +41,8 @@ export interface TriggerView {
   eventType: string | null;
   eventFilter: Record<string, unknown>;
   condition: ConditionView | null;
+  /** Present on a webhook trigger; the bearer token for the external wake URL. */
+  webhookSecret?: string | null;
   timezone: string;
   startAt: string | null;
   endAt: string | null;
@@ -560,6 +564,27 @@ export async function getAutomationStatuses(): Promise<Record<string, Automation
     "/automations/statuses", { method: "GET" },
   );
   return body.statuses ?? {};
+}
+
+export interface BotAuditEventView {
+  id: string;
+  automationId: string;
+  action: string;
+  actor: string | null;
+  detail: Record<string, unknown>;
+  createdAt: string;
+}
+
+export async function listAutomationAudit(
+  automationId?: string,
+  limit = 100,
+): Promise<BotAuditEventView[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (automationId) params.set("automationId", automationId);
+  const body = await request<{ events: BotAuditEventView[] }>(
+    `/automations/audit?${params.toString()}`, { method: "GET" },
+  );
+  return body.events ?? [];
 }
 
 export async function listAutomationHistory(id: string): Promise<ExecutionView[]> {

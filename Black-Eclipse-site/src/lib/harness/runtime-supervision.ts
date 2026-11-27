@@ -13,6 +13,12 @@ export interface RuntimeHealth {
   pid?: number;
   /** Agent runs in flight in that process. 0/absent = idle. */
   activeRuns?: number;
+  /**
+   * Runs parked on a human decision (approval / clarification). They are not
+   * "active" in the task registry but a restart would destroy them just the same,
+   * so they protect the process too.
+   */
+  parkedRuns?: number;
 }
 
 /**
@@ -92,7 +98,7 @@ export function shouldReplaceStaleRuntime(
   if (!health || health.service !== "harness-runtime") return false;
   const startedAt = health.startedAtMs ?? 0;
   if (!(sourceMtimeMs > 0) || !(startedAt > 0) || !(startedAt < sourceMtimeMs)) return false;
-  if ((health.activeRuns ?? 0) > 0) return false;
+  if (hasRunsToProtect(health)) return false;
   return true;
 }
 
@@ -103,4 +109,61 @@ export function shouldReplaceStaleRuntime(
  */
 export function isRecentlyHealthy(lastHealthyAt: number | undefined, now: number): boolean {
   return lastHealthyAt !== undefined && now - lastHealthyAt < BUSY_GRACE_MS;
+}
+
+/**
+ * How long a listening-but-silent runtime may keep failing the readiness probe
+ * before the supervisor clears the port. Deliberately much longer than one agent
+ * step: a single synchronous tool or a long model call can stop the event loop
+ * for many seconds, and killing the process then orphans EVERY chat in flight
+ * (observed 2026-11-26: two live runs were killed while they were mid-stream and
+ * were later relabelled `RUN_STALLED` by the watchdog).
+ */
+export const SILENT_KILL_WINDOW_MS = 120_000;
+
+/** Consecutive probe misses required before a silent listener is cleared. */
+export const SILENT_MISSES_BEFORE_KILL = 3;
+
+export interface SilentProbeState {
+  /** Consecutive readiness misses since the last successful answer. */
+  misses: number;
+  /** When the current miss streak began (ms), or undefined before the first miss. */
+  firstMissAt?: number;
+  /** Last confirmed-healthy probe (ms), or undefined if never seen. */
+  lastHealthyAt?: number;
+  /** Now, in ms. */
+  now: number;
+}
+
+/**
+ * Whether a silent-but-LISTENING runtime may be killed.
+ *
+ * The policy is intentionally conservative because the cost is asymmetric: a
+ * missed probe costs one failed request (the next probe adopts the runtime),
+ * while a wrong kill destroys every in-flight run. A kill therefore requires
+ * ALL of:
+ *
+ *   * at least `SILENT_MISSES_BEFORE_KILL` consecutive misses (one slow moment
+ *     is never enough),
+ *   * the miss streak lasting `SILENT_KILL_WINDOW_MS` (a long agent step is not
+ *     a hang), and
+ *   * no confirmed-healthy answer inside that same window.
+ *
+ * Never returns true before the first miss is recorded.
+ */
+export function shouldClearSilentRuntime(state: SilentProbeState): boolean {
+  const { misses, firstMissAt, lastHealthyAt, now } = state;
+  if (misses < SILENT_MISSES_BEFORE_KILL || firstMissAt === undefined) return false;
+  if (isRecentlyHealthy(lastHealthyAt, now)) return false;
+  return now - firstMissAt >= SILENT_KILL_WINDOW_MS;
+}
+
+/**
+ * Should a run be treated as parked-on-a-human (approval / clarification) and
+ * therefore never replaced, cancelled, or stalled out? The runtime reports
+ * `parkedRuns` separately from `activeRuns`; both keep the process alive.
+ */
+export function hasRunsToProtect(health: RuntimeHealth | null): boolean {
+  if (!health) return false;
+  return (health.activeRuns ?? 0) > 0 || (health.parkedRuns ?? 0) > 0;
 }

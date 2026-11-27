@@ -599,7 +599,7 @@ export function ChatHistory({ messages, compact = false, onEditMessage, onResend
                   wrong" lines stacked. */}
               {msg.role === 'assistant' && msg.status != null && !msg.error && !(msg.activities && msg.activities.length > 0) && !(msg.delegations && msg.delegations.length > 0) && (
                 <div className={cn(msg.content ? 'mb-2' : '')}>
-                  <ResponseStatusLine status={msg.status} activities={msg.activities} compact={compact} />
+                  <ResponseStatusLine status={msg.status} activities={msg.activities} note={msg.statusNote} compact={compact} />
                 </div>
               )}
 

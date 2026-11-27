@@ -22,6 +22,30 @@ os.environ.setdefault(
 )
 
 
+class _FakeArtifact:
+    def __init__(self, artifact_id: str, checksum: str = "sha256-abc") -> None:
+        self.id = artifact_id
+        self.checksum = checksum
+        self.name = "receipt.pdf"
+        self.mime_type = "application/pdf"
+        self.size_bytes = 64
+
+
+class _FakeArtifacts:
+    def __init__(self) -> None:
+        self.items: dict[str, _FakeArtifact] = {}
+
+    def add(self, artifact_id: str, checksum: str = "sha256-abc") -> _FakeArtifact:
+        artifact = _FakeArtifact(artifact_id, checksum)
+        self.items[artifact_id] = artifact
+        return artifact
+
+    def get(self, artifact_id: str) -> _FakeArtifact:
+        if artifact_id not in self.items:
+            raise KeyError(artifact_id)
+        return self.items[artifact_id]
+
+
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     import harness.routers.ledger as ledger_router
@@ -31,11 +55,188 @@ def client(tmp_path, monkeypatch):
 
     stub = _StubService()
     stub.ledger = make_service(tmp_path)
+    stub.artifacts = _FakeArtifacts()
     monkeypatch.setattr(ledger_router, "service", stub, raising=False)
 
     app = FastAPI()
     app.include_router(ledger_router.router)
     return TestClient(app), stub.ledger
+
+
+def test_audit_log_and_verify_routes(client):
+    http, engine = client
+    ledger_id = http.post("/ledger/create", json={"name": "Audit"}).json()["id"]
+    http.post(f"/ledger/{ledger_id}/entries", json={
+        "entry_date": "2026-01-10",
+        "memo": "Audit chain",
+        "lines": [
+            {"account_code": "1010", "debit": "10"},
+            {"account_code": "3000", "credit": "10"},
+        ],
+    })
+
+    trail = http.get(f"/ledger/{ledger_id}/audit")
+    assert trail.status_code == 200
+    events = trail.json()["events"]
+    assert events and events[0]["hash"] and events[0]["prevHash"]
+
+    verified = http.get(f"/ledger/{ledger_id}/audit/verify")
+    assert verified.status_code == 200
+    body = verified.json()
+    assert body["ok"] is True, body
+    assert body["status"] == "OK"
+    assert body["checked"] >= 2
+
+
+def test_budget_dimension_and_runway_routes(client):
+    http, engine = client
+    ledger_id = http.post("/ledger/create", json={"name": "Planning"}).json()["id"]
+    for date, lines in (
+        ("2026-10-01", [{"account_code": "1010", "debit": "10000"},
+                        {"account_code": "3000", "credit": "10000"}]),
+        ("2026-10-02", [{"account_code": "6100", "debit": "300",
+                         "dimensions": {"project": "A"}},
+                        {"account_code": "1010", "credit": "300"}]),
+    ):
+        assert http.post(f"/ledger/{ledger_id}/entries",
+                         json={"entry_date": date, "memo": "activity",
+                               "lines": lines}).status_code == 200
+
+    created = http.post(f"/ledger/{ledger_id}/budgets", json={
+        "name": "Plan", "start": "2026-01-01", "end": "2026-12-31",
+        "lines": [{"account_code": "6100", "amount": "500",
+                   "dimensions": {"project": "A"}}],
+    })
+    assert created.status_code == 200, created.text
+    budget = created.json()
+
+    listed = http.get(f"/ledger/{ledger_id}/budgets")
+    assert listed.status_code == 200
+    assert [row["id"] for row in listed.json()["budgets"]] == [budget["id"]]
+
+    variance = http.get(f"/ledger/{ledger_id}/budgets/{budget['id']}/variance")
+    assert variance.status_code == 200, variance.text
+    assert float(variance.json()["totals"]["actual"]) == 300.0
+    assert float(variance.json()["totals"]["variance"]) == -200.0
+
+    dims = http.get(f"/ledger/{ledger_id}/dimensions/project",
+                    params={"start": "2026-01-01", "end": "2026-12-31"})
+    assert dims.status_code == 200
+    dim_rows = {row["value"]: row for row in dims.json()["rows"]}
+    assert float(dim_rows["A"]["expense"]) == 300.0
+
+    runway = http.get(f"/ledger/{ledger_id}/runway",
+                      params={"as_of": "2026-12-31", "history_days": 90})
+    assert runway.status_code == 200, runway.text
+    assert runway.json()["kind"] == "cash_runway"
+    assert float(runway.json()["openingCash"]) == 9700.0
+    assert runway.json()["runwayMonths"] is not None
+
+
+def test_year_end_close_routes(client):
+    http, engine = client
+    ledger_id = http.post("/ledger/create", json={"name": "Year End"}).json()["id"]
+    for date, lines in (
+        ("2026-05-01", [{"account_code": "1010", "debit": "1000"},
+                        {"account_code": "4000", "credit": "1000"}]),
+        ("2026-06-01", [{"account_code": "6100", "debit": "400"},
+                        {"account_code": "1010", "credit": "400"}]),
+    ):
+        posted = http.post(f"/ledger/{ledger_id}/entries",
+                           json={"entry_date": date, "memo": "activity", "lines": lines})
+        assert posted.status_code == 200, posted.text
+
+    preview = http.get(f"/ledger/{ledger_id}/year-end/preview",
+                       params={"fiscal_year": 2026})
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["status"] == "READY"
+    assert float(preview.json()["netIncome"]) == 600.0
+
+    closed = http.post(f"/ledger/{ledger_id}/year-end/close",
+                       json={"fiscal_year": 2026})
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["status"] == "CLOSED"
+    assert closed.json()["entry"]["entryDate"] == "2027-01-01"
+
+    again = http.post(f"/ledger/{ledger_id}/year-end/close",
+                      json={"fiscal_year": 2026})
+    assert again.status_code == 200
+    assert again.json()["status"] == "ALREADY_CLOSED"
+
+
+def test_cash_flow_indirect_route(client):
+    http, engine = client
+    ledger_id = http.post("/ledger/create", json={"name": "Cash"}).json()["id"]
+    http.post(f"/ledger/{ledger_id}/entries", json={
+        "entry_date": "2026-01-02",
+        "memo": "Capital",
+        "lines": [
+            {"account_code": "1010", "debit": "1000"},
+            {"account_code": "3000", "credit": "1000"},
+        ],
+    })
+    http.post(f"/ledger/{ledger_id}/entries", json={
+        "entry_date": "2026-01-03",
+        "memo": "Rent",
+        "lines": [
+            {"account_code": "6100", "debit": "200"},
+            {"account_code": "1010", "credit": "200"},
+        ],
+    })
+
+    resp = http.get(f"/ledger/{ledger_id}/cash-flow",
+                    params={"method": "indirect", "start": "2026-01-01", "end": "2026-01-31"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["kind"] == "cash_flow_indirect"
+    assert float(body["operatingCashFlow"]) == -200.0
+    assert float(body["directOperatingCashFlow"]) == -200.0
+    assert body["reconciled"] is True
+
+    bad = http.get(f"/ledger/{ledger_id}/cash-flow", params={"method": "nonsense"})
+    assert bad.status_code == 422
+
+
+def test_attachment_routes(client):
+    http, engine = client
+    import harness.routers.ledger as ledger_router
+
+    artifacts = ledger_router.service.artifacts
+    artifacts.add("art_1")
+
+    ledger_id = http.post("/ledger/create", json={"name": "Docs"}).json()["id"]
+    posted = http.post(f"/ledger/{ledger_id}/entries", json={
+        "entry_date": "2026-01-10",
+        "memo": "Receipt attached",
+        "lines": [
+            {"account_code": "1010", "debit": "25"},
+            {"account_code": "3000", "credit": "25"},
+        ],
+    }).json()
+    entry_id = posted["id"]
+
+    attached = http.post(f"/ledger/{ledger_id}/attachments", json={
+        "entry_id": entry_id, "artifact_id": "art_1", "note": "supplier receipt",
+    })
+    assert attached.status_code == 200, attached.text
+    attachment = attached.json()
+    assert attachment["checksum"] == "sha256-abc"
+
+    listed = http.get(f"/ledger/{ledger_id}/attachments", params={"entry_id": entry_id})
+    assert listed.status_code == 200
+    assert [row["id"] for row in listed.json()["attachments"]] == [attachment["id"]]
+
+    entry_read = http.get(f"/ledger/{ledger_id}/entries/{entry_id}")
+    assert entry_read.status_code == 200
+    assert entry_read.json()["attachments"][0]["artifactId"] == "art_1"
+
+    verified = http.get(f"/ledger/{ledger_id}/attachments/{attachment['id']}/verify")
+    assert verified.status_code == 200
+    assert verified.json()["status"] == "MATCHED"
+
+    detached = http.delete(f"/ledger/{ledger_id}/attachments/{attachment['id']}")
+    assert detached.status_code == 200
+    assert detached.json()["removed"] is True
 
 
 def test_create_post_and_read_statements(client):

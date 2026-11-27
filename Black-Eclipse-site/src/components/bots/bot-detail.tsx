@@ -9,11 +9,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
 import {
-  AlertTriangle, ArrowLeft, CalendarDays, CheckCircle2, ChevronDown, Eye, ExternalLink,
+  AlertTriangle, ArrowLeft, CalendarDays, CheckCircle2, ChevronDown, Copy, Download, Eye, ExternalLink,
   GitBranch, ListChecks, MoreHorizontal, Pause, Play, Settings, ShieldCheck, Sparkles,
   SquarePen, Trash2,
 } from '@/lib/icons';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
@@ -22,6 +23,7 @@ import { BotTradingSection } from '@/components/bots/bot-trading-section';
 import { GhostCustomizer } from '@/components/bots/ghost-customizer';
 import { ScheduleEditor } from '@/components/bots/schedule-editor';
 import { RunBehaviourEditor } from '@/components/bots/run-behaviour-editor';
+import { downloadBot } from '@/lib/bots/transfer';
 import { BotModelPicker } from '@/components/bots/bot-model-picker';
 import { useAgentChoices } from '@/lib/agent-presets/use-agent-choices';
 import { listWorkflows, type WorkflowSummary } from '@/lib/graph-studio/persistence-client';
@@ -33,11 +35,13 @@ import {
   disableAutomation,
   enableAutomation,
   getAutomationStatus,
+  listAutomationAudit,
   pauseAutomation,
   resumeAutomation,
   updateAutomation,
   type AutomationStatusView,
   type AutomationView,
+  type BotAuditEventView,
 } from '@/lib/harness/clients/automation-browser';
 import { avatarFor, useBotAvatarStore } from '@/lib/bots/avatar-store';
 import {
@@ -182,6 +186,9 @@ export function BotDetail({ bot, busy, refreshKey = 0, onClose, onChanged, onRun
                 <DropdownMenuItem onClick={() => onDuplicate(bot)}>
                   {t('bots.duplicate')}
                 </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => downloadBot(bot)}>
+                  <Download size={14} /> {t('bots.export')}
+                </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem variant="destructive" onClick={() => onDelete(bot)}>
                   <Trash2 size={14} /> {t('bots.delete')}
@@ -255,6 +262,10 @@ export function BotDetail({ bot, busy, refreshKey = 0, onClose, onChanged, onRun
 
           <SectionBlock icon={ListChecks} title={t('bots.detail.history')}>
             <RunHistory botId={bot.id} refreshKey={refreshKey} />
+          </SectionBlock>
+
+          <SectionBlock icon={ShieldCheck} title={t('bots.detail.audit')}>
+            <AuditSection botId={bot.id} refreshKey={refreshKey} />
           </SectionBlock>
 
           <SectionBlock icon={Settings} title={t('bots.detail.settings')}>
@@ -439,6 +450,26 @@ function ScheduleSection({ bot, onChanged }: { bot: AutomationView; onChanged: (
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
+  const [deliveryTarget, setDeliveryTarget] = useState(() => (
+    bot.delivery.targets?.find((target) => target.adapter === 'messaging')?.destination
+    ?? (bot.delivery.adapter === 'messaging' ? bot.delivery.destination ?? '' : '')
+  ));
+  const externalConfig = (bot.action.config?.externalAgent ?? null) as {
+    command?: string;
+    args?: string[];
+    cwd?: string;
+    permissionPolicy?: string;
+    timeoutS?: number;
+  } | null;
+  const [externalCommand, setExternalCommand] = useState(
+    bot.action.type === 'run_external_agent' ? externalConfig?.command ?? '' : '',
+  );
+  const [externalArgs, setExternalArgs] = useState(
+    bot.action.type === 'run_external_agent' ? (externalConfig?.args ?? []).join(' ') : '',
+  );
+  const [externalAllow, setExternalAllow] = useState(
+    externalConfig?.permissionPolicy === 'allow',
+  );
   const { choices: agentChoices, loading: agentsLoading, error: agentsError } =
     useAgentChoices(bot.action.type === 'run_agent', draft.agentId);
 
@@ -447,6 +478,14 @@ function ScheduleSection({ bot, onChanged }: { bot: AutomationView; onChanged: (
   // version and must not wipe edits the operator has not saved yet.
   useEffect(() => {
     setDraft(draftFromBot(bot));
+    setDeliveryTarget(
+      bot.delivery.targets?.find((target) => target.adapter === 'messaging')?.destination
+      ?? (bot.delivery.adapter === 'messaging' ? bot.delivery.destination ?? '' : ''),
+    );
+    const external = (bot.action.config?.externalAgent ?? null) as { command?: string; args?: string[]; permissionPolicy?: string } | null;
+    setExternalCommand(bot.action.type === 'run_external_agent' ? external?.command ?? '' : '');
+    setExternalArgs(bot.action.type === 'run_external_agent' ? (external?.args ?? []).join(' ') : '');
+    setExternalAllow(external?.permissionPolicy === 'allow');
     setScheduleDirty(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bot.id, bot.version]);
@@ -462,14 +501,47 @@ function ScheduleSection({ bot, onChanged }: { bot: AutomationView; onChanged: (
     try {
       const nextConfig: Record<string, unknown> = { ...(bot.action.config ?? {}), ...buildModelConfig(draft) };
       if (!draft.model) delete nextConfig.modelSettings;
+      const extCommand = externalCommand.trim();
+      const actionType = extCommand
+        ? 'run_external_agent'
+        : (bot.action.type === 'run_external_agent' ? 'run_agent' : bot.action.type);
+      if (extCommand) {
+        nextConfig.externalAgent = {
+          command: extCommand,
+          args: externalArgs.split(/\s+/).filter(Boolean),
+          cwd: externalConfig?.cwd ?? null,
+          permissionPolicy: externalAllow ? 'allow' : 'deny',
+          timeoutS: externalConfig && 'timeoutS' in externalConfig ? externalConfig.timeoutS : null,
+        };
+      } else if (bot.action.type === 'run_external_agent') {
+        delete nextConfig.externalAgent;
+      }
       // Leave an event/condition trigger untouched unless the operator actually
       // changed the schedule; saving a model or run-behaviour edit must never
       // silently downgrade a monitor/rule to an on-demand bot.
-      const trigger = scheduleDirty ? buildTrigger(draft) : bot.trigger;
+      // A webhook edit must not rotate the caller's token: carry the existing
+      // secret when the operator re-saves the webhook schedule.
+      const built = buildTrigger(draft);
+      const trigger = scheduleDirty
+        ? (built.type === 'webhook' && bot.trigger.type === 'webhook'
+          ? { ...built, webhookSecret: bot.trigger.webhookSecret }
+          : built)
+        : bot.trigger;
+      const target = deliveryTarget.trim();
+      const delivery = {
+        ...bot.delivery,
+        adapter: target ? 'messaging' as const : (bot.delivery.adapter === 'messaging' ? 'in_app' as const : bot.delivery.adapter),
+        destination: target || null,
+        targets: [
+          ...(bot.delivery.targets ?? []).filter((item) => item.adapter !== 'messaging'),
+          ...(target ? [{ adapter: 'messaging' as const, destination: target }] : []),
+        ],
+      };
       const updated = await updateAutomation(bot.id, {
         trigger,
         ...buildPolicies(draft),
-        action: { ...bot.action, agentId: draft.agentId, config: nextConfig },
+        delivery,
+        action: { ...bot.action, type: actionType, agentId: draft.agentId, config: nextConfig },
         ...(scheduleDirty && draft.schedule === 'condition'
           ? { condition: draft.condition ?? bot.condition }
           : {}),
@@ -512,6 +584,75 @@ function ScheduleSection({ bot, onChanged }: { bot: AutomationView; onChanged: (
         draft={draft}
         onChange={(p) => { setDraft((d) => ({ ...d, ...p })); setScheduleDirty(true); }}
       />
+      <div className="space-y-2 rounded-xl border border-border/30 bg-white/[0.03] p-2.5">
+        <div className="text-[11px] font-medium text-muted-foreground">
+          {t('bots.externalAgent.title')}
+        </div>
+        <p className="text-[10px] leading-snug text-muted-foreground">
+          {t('bots.externalAgent.hint')}
+        </p>
+        <Input
+          value={externalCommand}
+          onChange={(e) => setExternalCommand(e.target.value)}
+          placeholder="gemini"
+          aria-label={t('bots.externalAgent.command')}
+        />
+        <Input
+          value={externalArgs}
+          onChange={(e) => setExternalArgs(e.target.value)}
+          placeholder="--acp (extra argv, space-separated)"
+          aria-label={t('bots.externalAgent.args')}
+        />
+        <label className="flex items-center gap-2 text-[10px] text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={externalAllow}
+            onChange={(e) => setExternalAllow(e.target.checked)}
+            className="h-3.5 w-3.5 accent-[var(--primary)]"
+          />
+          {t('bots.externalAgent.allow')}
+        </label>
+      </div>
+      {bot.trigger.type === 'webhook' && bot.trigger.webhookSecret && (
+        <div className="rounded-xl border border-border/30 bg-white/[0.03] p-2.5">
+          <div className="mb-1 text-[11px] font-medium text-muted-foreground">
+            {t('bots.webhook.title')}
+          </div>
+          <p className="mb-2 text-[10px] leading-snug text-muted-foreground">
+            {t('bots.webhook.hint')}
+          </p>
+          <div className="flex items-center gap-1.5">
+            <code className="min-w-0 flex-1 truncate rounded bg-black/30 px-2 py-1 font-mono text-[10px] text-foreground">
+              POST /api/automations/webhook/{bot.id}
+            </code>
+            <button
+              type="button"
+              onClick={() => { void navigator.clipboard?.writeText(`/api/automations/webhook/${bot.id}`); }}
+              className="rounded p-1 text-muted-foreground hover:bg-white/[0.06] hover:text-foreground"
+              aria-label={t('bots.webhook.copyUrl')}
+              title={t('bots.webhook.copyUrl')}
+            >
+              <Copy size={12} />
+            </button>
+          </div>
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <code className="min-w-0 flex-1 truncate rounded bg-black/30 px-2 py-1 font-mono text-[10px] text-foreground">
+              X-Eclipse-Webhook-Token: {bot.trigger.webhookSecret}
+            </code>
+            <button
+              type="button"
+              onClick={() => {
+                void navigator.clipboard?.writeText(bot.trigger.webhookSecret ?? '');
+              }}
+              className="rounded p-1 text-muted-foreground hover:bg-white/[0.06] hover:text-foreground"
+              aria-label={t('bots.webhook.copyToken')}
+              title={t('bots.webhook.copyToken')}
+            >
+              <Copy size={12} />
+            </button>
+          </div>
+        </div>
+      )}
       <BotModelPicker
         provider={draft.modelProvider}
         model={draft.model}
@@ -525,6 +666,20 @@ function ScheduleSection({ bot, onChanged }: { bot: AutomationView; onChanged: (
         <span>{t('bots.nextRun')}: <span className="text-foreground">{bot.nextRunAt ? formatDateTime(bot.nextRunAt) : t('bots.never')}</span></span>
         <span>{t('bots.lastRun')}: <span className="text-foreground">{bot.lastRunAt ? formatDateTime(bot.lastRunAt) : t('bots.never')}</span></span>
       </div>
+      <label className="block">
+        <span className="mb-1 block text-[11px] font-medium text-muted-foreground">
+          {t('bots.deliveryTarget')}
+        </span>
+        <Input
+          value={deliveryTarget}
+          onChange={(e) => setDeliveryTarget(e.target.value)}
+          placeholder="telegram:123456789"
+          aria-label={t('bots.deliveryTarget')}
+        />
+        <span className="mt-1 block text-[10px] text-muted-foreground">
+          {t('bots.deliveryTargetHint')}
+        </span>
+      </label>
       <div className="flex items-center gap-2">
         <Button size="sm" onClick={save} disabled={saving}>
           {saving ? t('bots.saving') : t('bots.save')}
@@ -708,6 +863,38 @@ function CapabilitiesSection({ bot }: { bot: AutomationView }) {
         <p className="text-xs text-muted-foreground">{t('bots.capabilitiesUnavailable')}</p>
       )}
     </div>
+  );
+}
+
+function AuditSection({ botId, refreshKey }: { botId: string; refreshKey?: number }) {
+  const [events, setEvents] = useState<BotAuditEventView[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void listAutomationAudit(botId, 100)
+      .then((next) => { if (!cancelled) setEvents(next); })
+      .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : 'Could not read the audit trail.'); });
+    return () => { cancelled = true; };
+  }, [botId, refreshKey]);
+  if (error) return <p className="text-xs text-rose-300">{error}</p>;
+  if (events.length === 0) return <p className="text-xs text-muted-foreground">No audit events yet.</p>;
+  return (
+    <ul className="space-y-1 text-xs">
+      {events.map((event) => (
+        <li key={event.id} className="flex items-start justify-between gap-2 rounded-lg border border-border/20 px-2 py-1.5">
+          <span className="min-w-0">
+            <span className="font-medium capitalize text-foreground">{event.action}</span>
+            <span className="ml-1 text-muted-foreground">by {event.actor || 'operator'}</span>
+            {Object.keys(event.detail ?? {}).length > 0 && (
+              <span className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">
+                {JSON.stringify(event.detail)}
+              </span>
+            )}
+          </span>
+          <span className="shrink-0 text-[10px] text-muted-foreground">{formatDateTime(event.createdAt)}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 

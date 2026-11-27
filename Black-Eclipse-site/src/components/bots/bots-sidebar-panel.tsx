@@ -6,10 +6,10 @@
 // when the sidebar is narrow. This is the ONE bot list: the Bots page itself is
 // just the conversation + the scheduled-jobs rail.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
-import { CalendarDays, Copy, MoreHorizontal, Pencil, Pin, PinOff, Plus, RefreshCw, Trash2, Users } from '@/lib/icons';
+import { Archive, CalendarDays, Copy, MoreHorizontal, Pencil, Pin, PinOff, Plus, RefreshCw, Search, Trash2, Upload, Users } from '@/lib/icons';
 import { BotAvatar } from '@/components/bots/bot-avatar';
 import { BotsTextSizeMenu } from '@/components/bots/bots-text-size';
 import { GhostAvatar } from '@/components/bots/ghost-avatar';
@@ -28,10 +28,11 @@ import { isDesk } from '@/lib/bots/desk';
 import { useBotGroupsStore, useHydrateBotGroups } from '@/lib/bots/groups-store';
 import { useWorkspaceStore } from '@/lib/agent-workspace/store';
 import { duplicateBot } from '@/lib/bots/duplicate';
+import { importBotInput } from '@/lib/bots/transfer';
 import { forgetBotLocally, forgetBotMemory } from '@/lib/bots/purge';
 import { ghostSpecFromId } from '@/lib/bots/ghost';
-import { executionLabel, isTerminalExecution } from '@/lib/bots/state';
-import { deleteAutomation, updateAutomation } from '@/lib/harness/clients/automation-browser';
+import { botMatchesSearch, executionLabel, isTerminalExecution } from '@/lib/bots/state';
+import { archiveAutomation, createAutomation, deleteAutomation, updateAutomation } from '@/lib/harness/clients/automation-browser';
 import type { AutomationStatusSummaryView, AutomationView } from '@/lib/harness/clients/automation-browser';
 import type { BotMessage } from '@/lib/bots/chat-store';
 
@@ -84,6 +85,8 @@ export function BotsSidebarPanel({ collapsed, onActivate }: BotsSidebarPanelProp
   const statusLoaded = useBotsStore((s) => s.statusLoaded);
   const byBot = useBotChatStore((s) => s.byBot);
   const [deleteTarget, setDeleteTarget] = useState<AutomationView | null>(null);
+  const [query, setQuery] = useState('');
+  const importRef = useRef<HTMLInputElement>(null);
   const [renameTarget, setRenameTarget] = useState<AutomationView | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [renaming, setRenaming] = useState(false);
@@ -130,6 +133,11 @@ export function BotsSidebarPanel({ collapsed, onActivate }: BotsSidebarPanelProp
     });
   }, [bots, byBot, statusById, pinnedIds]);
 
+  const visibleBots = useMemo(
+    () => sortedBots.filter((bot) => botMatchesSearch(bot, query)),
+    [sortedBots, query],
+  );
+
   const sortedGroups = useMemo(
     () => [...groups].sort((a, b) => {
       const am = byGroup[a.id];
@@ -140,6 +148,11 @@ export function BotsSidebarPanel({ collapsed, onActivate }: BotsSidebarPanelProp
     }),
     [groups, byGroup],
   );
+
+  const visibleGroups = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return q ? sortedGroups.filter((g) => g.name.toLowerCase().includes(q)) : sortedGroups;
+  }, [sortedGroups, query]);
 
   const open = (id: string | null) => {
     select(id);
@@ -196,6 +209,40 @@ export function BotsSidebarPanel({ collapsed, onActivate }: BotsSidebarPanelProp
       open(created.id);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'duplicate failed');
+    }
+  };
+
+  const archive = async (bot: AutomationView) => {
+    setActionError(null);
+    if (selectedId === bot.id) select(null);
+    try {
+      await archiveAutomation(bot.id);
+      // Archived bots stop running but their history and conversation stay.
+      // Reconcile from the server so the row reflects the real state.
+      await hydrate();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'archive failed');
+      await hydrate();
+    }
+  };
+
+  const importFile = async (file: File | undefined) => {
+    if (!file) return;
+    setActionError(null);
+    try {
+      const parsed = JSON.parse(await file.text()) as unknown;
+      const input = importBotInput(parsed);
+      const created = await createAutomation(input);
+      await hydrate();
+      open(created.id);
+    } catch (err) {
+      setActionError(
+        err instanceof Error
+          ? `${t('bots.importFailed')} ${err.message}`
+          : t('bots.importFailed'),
+      );
+    } finally {
+      if (importRef.current) importRef.current.value = '';
     }
   };
 
@@ -323,6 +370,22 @@ export function BotsSidebarPanel({ collapsed, onActivate }: BotsSidebarPanelProp
           </button>
           <button
             type="button"
+            onClick={() => importRef.current?.click()}
+            className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+            title={t('bots.import')}
+            aria-label={t('bots.import')}
+          >
+            <Upload size={13} />
+          </button>
+          <input
+            ref={importRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(e) => void importFile(e.target.files?.[0])}
+          />
+          <button
+            type="button"
             onClick={() => void hydrate()}
             className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
             title={t('common.refresh')}
@@ -339,6 +402,17 @@ export function BotsSidebarPanel({ collapsed, onActivate }: BotsSidebarPanelProp
         </p>
       )}
 
+      <div className="relative mx-1 mb-2">
+        <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={t('common.search')}
+          aria-label={t('common.search')}
+          className="h-7 pl-7 text-[11px]"
+        />
+      </div>
+
       {loading && bots.length === 0 ? (
         <p className="px-2 py-1 text-xs text-muted-foreground">{t('common.loading')}</p>
       ) : bots.length === 0 ? (
@@ -351,7 +425,7 @@ export function BotsSidebarPanel({ collapsed, onActivate }: BotsSidebarPanelProp
         </button>
       ) : (
         <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto scrollbar-hide">
-          {sortedBots.map((bot) => {
+          {visibleBots.map((bot) => {
             const active = bot.id === selectedId;
             const pinned = pinnedIds.includes(bot.id);
             const live = statusById[bot.id]?.lastExecution;
@@ -410,6 +484,9 @@ export function BotsSidebarPanel({ collapsed, onActivate }: BotsSidebarPanelProp
                     <DropdownMenuItem onClick={() => void duplicate(bot)}>
                       <Copy size={14} /> {t('bots.duplicate')}
                     </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => void archive(bot)}>
+                      <Archive size={14} /> {t('bots.archive')}
+                    </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem variant="destructive" onClick={() => setDeleteTarget(bot)}>
                       <Trash2 size={14} /> {t('bots.delete')}
@@ -448,7 +525,7 @@ export function BotsSidebarPanel({ collapsed, onActivate }: BotsSidebarPanelProp
           </button>
         ) : (
           <ul className="space-y-0.5">
-            {sortedGroups.map((g) => {
+            {visibleGroups.map((g) => {
               const active = g.id === selectedGroupId;
               return (
                 <li key={g.id}>

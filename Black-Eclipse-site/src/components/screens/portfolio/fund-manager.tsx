@@ -24,6 +24,7 @@ import {
   exportAllFundsJson, exportFundCsv, exportFundJson, isDemoFund, parseFundsPayload,
 } from './fund-store';
 import { useLiveQuotes } from './use-live-quotes';
+import { useEngineFundStats } from './use-engine-fund-stats';
 import { AddTransactionDialog, ConfirmDialog, CreateFundDialog, RenameFundDialog } from './fund-dialogs';
 import type { Fund, Transaction } from '@/lib/portfolio/types';
 
@@ -102,10 +103,18 @@ export function FundManager({ funds, onOpenFund, onCreate, onUpdate, onDelete, o
   );
   const { quotes, loading } = useLiveQuotes(symbols);
   const histories = usePriceHistories(symbols, Object.fromEntries(symbols.map(s => [s, marketHintFor(s)])));
+  // The cards/totals read the same engine as the detail workspace. A fund the
+  // engine cannot answer keeps a client preview, shown as such in the header.
+  const engineStats = useEngineFundStats(funds ?? [], quotes);
 
   const statsByFund = useMemo(() => {
     const map = new Map<string, PortfolioStats>();
     for (const f of funds ?? []) {
+      const fromEngine = engineStats.stats.get(f.id);
+      if (fromEngine) {
+        map.set(f.id, fromEngine);
+        continue;
+      }
       const live: LiveAssetInput[] = [...new Set(f.transactions.map(t => t.symbol.toUpperCase()))]
         .filter(s => s && s !== 'CASH')
         .map(sym => ({
@@ -118,7 +127,7 @@ export function FundManager({ funds, onOpenFund, onCreate, onUpdate, onDelete, o
       map.set(f.id, computePortfolioStats(f.transactions, live, 'FIFO'));
     }
     return map;
-  }, [funds, quotes]);
+  }, [funds, quotes, engineStats.stats]);
 
   const totals = useMemo(() => {
     let value = 0, pnl = 0, holdings = 0;
@@ -131,8 +140,12 @@ export function FundManager({ funds, onOpenFund, onCreate, onUpdate, onDelete, o
 
   /** True once at least one live quote landed (until then, don't trust P/L math). */
   const pricesReady = Object.keys(quotes).length > 0;
-  /** Funds that hold positions but whose prices haven't landed yet → show placeholders. */
-  const hasPositionsNeedingPrices = symbols.length > 0 && !pricesReady;
+  /**
+   * Show placeholders only when neither the engine nor live quotes have priced
+   * the book. Once the engine answers, its valuation is authoritative even if a
+   * particular UI quote feed is still warming up.
+   */
+  const hasPositionsNeedingPrices = symbols.length > 0 && !pricesReady && !engineStats.anyEngine;
   const cardPlaceholder = hasPositionsNeedingPrices;
 
   // ── Overall performance: one NAV line per fund + standard benchmarks ────────
@@ -267,6 +280,21 @@ export function FundManager({ funds, onOpenFund, onCreate, onUpdate, onDelete, o
             </button>
           );
         })}
+        <span
+          title={engineStats.error
+            ? `${engineStats.error}; fund cards use a labelled client preview.`
+            : engineStats.anyEngine
+              ? 'Card totals come from the Python Portfolio Accounting Engine.'
+              : 'Waiting for the Python engine…'}
+          className={cn(
+            'ml-auto shrink-0 rounded-full border px-2.5 py-1 font-mono text-[9px] font-bold uppercase tracking-wider',
+            engineStats.anyEngine
+              ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300'
+              : 'border-amber-400/30 bg-amber-400/10 text-amber-300',
+          )}
+        >
+          {engineStats.anyEngine ? 'engine-backed' : 'preview'}
+        </span>
       </div>
 
       {/* Stats ribbon */}

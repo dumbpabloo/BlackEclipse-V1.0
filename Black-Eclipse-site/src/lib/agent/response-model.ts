@@ -289,6 +289,12 @@ export interface DelegationView {
 /** The full state of one in-flight or finished assistant turn. */
 export interface AssistantTurn {
   status: ResponseStatus;
+  /**
+   * A transient explanation for the working indicator while the run is not
+   * producing tokens (waiting on provider capacity, reconnecting after a lost
+   * stream). Cleared as soon as new content arrives or the turn settles.
+   */
+  statusNote?: string;
   /** Prose accumulated from streamed deltas (the live view). */
   text: string;
   /** Authoritative final text from `client.final` when it arrives. */

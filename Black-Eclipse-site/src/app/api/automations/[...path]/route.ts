@@ -15,6 +15,7 @@ import {
   getAutomationStatuses,
   getAutomationTimeline,
   getBotTrading,
+  listAutomationAudit,
   listAutomationHistory,
   listAutomationVersions,
   panicBotTrading,
@@ -54,6 +55,17 @@ async function handle(request: Request, path: string[], method: string): Promise
   // ── metrics ──────────────────────────────────────────────────────────────
   if (path.length === 1 && path[0] === "metrics" && method === "GET") {
     return NextResponse.json({ success: true, metrics: await getAutomationMetrics() });
+  }
+
+  // ── audit (bot CRUD/lifecycle/run trail) ─────────────────────────────────
+  if (path.length === 1 && path[0] === "audit" && method === "GET") {
+    const url = new URL(request.url);
+    const automationId = url.searchParams.get("automationId") || undefined;
+    const limit = Number(url.searchParams.get("limit") || 100);
+    return NextResponse.json({
+      success: true,
+      events: await listAutomationAudit(automationId, Number.isFinite(limit) ? limit : 100),
+    });
   }
 
   // ── statuses (batch) ─────────────────────────────────────────────────────

@@ -104,6 +104,25 @@ async def portfolio_get(portfolio_id: str, request: Request,
         raise _http_error(exc) from exc
 
 
+@router.get("/portfolio/{portfolio_id}/audit")
+async def portfolio_audit(portfolio_id: str, request: Request, limit: int = 200,
+                          _: bool = Depends(require_operator)) -> dict[str, Any]:
+    try:
+        return {"events": _engine().audit_log(portfolio_id, limit=limit,
+                                              actor_id=_actor(request))}
+    except Exception as exc:  # noqa: BLE001
+        raise _http_error(exc) from exc
+
+
+@router.get("/portfolio/{portfolio_id}/audit/verify")
+async def portfolio_audit_verify(portfolio_id: str, request: Request,
+                                 _: bool = Depends(require_operator)) -> dict[str, Any]:
+    try:
+        return _engine().verify_audit(portfolio_id, actor_id=_actor(request))
+    except Exception as exc:  # noqa: BLE001
+        raise _http_error(exc) from exc
+
+
 @router.patch("/portfolio/{portfolio_id}")
 async def portfolio_update(portfolio_id: str, request: Request,
                            body: dict[str, Any] = Body(...),
@@ -236,11 +255,77 @@ async def portfolio_hedge(portfolio_id: str, request: Request, body: dict[str, A
     return await _engine().hedge(portfolio_id, body, actor_id=_actor(request, body))
 
 
+@router.get("/portfolio/{portfolio_id}/accounts")
+async def portfolio_accounts(portfolio_id: str, request: Request,
+                             _: bool = Depends(require_operator)) -> dict[str, Any]:
+    try:
+        return {"accounts": _engine().list_accounts(portfolio_id, actor_id=_actor(request))}
+    except Exception as exc:  # noqa: BLE001
+        raise _http_error(exc) from exc
+
+
+@router.post("/portfolio/{portfolio_id}/accounts")
+async def portfolio_create_account_route(portfolio_id: str, request: Request,
+                                         body: dict[str, Any] = Body(...),
+                                         _: bool = Depends(require_operator)) -> dict[str, Any]:
+    try:
+        return _engine().create_account(
+            portfolio_id, str(body.get("name") or ""),
+            kind=str(body.get("kind") or "brokerage"),
+            institution=body.get("institution"),
+            currency=body.get("currency"),
+            external_id=body.get("external_id") or body.get("externalId"),
+            actor_id=_actor(request, body),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _http_error(exc) from exc
+
+
+@router.patch("/portfolio/{portfolio_id}/accounts/{account_id}")
+async def portfolio_update_account_route(portfolio_id: str, account_id: str, request: Request,
+                                         body: dict[str, Any] = Body(...),
+                                         _: bool = Depends(require_operator)) -> dict[str, Any]:
+    try:
+        return _engine().update_account(portfolio_id, account_id, body,
+                                        actor_id=_actor(request, body))
+    except Exception as exc:  # noqa: BLE001
+        raise _http_error(exc) from exc
+
+
+@router.delete("/portfolio/{portfolio_id}/accounts/{account_id}")
+async def portfolio_delete_account_route(portfolio_id: str, account_id: str, request: Request,
+                                         _: bool = Depends(require_operator)) -> dict[str, Any]:
+    try:
+        return _engine().delete_account(portfolio_id, account_id, actor_id=_actor(request))
+    except Exception as exc:  # noqa: BLE001
+        raise _http_error(exc) from exc
+
+
 @router.get("/portfolio/{portfolio_id}/tax-lots")
 async def portfolio_tax_lots(portfolio_id: str, request: Request, symbol: Optional[str] = None,
+                             account_id: Optional[str] = None,
                              _: bool = Depends(require_operator)) -> dict[str, Any]:
-    return _engine().calculate_tax_lots(portfolio_id, symbol=symbol, persist=True,
+    return _engine().calculate_tax_lots(portfolio_id, symbol=symbol,
+                                        account_id=account_id,
+                                        persist=not bool(account_id),
                                         actor_id=_actor(request))
+
+
+@router.get("/portfolio/{portfolio_id}/realized-gains")
+async def portfolio_realized_gains_route(
+    portfolio_id: str, request: Request,
+    tax_year: Optional[int] = None, long_term_days: int = 365,
+    wash_sale_window_days: int = 30, include_wash_sale: bool = True,
+    _: bool = Depends(require_operator),
+) -> dict[str, Any]:
+    try:
+        return _engine().realized_gains(
+            portfolio_id, tax_year=tax_year, long_term_days=long_term_days,
+            wash_sale_window_days=wash_sale_window_days,
+            include_wash_sale=include_wash_sale, actor_id=_actor(request),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _http_error(exc) from exc
 
 
 @router.post("/portfolio/{portfolio_id}/rebalance")
@@ -400,6 +485,12 @@ def _http_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail=getattr(exc, "message", str(exc)))
     if code == "PORTFOLIO_FORBIDDEN":
         return HTTPException(status_code=403, detail=getattr(exc, "message", str(exc)))
+    if code == "ACCOUNT_NOT_FOUND":
+        return HTTPException(status_code=404, detail=getattr(exc, "message", str(exc)))
+    if code in ("ACCOUNT_EXISTS", "ACCOUNT_IN_USE"):
+        return HTTPException(status_code=409, detail=getattr(exc, "message", str(exc)))
+    if code == "INVALID_ACCOUNT":
+        return HTTPException(status_code=422, detail=getattr(exc, "message", str(exc)))
     return HTTPException(status_code=400, detail=str(exc))
 
 

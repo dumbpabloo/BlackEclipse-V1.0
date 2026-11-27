@@ -33,7 +33,7 @@ import {
   chartEngineReadinessFromHealth,
   type ChartEngineReadiness,
 } from "./runtime-config";
-import { isRecentlyHealthy, resolveRequestWaitMs, resolveStartTimeoutMs, shouldReplaceStaleRuntime } from "./runtime-supervision";
+import { resolveRequestWaitMs, resolveStartTimeoutMs, shouldClearSilentRuntime, shouldReplaceStaleRuntime } from "./runtime-supervision";
 
 // The URL is authoritative. When an operator overrides HARNESS_PY_URL, the
 // spawned uvicorn must bind the SAME host/port — otherwise health checks would
@@ -62,6 +62,10 @@ interface RuntimeGlobal {
   __harnessPyHealthyAt?: number;
   /** In-flight ensure() so concurrent callers coalesce onto one probe. */
   __harnessPyEnsure?: Promise<boolean>;
+  /** Consecutive readiness misses for a listening-but-silent runtime. */
+  __harnessPyMisses?: number;
+  /** When the current readiness-miss streak began (ms). */
+  __harnessPyFirstMissAt?: number;
   /** Last chart-engine capability probe. Short TTL: a pip install must become
    * visible without a restart, but drawing several charts must not spawn an
    * interpreter each time. */
@@ -493,6 +497,30 @@ function listenerPidsOnPort(): string[] {
   }
 }
 
+/**
+ * Ask a runtime to stop accepting work and finish its in-flight runs.
+ *
+ * A supervised replacement kills the process only after this returns (or after
+ * a short best-effort timeout when the process is genuinely unreachable). This
+ * is the difference between "restart at an idle boundary" and "orphan every
+ * chat in every tab".
+ */
+async function drainRuntime(timeoutS = 20): Promise<boolean> {
+  try {
+    const token = runtimeCallbackToken();
+    const res = await fetch(`${HARNESS_PY_URL}/runtime/drain?timeout_s=${timeoutS}`, {
+      method: "POST",
+      headers: token ? { "X-Harness-Operator": token } : {},
+      signal: AbortSignal.timeout(Math.min(25_000, (timeoutS + 5) * 1000)),
+    });
+    if (!res.ok) return false;
+    const body = (await res.json().catch(() => null)) as { idle?: boolean } | null;
+    return body?.idle !== false;
+  } catch {
+    return false;
+  }
+}
+
 /** Kill whatever is listening on the runtime port, if it is our stale service. */
 function killListenerOnPort(): void {
   for (const pid of listenerPidsOnPort()) {
@@ -585,7 +613,9 @@ export async function ensurePythonRuntime(): Promise<boolean> {
   if (!g.__harnessPyEnsure) {
     g.__harnessPyEnsure = (async () => {
       const ok = await ensurePythonRuntimeUncached();
-      if (ok) g.__harnessPyHealthyAt = Date.now();
+      if (ok) {
+        g.__harnessPyHealthyAt = Date.now();
+      }
       return ok;
     })().finally(() => {
       g.__harnessPyEnsure = undefined;
@@ -620,6 +650,8 @@ async function ensurePythonRuntimeUncached(): Promise<boolean> {
       killListenerOnPort();
       await new Promise((r) => setTimeout(r, 500));
     } else {
+      g.__harnessPyMisses = 0;
+      g.__harnessPyFirstMissAt = undefined;
       return true;
     }
   }
@@ -646,6 +678,8 @@ async function ensurePythonRuntimeUncached(): Promise<boolean> {
   if (listenerPidsOnPort().length > 0) {
     const recheck = await getLiveness(READINESS_PROBE_TIMEOUT_MS);
     if (recheck) {
+      g.__harnessPyMisses = 0;
+      g.__harnessPyFirstMissAt = undefined;
       // The first probe missed but the port answered on the second: that is a
       // runtime that is UP (slow, or busy booting), not a zombie. ADOPT it.
       // It used to fall through to the spawn below, booting a second uvicorn
@@ -653,14 +687,22 @@ async function ensurePythonRuntimeUncached(): Promise<boolean> {
       // "runtime unavailable" for the rest of the session. Measured 2026-11-06.
       return true;
     }
-    // A runtime that answered recently is far more likely to be BUSY than
-    // genuinely hung (a running agent can briefly delay a probe). Killing a
-    // busy runtime orphans its runs, so require that we have NOT seen it
-    // healthy inside the busy-grace window before clearing the port.
-    const recentlyHealthy = isRecentlyHealthy(g.__harnessPyHealthyAt, Date.now());
-    if (recentlyHealthy) {
+    // A probe miss is NOT evidence of a dead runtime. One synchronous tool, a
+    // big SQLite write, or a long model call can keep the event loop busy for
+    // far longer than a readiness timeout. Killing it then orphans every chat in
+    // flight (observed 2026-11-26), so require a sustained miss streak before
+    // clearing the port. Until then, report "busy" and let a later probe adopt it.
+    const now = Date.now();
+    g.__harnessPyMisses = (g.__harnessPyMisses ?? 0) + 1;
+    if (g.__harnessPyFirstMissAt === undefined) g.__harnessPyFirstMissAt = now;
+    if (!shouldClearSilentRuntime({
+      misses: g.__harnessPyMisses,
+      firstMissAt: g.__harnessPyFirstMissAt,
+      lastHealthyAt: g.__harnessPyHealthyAt,
+      now,
+    })) {
       console.warn(
-        "[harness] runtime port is silent but the runtime answered recently — treating it as busy, not killing it"
+        `[harness] runtime port is silent (miss ${g.__harnessPyMisses}) — treating it as busy, not killing it`
       );
       // Do NOT fall through to the spawn below. A second uvicorn would fail to
       // bind the still-held port (`WinError 10048`) — but only AFTER FastAPI
@@ -669,6 +711,14 @@ async function ensurePythonRuntimeUncached(): Promise<boolean> {
       // busy runtime is up; let a later probe (past the grace window) re-check.
       return true;
     }
+    console.warn(
+      `[harness] runtime has been silent for ${Math.round((now - g.__harnessPyFirstMissAt) / 1000)}s across ${g.__harnessPyMisses} probes — clearing the port`
+    );
+    g.__harnessPyMisses = 0;
+    g.__harnessPyFirstMissAt = undefined;
+    // Cooperative boundary first: refuse new runs and let live ones finish. A
+    // silent process may not answer; that is why this is bounded and ignored.
+    await drainRuntime();
     killListenerOnPort();
     await new Promise((r) => setTimeout(r, 300));
   }
@@ -710,6 +760,13 @@ async function ensurePythonRuntimeUncached(): Promise<boolean> {
     // config into the child env so a bot uses the operator's configured provider
     // and model. A real env var always wins; this only fills the gaps.
     const extraEnv: Record<string, string> = {};
+    // The child must refuse to boot when another runtime already owns the port:
+    // a rival uvicorn would only fail at bind time, AFTER its lifespan marked the
+    // live runtime's runs as orphans.
+    extraEnv.BE_ENFORCE_SINGLE_RUNTIME = "1";
+    // The child must lock the SAME port it serves; dev (8766) and stable (8767)
+    // runtimes are allowed to coexist, so the lock is port-scoped.
+    extraEnv.HARNESS_PY_PORT = String(HARNESS_PY_PORT);
     // Provider keys saved from Settings live encrypted in JDDS and are copied
     // into THIS process's env during startup. The child is often spawned from
     // instrumentation BEFORE that copy runs, so without an explicit apply here

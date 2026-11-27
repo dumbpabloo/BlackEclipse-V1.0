@@ -82,6 +82,20 @@ const PRUNE_PATHS = [
   ".black-eclipse",
   "python/.black-eclipse",
   ".next-dev",
+  // Local build/release/runtime trees. Next's standalone tracing copies the
+  // whole checkout root, and these grew into gigabytes (a promoted release
+  // cache, the desktop runtime cache and other dist dirs). They are local
+  // state: shipping them bloated the payload past what the 32-bit NSIS
+  // compressor can map, and none of them is read by `server.js`.
+  // NOTE: `.next-desktop` is deliberately NOT listed: it is the real build in
+  // an assembled payload (`--prune-only`), and the build path already removes
+  // the stray nested copy before renaming `.next` to it.
+  ".next-desktop-dev",
+  ".next-live-stable",
+  ".runtime",
+  "releases",
+  "release",
+  "dist",
   ".tmp-tests",
   "backups",
   "deploy",

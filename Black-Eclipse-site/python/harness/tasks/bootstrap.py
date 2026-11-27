@@ -145,10 +145,21 @@ def _record_budget_usage(ctx: Any, outcome: TaskRunOutcome) -> None:
     metrics = outcome.metrics or {}
     tokens = int(metrics.get("totalTokens") or 0)
     tool_calls = int(metrics.get("toolCalls") or 0)
-    if not tokens and not tool_calls:
+    try:
+        cost = float(metrics.get("totalCost") or 0)
+    except (TypeError, ValueError):
+        cost = 0.0
+    try:
+        runtime_ms = int(metrics.get("runtimeMs") or 0)
+    except (TypeError, ValueError):
+        runtime_ms = 0
+    if not tokens and not tool_calls and cost <= 0 and runtime_ms <= 0:
         return
     try:
-        a2a.budgets.record_usage(root, tokens=tokens, tool_calls=tool_calls)
+        a2a.budgets.record_usage(
+            root, tokens=tokens, tool_calls=tool_calls,
+            cost=max(0.0, cost), runtime_ms=max(0, runtime_ms),
+        )
     except Exception:  # noqa: BLE001 - accounting must never fail a task
         log.debug("budget usage record failed for %s", root, exc_info=True)
 
@@ -258,6 +269,12 @@ def _outcome_from_dump(
             "toolCalls": dumped.get("toolCalls", 0),
             "toolErrors": dumped.get("toolErrors", 0),
             "totalTokens": dumped.get("totalTokens", 0),
+            # Cost/runtime are optional provider/runtime facts. They are
+            # recorded when present so a team's maxCost/maxRuntime policy can
+            # stop NEW work at the next task boundary even though a provider
+            # bills per call and cannot be interrupted retroactively.
+            "totalCost": dumped.get("totalCost", dumped.get("cost", 0)),
+            "runtimeMs": dumped.get("runtimeMs", dumped.get("durationMs", 0)),
         },
         evidence=evidence,
     )

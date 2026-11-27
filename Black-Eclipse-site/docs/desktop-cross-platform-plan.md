@@ -75,6 +75,7 @@ What changed in C0:
 | `taskkill /T /F` only | Windows keeps `taskkill`; Unix starts the child in its own session (`setsid`) and signals the group, so the Next server and the Python harness still die together |
 | `MessageBoxW` | `#[cfg(windows)]`; no cross-platform dialog needed because the only caller is the WebView2 check |
 | WebView2 registry probe | Windows-only; macOS/Linux use the OS webview and log that no probe is needed |
+| Failed-navigation branding | Windows subscribes to WebView2 `NavigationCompleted` (`webview2-com`) and returns to the bundled splash. The `on_navigation` / `on_new_window` origin policy is cross-platform; a WKWebView (`didFailProvisionalNavigation`) / WebKitGTK (`load-failed`) hook is a follow-up, and those webviews do not render a Microsoft-branded error page |
 | `runtime/node.exe` | `runtime/node[.exe]` — the payload fetches the **platform's** Node from nodejs.org and verifies `SHASUMS256.txt` |
 | `%LOCALAPPDATA%` | `%LOCALAPPDATA%` / `~/Library/Application Support` / `$XDG_DATA_HOME` |
 | `%ProgramFiles%\nodejs` fallback | Windows-only; Unix falls back to `/usr/local/bin`, `/opt/homebrew/bin`, `/usr/bin` |

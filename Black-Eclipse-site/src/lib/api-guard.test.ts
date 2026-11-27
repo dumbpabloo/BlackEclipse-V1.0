@@ -8,6 +8,7 @@ vi.setSystemTime(FIXED_NOW);
 import {
   checkMutationAllowed,
   checkOutboundUrl,
+  clientKey,
   deploymentExposure,
   rateLimit,
 } from "./api-guard";
@@ -143,6 +144,27 @@ describe("deploymentExposure", () => {
     });
     expect(exposure.operatorSecretConfigured).toBe(false);
     expect(exposure.exposed).toBe(true);
+  });
+});
+
+describe("clientKey", () => {
+  it("scopes the limiter per tab instead of per host", () => {
+    // Desktop tabs share 127.0.0.1, so a host-only key made the limiter global.
+    const a = new Request("http://127.0.0.1:3000/api/harness/chat/stream", {
+      headers: { host: "127.0.0.1:3000", "x-be-client": "tab_aaaaaaaa" },
+    });
+    const b = new Request("http://127.0.0.1:3000/api/harness/chat/stream", {
+      headers: { host: "127.0.0.1:3000", "x-be-client": "tab_bbbbbbbb" },
+    });
+    expect(clientKey(a)).not.toBe(clientKey(b));
+    expect(clientKey(a)).toContain("tab_aaaaaaaa");
+  });
+
+  it("ignores a malformed tab id and falls back to the host", () => {
+    const req = new Request("http://127.0.0.1:3000/x", {
+      headers: { host: "127.0.0.1:3000", "x-be-client": "bad id with spaces" },
+    });
+    expect(clientKey(req)).toBe("127.0.0.1:3000");
   });
 });
 

@@ -38,6 +38,7 @@ from .deps import (
 from .models import list_providers
 from .model_runtime import ALIASES, get_runtime
 from .persistence import now_iso
+from .runtime_lock import enforce_instance_lock
 from .run_stream import run_event_frames
 from .research.engine import run_research
 from .research.mandate import parse_mandate
@@ -86,6 +87,7 @@ from .routers.orchestration import router as orchestration_router
 from .routers.plugins import router as plugins_router
 from .routers.ledger import router as ledger_router
 from .routers.portfolio import router as portfolio_router
+from .routers.sod import router as sod_router
 from .routers.quant import router as quant_router
 from .routers.quant_desk import router as quant_desk_router
 from .routers.quant_reports import router as quant_reports_router
@@ -111,6 +113,7 @@ from .routers.ui import router as ui_router
 from .routers.video import router as video_router
 from .routers.workspace import router as workspace_router
 from .routers.recovery import router as recovery_router
+from .routers.runtime import require_operator_accepting_runs, router as runtime_router
 from .routers.autonomy import router as autonomy_router
 from .routers.capabilities import router as capabilities_router
 from .schemas import ModelSettings, RunRequest, RunResult
@@ -121,6 +124,8 @@ from .skills.learning import capture_from_run
 from .skills.lifecycle import approve_promotion, reject_promotion, request_promotion, rollback
 from .skills.permissions import Actor
 from .skills.runtime import SkillExecutionRequest
+# One runtime per port. No-op unless the front door set BE_ENFORCE_SINGLE_RUNTIME.
+enforce_instance_lock()
 logging.basicConfig(level=logging.INFO, format="[harness-py] %(levelname)s %(name)s: %(message)s")
 app = FastAPI(title="BlackEclipse Harness Runtime", version="0.1.0", lifespan=lifespan)
 install_sdk(app)
@@ -172,6 +177,7 @@ app.include_router(orchestration_router)
 app.include_router(plugins_router)
 app.include_router(portfolio_router)
 app.include_router(ledger_router)
+app.include_router(sod_router)
 app.include_router(trading_router)
 app.include_router(transcription_router)
 app.include_router(quant_router)
@@ -196,6 +202,7 @@ app.include_router(ui_router)
 app.include_router(video_router)
 app.include_router(workspace_router)
 app.include_router(recovery_router)
+app.include_router(runtime_router)
 app.include_router(autonomy_router)
 app.include_router(capabilities_router)
 # Process start time (epoch ms). The TS launcher compares this against the
@@ -521,7 +528,7 @@ def agents() -> dict[str, Any]:
     }
 
 @app.post("/runs")
-async def start_run(http_request: Request, request: RunRequest, background: bool = False, _: bool = Depends(require_operator)) -> JSONResponse:
+async def start_run(http_request: Request, request: RunRequest, background: bool = False, _: bool = Depends(require_operator_accepting_runs)) -> JSONResponse:
     from .security.identity import bind_run_identity
     request = bind_run_identity(http_request, request)
     try:
@@ -632,7 +639,7 @@ def cancel_run(run_id: str, _: bool = Depends(require_operator)) -> dict[str, An
 
 
 @app.post("/runs/{run_id}/resume")
-async def resume_run(run_id: str, request: RunRequest, background: bool = False, _: bool = Depends(require_operator)) -> JSONResponse:
+async def resume_run(run_id: str, request: RunRequest, background: bool = False, _: bool = Depends(require_operator_accepting_runs)) -> JSONResponse:
     """Resume a crashed run from its latest checkpoint (Phase 1).
 
     The run id in the path is authoritative. A resume of a run with no checkpoint
@@ -1256,18 +1263,21 @@ def reject_draft(skill_id: str, payload: dict[str, Any], _: bool = Depends(requi
 def main(host: str = "127.0.0.1", port: int = 8765) -> None:
     import os
     import uvicorn
-    # Deployment guard: beyond loopback this is a network service and requires the
-    # operator secret, plus HARNESS_AUTH_SECRET in multi-tenant mode.
+    from .runtime_lock import acquire_instance_lock
+    if acquire_instance_lock(port) is None:
+        raise SystemExit(f"another Eclipse runtime already owns port {port}")
+    # Beyond loopback this is a network service and requires the operator secret.
     if host not in _LOOPBACK_HOSTS and os.environ.get("BLACK_ECLIPSE_ALLOW_INSECURE_BIND") != "1":
         from .security.identity import auth_secret, multi_tenant_required
-
-        missing = [n for n, ok in (("CRON_SECRET", _operator_secret_configured()),
-                   ("HARNESS_AUTH_SECRET", (not multi_tenant_required()) or bool(auth_secret()))) if not ok]
+        checks = (("CRON_SECRET", _operator_secret_configured()),
+                  ("HARNESS_AUTH_SECRET", (not multi_tenant_required()) or bool(auth_secret())))
+        missing = [n for n, ok in checks if not ok]
         if missing:
             raise SystemExit(f"refusing to bind {host!r}: missing {', '.join(missing)}. "
                              "Set the secrets and front it with authentication, or set "
                              "BLACK_ECLIPSE_ALLOW_INSECURE_BIND=1 to acknowledge the risk.")
     uvicorn.run(app, host=host, port=port, log_level="info")
+
 
 if __name__ == "__main__":
     main()

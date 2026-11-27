@@ -100,7 +100,7 @@ It does **not** mean "trusted because it is local". See §5.
 | 3.7 | Race on simultaneous start | A cross-process lock file with owner pid + timestamp; a second starter waits, then re-probes instead of forking a rival |
 | 3.8 | Startup timeout | Bounded phase timeouts with a specific message per phase (spawn / bind / health), never one generic "failed" |
 | 3.9 | Python lifecycle | Untouched — delegated to `python-runtime.ts` |
-| 3.10 | Unexpected termination | Watch the child after readiness; surface an in-window failure state and offer restart |
+| 3.10 | Unexpected termination | Watch the child after readiness; surface an in-window failure state and offer restart. **Also own a failed NAVIGATION**: WebView2 substitutes its own Edge/Bing error page after the document is gone, so a Windows `NavigationCompleted` guard navigates back to the bundled splash (`#offline=<reason>`) instead of leaving the window on a page the shell cannot brand. **And a hung server**: a 15 s `/api/updates` watchdog replaces the page after three unanswered probes (45 s), because a wedged event loop never exits the child |
 
 **Port conflict policy.** If 3100 is held by something that fails the identity
 check, the shell must **not** silently pick another port. It must explain:
@@ -591,6 +591,8 @@ State after P1 hardening.
 | Medium | No cross-process start lock (§3.7) | **resolved** — `desktop-server.lock` with pid + TTL, stale takeover |
 | Medium | No port-conflict diagnostics (§3) | **resolved** — never kills, never reroutes; explains what answered |
 | Medium | Post-readiness crash not detected (§3.10) | **resolved** — an owned server that dies swaps in a failure panel with Reload |
+| Medium | A failed navigation leaves WebView2's own Edge/Bing error page (Microsoft-branded) | **resolved** — a Windows `NavigationCompleted` guard returns the window to the bundled splash with a branded offline state; `on_navigation` also keeps every non-app URL out of the window (opened in the OS browser) |
+| Medium | A hung Next server stays on screen because the child never exits | **resolved** — a 15 s `/api/updates` watchdog (3 misses = 45 s) swaps in the same branded offline screen; the probe is unit-tested against a served response, a closed port and a silent socket |
 | Medium | No WebView2 detection or recovery (§7) | **resolved** — registry probe before the window; on absence, a message box with the download link *and* the browser fallback |
 | Medium | `db-guard` runs after first paint (§13) | **accepted with guardrail** — a failed guard writes `db-guard.failed`, and the next launch refuses to serve and shows recovery instructions. First run stays fast |
 | Low | `Ctrl+R` reload omitted | **intentional** — would discard composer state |

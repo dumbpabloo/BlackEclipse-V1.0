@@ -193,6 +193,29 @@ async def ledger_income_statement(args: dict[str, Any], ctx: Any) -> tuple[str, 
 
 async def ledger_cash_flow(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
     service = _service(ctx)
+    method = str(args.get("method") or "direct").strip().lower()
+    if method == "indirect":
+        payload = service.cash_flow_indirect(
+            _ledger_id(args), start=args.get("start"), end=args.get("end"),
+            actor_id=_actor(ctx),
+        )
+        text = (
+            f"Indirect cash flow {payload['startDate']}..{payload['endDate']}: net income "
+            f"{payload['netIncome']} + depreciation {payload['depreciation']} + working "
+            f"capital {payload['workingCapital']['total']} = operating "
+            f"{payload['operatingCashFlow']} (direct says {payload['directOperatingCashFlow']}, "
+            f"difference {payload['difference']})." + _checks_line(payload)
+        )
+        if not payload.get("reconciled"):
+            text += (" The indirect operating figure does NOT reconcile to the direct "
+                     "statement; the difference is reported, not plugged.")
+        return text, payload
+    if method != "direct":
+        return _fail(LedgerError(
+            "INVALID_STATEMENT_METHOD",
+            "`method` must be `direct` or `indirect`",
+            {"method": method},
+        ))
     payload = service.cash_flow(
         _ledger_id(args), start=args.get("start"), end=args.get("end"), actor_id=_actor(ctx)
     )
@@ -221,6 +244,227 @@ async def ledger_audit_log(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
     rows = service.audit_log(_ledger_id(args), limit=int(args.get("limit") or 100),
                              actor_id=_actor(ctx))
     return f"{len(rows)} audit event(s).", {"events": rows}
+
+
+async def ledger_audit_verify(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    result = service.verify_audit(_ledger_id(args), actor_id=_actor(ctx))
+    if result.get("ok"):
+        summary = f"Audit chain verified ({result['checked']} event(s), head {result['head'][:12]}…)."
+    elif result.get("status") == "UNSEALED":
+        summary = (f"Audit chain has {result.get('unsealed', 0)} legacy unsealed event(s); "
+                   "the sealed portion cannot be verified as a whole.")
+    else:
+        summary = (f"Audit chain BROKEN at {result.get('brokenAt')} "
+                   f"({result.get('reason')}).")
+    return summary, result
+
+
+# ── Budgets, dimensions, runway ─────────────────────────────────────────────
+
+
+async def ledger_budget_create(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    try:
+        payload = service.create_budget(
+            _ledger_id(args),
+            name=str(args.get("name") or ""),
+            start=args.get("start"),
+            end=args.get("end"),
+            lines=args.get("lines") or [],
+            note=args.get("note"),
+            currency=args.get("currency"),
+            actor_id=_actor(ctx),
+        )
+    except LedgerError as exc:
+        return _fail(exc)
+    return (
+        f"Created budget {payload['name']!r} ({payload['id']}) "
+        f"{payload['startDate']}..{payload['endDate']} with {len(payload['lines'])} line(s)."
+    ), payload
+
+
+async def ledger_budget_list(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    rows = service.list_budgets(_ledger_id(args), limit=int(args.get("limit") or 100),
+                               actor_id=_actor(ctx))
+    return f"{len(rows)} budget(s).", {"budgets": rows}
+
+
+async def ledger_budget_variance(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    try:
+        payload = service.budget_vs_actual(
+            _ledger_id(args), str(args.get("budget_id") or args.get("budgetId") or ""),
+            actor_id=_actor(ctx),
+        )
+    except LedgerError as exc:
+        return _fail(exc)
+    text = (
+        f"Budget {payload['budgetName']!r} {payload['startDate']}..{payload['endDate']}: "
+        f"budget {payload['totals']['budget']}, actual {payload['totals']['actual']}, "
+        f"variance {payload['totals']['variance']}."
+    )
+    return text, payload
+
+
+async def ledger_dimension_summary(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    try:
+        payload = service.dimension_summary(
+            _ledger_id(args),
+            str(args.get("dimension") or ""),
+            start=args.get("start"), end=args.get("end"), actor_id=_actor(ctx),
+        )
+    except LedgerError as exc:
+        return _fail(exc)
+    return (
+        f"Dimension {payload['dimension']!r}: {len(payload['rows'])} value(s) "
+        f"over {payload['startDate']}..{payload['endDate']}."
+    ), payload
+
+
+async def ledger_cash_runway(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    try:
+        payload = service.cash_runway(
+            _ledger_id(args), as_of=args.get("as_of") or args.get("asOf"),
+            history_days=int(args.get("history_days") or 90),
+            horizon_days=int(args.get("horizon_days") or 90),
+            actor_id=_actor(ctx),
+        )
+    except LedgerError as exc:
+        return _fail(exc)
+    runway = payload["runwayMonths"]
+    text = (
+        f"Cash runway as of {payload['asOf']}: opening {payload['openingCash']}, "
+        f"monthly burn {payload['monthlyBurn']}, runway "
+        f"{runway + ' months' if runway is not None else 'UNKNOWN (no net burn)'}, "
+        f"adjusted runway {payload['adjustedRunwayMonths'] or 'UNKNOWN'}."
+    )
+    return text, payload
+
+
+# ── Year-end close ──────────────────────────────────────────────────────────
+
+
+async def ledger_year_end_preview(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    try:
+        payload = service.preview_fiscal_year_close(
+            _ledger_id(args),
+            fiscal_year=args.get("fiscal_year") or args.get("fiscalYear"),
+            actor_id=_actor(ctx),
+        )
+    except LedgerError as exc:
+        return _fail(exc)
+    text = (
+        f"FY{payload['fiscalYear']} close preview ({payload['status']}): net income "
+        f"{payload['netIncome']} → retained earnings {payload['retainedAccount']['code']}; "
+        f"{len(payload['lines'])} closing line(s), dated {payload['closingDate']}."
+    )
+    return text, payload
+
+
+async def ledger_close_fiscal_year(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    try:
+        payload = service.close_fiscal_year(
+            _ledger_id(args),
+            fiscal_year=args.get("fiscal_year") or args.get("fiscalYear"),
+            actor_id=_actor(ctx),
+        )
+    except LedgerError as exc:
+        return _fail(exc)
+    if payload["status"] == "ALREADY_CLOSED":
+        entry = payload.get("entry") or {}
+        return (
+            f"FY{payload['fiscalYear']} is already closed by entry {entry.get('id')}; "
+            "nothing was posted again."
+        ), payload
+    entry = payload.get("entry") or {}
+    return (
+        f"Closed FY{payload['fiscalYear']}: posted entry {entry.get('id')} on "
+        f"{payload['closingDate']}, moving net income {payload['netIncome']} to "
+        f"retained earnings {payload['retainedAccount']['code']}."
+    ), payload
+
+
+# ── Source-document attachments ─────────────────────────────────────────────
+
+
+def _artifacts(ctx: Any) -> Any:
+    return getattr(ctx, "artifact_service", None)
+
+
+async def ledger_attach_document(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    try:
+        payload = service.attach_document(
+            _ledger_id(args),
+            str(args.get("entry_id") or args.get("entryId") or ""),
+            str(args.get("artifact_id") or args.get("artifactId") or ""),
+            artifact_service=_artifacts(ctx),
+            note=args.get("note"),
+            actor_id=_actor(ctx),
+        )
+    except LedgerError as exc:
+        return _fail(exc)
+    name = payload.get("artifactName") or payload["artifactId"]
+    return (
+        f"Attached {name!r} to entry {payload['entryId']} "
+        f"(sha256 {payload['checksum'][:12]}…)."
+    ), payload
+
+
+async def ledger_list_attachments(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    try:
+        rows = service.list_attachments(
+            _ledger_id(args),
+            entry_id=args.get("entry_id") or args.get("entryId"),
+            limit=int(args.get("limit") or 200),
+            actor_id=_actor(ctx),
+        )
+    except LedgerError as exc:
+        return _fail(exc)
+    return f"{len(rows)} attachment(s).", {"attachments": rows}
+
+
+async def ledger_detach_document(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    try:
+        payload = service.detach_document(
+            _ledger_id(args),
+            str(args.get("attachment_id") or args.get("attachmentId") or ""),
+            actor_id=_actor(ctx),
+        )
+    except LedgerError as exc:
+        return _fail(exc)
+    return (
+        "Detached the document from the entry (the artifact itself is unchanged)."
+        if payload.get("removed") else "No attachment was removed."
+    ), payload
+
+
+async def ledger_verify_attachment(args: dict[str, Any], ctx: Any) -> tuple[str, Any]:
+    service = _service(ctx)
+    try:
+        payload = service.verify_attachment(
+            _ledger_id(args),
+            str(args.get("attachment_id") or args.get("attachmentId") or ""),
+            artifact_service=_artifacts(ctx),
+            actor_id=_actor(ctx),
+        )
+    except LedgerError as exc:
+        return _fail(exc)
+    if payload["status"] == "MATCHED":
+        summary = f"Attachment verified: stored sha256 still matches the artifact."
+    elif payload["status"] == "MISSING":
+        summary = "Attachment BROKEN: the referenced artifact no longer exists."
+    else:
+        summary = "Attachment CHANGED: the artifact content no longer matches the posted checksum."
+    return summary, payload
 
 
 # ── Import / categorisation ─────────────────────────────────────────────────
@@ -735,7 +979,10 @@ LEDGER_READ_TOOLS = [
     "ledger_list", "ledger_get", "ledger_list_accounts", "ledger_list_entries",
     "ledger_get_entry", "ledger_trial_balance", "ledger_balance_sheet",
     "ledger_income_statement", "ledger_cash_flow", "ledger_list_periods",
-    "ledger_audit_log",
+    "ledger_audit_log", "ledger_audit_verify", "ledger_year_end_preview",
+    "ledger_budget_list", "ledger_budget_variance", "ledger_dimension_summary",
+    "ledger_cash_runway",
+    "ledger_list_attachments", "ledger_verify_attachment",
     # Phase 2: import preview / rules / reconciliation are read-class — none of
     # them can change the journal.
     "ledger_import_preview", "ledger_list_imports", "ledger_rule_list",
@@ -750,7 +997,8 @@ LEDGER_READ_TOOLS = [
 LEDGER_WRITE_TOOLS = [
     "ledger_create", "ledger_create_account", "ledger_set_account_active",
     "ledger_post", "ledger_reverse", "ledger_close_period", "ledger_reopen_period",
-    "ledger_lock_period",
+    "ledger_lock_period", "ledger_attach_document", "ledger_detach_document",
+    "ledger_close_fiscal_year", "ledger_budget_create",
     # Phase 2: an import posts entries; a rule changes how future imports post.
     "ledger_import_commit", "ledger_rule_create", "ledger_rule_deactivate",
     # Phase 3: a schedule, an accrual and a revaluation all post entries.
@@ -917,12 +1165,75 @@ def register_ledger_tools(registry: Any) -> None:
           "required": ["ledger_id"]},
          READ)
     _def("ledger_cash_flow",
-         "Cash flow for a date range, classified operating/investing/financing from the "
-         "counter account. Movement it cannot classify is reported in an explicit "
-         "`unclassified` bucket, never guessed.",
+         "Cash flow for a date range. `method=direct` (default) classifies operating/"
+         "investing/financing from the counter account; `method=indirect` starts from net "
+         "income, adds depreciation and working-capital movements, and reconciles the "
+         "result to the direct operating figure. Unclassifiable movement is explicit, "
+         "never guessed.",
          ledger_cash_flow,
          {"type": "object", "properties": {
-             **lid, "start": {"type": "string"}, "end": {"type": "string"}},
+             **lid, "start": {"type": "string"}, "end": {"type": "string"},
+             "method": {"type": "string", "enum": ["direct", "indirect"]}},
+          "required": ["ledger_id"]},
+         READ)
+    _def("ledger_year_end_preview",
+         "Preview the year-end closing entry: net income, retained-earnings target, "
+         "closing lines and date. Writes nothing.",
+         ledger_year_end_preview,
+         {"type": "object", "properties": {**lid, "fiscal_year": {"type": "integer"}},
+          "required": ["ledger_id"]},
+         READ)
+    _def("ledger_close_fiscal_year",
+         "Post the year-end closing entry on the first day of the next fiscal year: "
+         "zero revenue/expense and roll net income into retained earnings. Idempotent; "
+         "a second call returns ALREADY_CLOSED.",
+         ledger_close_fiscal_year,
+         {"type": "object", "properties": {**lid, "fiscal_year": {"type": "integer"}},
+          "required": ["ledger_id"]},
+         WRITE, WRITE_EFFECT)
+    _def("ledger_budget_create",
+         "Create a budget: a named set of account + optional dimension targets over a "
+         "period. Planning data only; actuals are derived from the journal.",
+         ledger_budget_create,
+         {"type": "object", "properties": {
+             **lid, "name": {"type": "string"},
+             "start": {"type": "string"}, "end": {"type": "string"},
+             "currency": {"type": "string"}, "note": {"type": "string"},
+             "lines": {"type": "array", "items": {"type": "object", "properties": {
+                 "account_code": {"type": "string"}, "amount": {"type": "string"},
+                 "dimensions": {"type": "object"}, "memo": {"type": "string"}},
+                 "required": ["account_code", "amount"]}}},
+          "required": ["ledger_id", "name", "start", "end", "lines"]},
+         WRITE, WRITE_EFFECT)
+    _def("ledger_budget_list", "List budgets and their lines.",
+         ledger_budget_list,
+         {"type": "object", "properties": {**lid, "limit": {"type": "integer"}},
+          "required": ["ledger_id"]},
+         READ)
+    _def("ledger_budget_variance",
+         "Budget vs actual: per-line budget/actual/variance and favourable flag, "
+         "matched by account and dimension. Unmatched actuals are reported as unbudgeted.",
+         ledger_budget_variance,
+         {"type": "object", "properties": {
+             **lid, "budget_id": {"type": "string"}}, "required": ["ledger_id", "budget_id"]},
+         READ)
+    _def("ledger_dimension_summary",
+         "Group journal movement by one dimension value (project, cost center, …), "
+         "over a date range; unassigned lines are explicit.",
+         ledger_dimension_summary,
+         {"type": "object", "properties": {
+             **lid, "dimension": {"type": "string"},
+             "start": {"type": "string"}, "end": {"type": "string"}},
+          "required": ["ledger_id", "dimension"]},
+         READ)
+    _def("ledger_cash_runway",
+         "Cash runway from trailing operating burn plus open AR/AP: opening cash, "
+         "monthly burn, runway months and an AR/AP-adjusted projection. A surplus "
+         "reports UNKNOWN runway, never infinite.",
+         ledger_cash_runway,
+         {"type": "object", "properties": {
+             **lid, "as_of": {"type": "string"},
+             "history_days": {"type": "integer"}, "horizon_days": {"type": "integer"}},
           "required": ["ledger_id"]},
          READ)
     _def("ledger_list_periods", "List fiscal periods and their OPEN/CLOSED/LOCKED status.",
@@ -952,6 +1263,46 @@ def register_ledger_tools(registry: Any) -> None:
          ledger_audit_log,
          {"type": "object", "properties": {**lid, "limit": {"type": "integer"}},
           "required": ["ledger_id"]},
+         READ)
+    _def("ledger_audit_verify",
+         "Verify the audit trail's hash chain: OK, UNSEALED (legacy rows) or BROKEN "
+         "at the first edited/reordered event.",
+         ledger_audit_verify,
+         {"type": "object", "properties": {**lid}, "required": ["ledger_id"]},
+         READ)
+    _def("ledger_attach_document",
+         "Attach an artifact (receipt, invoice, bank statement) to a posted entry. "
+         "Stores the artifact id and its content hash; the bytes stay in the artifact "
+         "store. A changed artifact no longer verifies against the posted entry.",
+         ledger_attach_document,
+         {"type": "object", "properties": {
+             **lid, "entry_id": {"type": "string"},
+             "artifact_id": {"type": "string"},
+             "note": {"type": "string"}},
+          "required": ["ledger_id", "entry_id", "artifact_id"]},
+         WRITE, WRITE_EFFECT)
+    _def("ledger_list_attachments",
+         "List the source-document references on a ledger or one entry.",
+         ledger_list_attachments,
+         {"type": "object", "properties": {
+             **lid, "entry_id": {"type": "string"},
+             "limit": {"type": "integer"}},
+          "required": ["ledger_id"]},
+         READ)
+    _def("ledger_detach_document",
+         "Remove an attachment reference (the artifact itself is unchanged).",
+         ledger_detach_document,
+         {"type": "object", "properties": {
+             **lid, "attachment_id": {"type": "string"}},
+          "required": ["ledger_id", "attachment_id"]},
+         WRITE, WRITE_EFFECT)
+    _def("ledger_verify_attachment",
+         "Compare an attachment's frozen content hash with the artifact's current "
+         "hash: MATCHED, CHANGED (artifact replaced) or MISSING (artifact deleted).",
+         ledger_verify_attachment,
+         {"type": "object", "properties": {
+             **lid, "attachment_id": {"type": "string"}},
+          "required": ["ledger_id", "attachment_id"]},
          READ)
 
     # ── Phase 2: import, categorisation, reconciliation ────────────────────

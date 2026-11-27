@@ -99,4 +99,26 @@ describe('conversation-scoped run manager', () => {
     await Promise.all([a, b]);
     expect(runManager.getActiveKey()).toBe('');
   });
+
+  it('shows a waiting notice until the next content frame arrives', async () => {
+    let finish: (() => void) | undefined;
+    chatMock.mockImplementation(async (_messages, _tools, options: {
+      onEvent?: (event: { kind: string; text?: string }) => void;
+    }) => {
+      options.onEvent?.({ kind: 'notice', text: 'Waiting for provider capacity…' });
+      await new Promise<void>((resolve) => { finish = resolve; });
+      options.onEvent?.({ kind: 'delta', text: 'answer' });
+      return 'answer';
+    });
+
+    const pending = runManager.start(args('chat_notice'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(runManager.get('chat_notice').turn.statusNote).toBe('Waiting for provider capacity…');
+
+    finish?.();
+    await pending;
+    // New content clears the wait note; the terminal frame clears any leftover.
+    expect(runManager.get('chat_notice').turn.statusNote).toBeUndefined();
+    expect(runManager.get('chat_notice').turn.status).toBe('completed');
+  });
 });

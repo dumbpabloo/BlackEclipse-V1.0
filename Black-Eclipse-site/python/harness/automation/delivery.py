@@ -177,6 +177,7 @@ async def deliver_automation(
     bus: Any,
     limits: Optional[list[str]] = None,
     pending_approvals: Optional[list[dict[str, Any]]] = None,
+    channel_service: Any = None,
 ) -> list[dict[str, Any]]:
     """Deliver to every configured target; record one outcome per target.
 
@@ -216,19 +217,46 @@ async def deliver_automation(
                     limits=limits, pending_approvals=pending_approvals,
                 ))
         elif target.adapter == "messaging":
-            if not target.destination:
+            destination = (target.destination or "").strip()
+            if not destination:
                 outcomes.append(DeliveryOutcome(adapter="messaging", destination=None, ok=False,
                                                 reason_code="NO_DESTINATION",
                                                 reason="no destination is set for this delivery"))
+                continue
+            # `<kind>:<external chat>` (telegram:123, slack:C123, email:...).
+            # This is the REAL send: the channel gateway owns provider transports,
+            # so a bot does not grow a second notifier. Without a configured
+            # channel (or a malformed destination) the delivery fails honestly.
+            kind, _, external_chat = destination.partition(":")
+            text = render_run_report(
+                definition, state, output,
+                limits=limits, pending_approvals=pending_approvals,
+            )
+            if channel_service is not None and kind and external_chat:
+                try:
+                    sent = await channel_service.send_outbound(kind, external_chat, text)
+                    ok = bool(sent.get("ok"))
+                    reason = None if ok else str(sent.get("reason") or "channel send failed")[:500]
+                except Exception as exc:  # noqa: BLE001 - a send failure is reported, not raised
+                    ok = False
+                    reason = str(exc)[:500]
+                outcomes.append(DeliveryOutcome(
+                    adapter="messaging", destination=destination, ok=ok,
+                    reason_code=None if ok else "DELIVERY_FAILED", reason=reason,
+                ))
             else:
+                # Compatibility: a runtime without the channel layer still
+                # publishes the template event, but it is no longer the only way.
                 ok = _publish(bus, "automation.message", {
                     "automationId": definition.id, "executionId": execution_id,
-                    "destination": target.destination, "status": state,
+                    "destination": destination, "status": state,
                     "messageKey": message_key, "messageParams": message_params,
                 })
-                outcomes.append(DeliveryOutcome(adapter="messaging", destination=target.destination, ok=ok,
-                                                reason_code=None if ok else "NO_DESTINATION",
-                                                reason=None if ok else "the event bus is unavailable"))
+                outcomes.append(DeliveryOutcome(
+                    adapter="messaging", destination=destination, ok=ok,
+                    reason_code=None if ok else "NO_DESTINATION",
+                    reason=None if ok else "the channel gateway is unavailable",
+                ))
         else:
             outcomes.append(DeliveryOutcome(adapter=target.adapter, destination=target.destination,
                                             ok=False, reason_code="UNKNOWN_ADAPTER",

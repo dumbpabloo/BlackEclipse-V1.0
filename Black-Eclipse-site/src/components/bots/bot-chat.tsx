@@ -51,6 +51,7 @@ import { avatarFor, useBotAvatarStore, useHydrateBotAvatars } from '@/lib/bots/a
 import { moodFromEvent, type GhostMood } from '@/lib/bots/ghost-mood';
 import { useBotChatStore, useHydrateBotChat, type BotMessage } from '@/lib/bots/chat-store';
 import { useBotsStore } from '@/lib/bots/bots-store';
+import { isQuietAnswer } from '@/lib/bots/quiet';
 import { useWorkspaceStore } from '@/lib/agent-workspace/store';
 import {
   buildTrigger, detectSchedule, emptyBotDraft, formatDateTime, formatRelative, scheduleSummary,
@@ -334,6 +335,9 @@ export function BotChat({
       if (cancelled) return;
       const finished = executions
         .filter((e) => (e.state === 'completed' || e.state === 'failed') && (e.output ?? '').trim())
+        // A quiet run ("nothing changed") is kept in run history but never
+        // posted into the conversation as if it were a report.
+        .filter((e) => !isQuietAnswer(e.output))
         .sort(
           (a, b) =>
             Date.parse(a.finishedAt ?? a.startedAt) - Date.parse(b.finishedAt ?? b.startedAt),
@@ -768,7 +772,7 @@ export function BotChat({
             and a bot conversation must be able to complete it in place rather
             than sending the user to another screen. Store-driven and
             self-polling, so a scheduled run's proposal appears here too. */}
-        <TradeApprovalBanner />
+        <TradeApprovalBanner automationId={bot.id} />
         {pendingApproval && (
           <ApprovalCard
             approval={pendingApproval}
