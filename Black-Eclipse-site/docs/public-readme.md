@@ -285,7 +285,11 @@ different copy:
 | The page stays a single static HTML file — no build, no Node, no server | It must not reintroduce the deleted browser lane |
 | It links the README and Quickstart rather than duplicating the benchmark table | One canonical copy of each number |
 
-Publish path: `site/**` or `pages.yml` on `main` → Actions → Pages. Enable once in
-**Settings → Pages → Source: GitHub Actions**. If the repository is renamed again,
-update the README links, the Pages canonical/OG URLs, the JSON-LD `codeRepository`
-and `downloadUrl`, and `site/index.html` in the same commit.
+Publish path: `site/**` or `pages.yml` on `main` → Actions → Pages. Pages is
+enabled for this repository with **Source: GitHub Actions** (2026-11-26); the live
+site is `https://dumbpabloo.github.io/BlackEclipse-V1.0/`. A push that only touches
+the README or assets does **not** redeploy it — run the workflow manually
+(`gh workflow run pages.yml --ref main`) when the landing page itself changes. If
+the repository is renamed again, update the README links, the Pages canonical/OG
+URLs, the JSON-LD `codeRepository` and `downloadUrl`, and `site/index.html` in the
+same commit.

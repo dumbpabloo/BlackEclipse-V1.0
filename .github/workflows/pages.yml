@@ -5,7 +5,8 @@ name: Pages
 # WHY THIS EXISTS: the repository's `homepage` field and the search-engine
 # canonical URL point at the Pages site. It is a single static HTML file — no
 # build, no Node, no server — so the desktop product's "no web lane" rule is
-# untouched. Enable it once in Settings -> Pages (Source: GitHub Actions).
+# untouched. Pages is enabled for this repository (Settings -> Pages,
+# Source: GitHub Actions) as of 2026-11-26.
 
 on:
   push:

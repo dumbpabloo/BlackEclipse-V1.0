@@ -6,6 +6,17 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-26
 
+- **chore(repo): GitHub Pages is enabled and the public metadata now matches the
+  page.** Pages had never been turned on, so `site/index.html` was committed but
+  unreachable; it is now enabled with **Source: GitHub Actions**, deployed from
+  `main`, and live at `https://dumbpabloo.github.io/BlackEclipse-V1.0/`. The
+  repository description now carries the positioning sentence, the homepage points
+  at the Pages site, and twelve finance/AI topics replace an empty topic list.
+  `pages.yml` and `public-readme.md` no longer tell the reader to enable Pages —
+  they record that it is enabled and that a README-only push does not redeploy it.
+  docs updated: `docs/public-readme.md` (§8 publish path); `.github/workflows/pages.yml`
+  comment.
+
 - **docs(readme): the hero banner drops its logo lockup.** The first version repeated
   the eclipse mark and wordmark inside the banner, directly under the repository name
   GitHub already renders. The banner is now purely typographic — eyebrow, the
