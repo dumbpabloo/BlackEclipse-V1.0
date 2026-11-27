@@ -303,7 +303,7 @@ capability that is not in them is not promised:
 <details>
 <summary><b>Known limits, stated plainly</b></summary>
 
-- **`v0.4.30` is single-operator and self-hosted.** It is not a multi-tenant service and
+- **`v0.4.31` is single-operator and self-hosted.** It is not a multi-tenant service and
   does not pretend to be.
 - **Updates are signed artifact swaps** (SHA-256 verified against the signed manifest) —
   no local rebuild. See [`docs/UPDATES.md`](Black-Eclipse-site/docs/UPDATES.md).

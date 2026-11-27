@@ -6,6 +6,15 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-27
 
+- **release: v0.4.31.** Version bumped in `package.json`, `package-lock.json`,
+  `pyproject.toml`, `python/harness/__init__.py` and the README's current-version
+  line; SBOM and published benchmarks regenerated. Ships the Self-Improvement
+  Memory ledger (opt-in `HARNESS_RSL_MEMORY`), the two-action bots onboarding,
+  side threads/queue/composer work and the group-room orchestration already on
+  `main`. The `v0.4.31` tag drives `desktop-release.yml`; the offline-signed
+  `stable.json` is uploaded to the draft before publishing.
+  docs updated: `docs/CHANGELOG.md`, `docs/UPDATES.md` (release state).
+
 - **feat(rsl): Self-Improvement Memory (SIM) — the harness optimizer's own
   problem-keyed ledger.** RSL kept per-candidate attempt rows
   (`EvolutionStore.save_attempt`) but not *why* each edit existed, what it
