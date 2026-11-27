@@ -181,7 +181,7 @@ The visible threads are **local-first**: the stores hydrate from localStorage so
 the UI renders before (and without) the runtime. Every persisted mutation is
 also mirrored to JDdS in two layers:
 
-- a `BotState` snapshot (`chat`, `groups`) for instant hydration;
+- a `BotState` snapshot (`chat`, `groups`, `queue`) for instant hydration;
 - a **per-message log** (`BotChatMessage`, `BotGroupMessage`) written on every
   append and terminal update, replacing a thread's rows on clear/regenerate.
   Hydrate merges the log back by message id, so clearing localStorage or losing
@@ -202,6 +202,44 @@ written document through the `storage` event, so two tabs converge without a
 reload. Clearing localStorage therefore recovers the last mirrored document; it
 is not a sync engine and does not merge conflicting edits from two tabs made at
 the same instant.
+
+## First run and the composer
+
+The Bots home is deliberately two actions: **Create a bot** and **Start a group
+chat**. Everything advanced — desks, the finance pack, the institution
+committee, the EUR/USD starter — is a template card inside the Create Bot dialog
+(`create-bot-dialog.tsx`). The sidebar keeps `+` (new bot), the scheduler and one
+`…` menu (import, diagnostics, refresh, text size); per-bot pause/resume lives in
+the status pill and thread rename/delete in the conversation's `…` menu.
+
+The composer (`bot-composer.tsx`, shared shape with group rooms) is one capsule:
+attachments render inside the border, the textarea grows to a cap, attach is a
+paperclip, send becomes Stop while a turn streams, and the queue collapses to a
+one-line "Queued · N" strip with **Steer**. The schedule is shown in the
+conversation header, not in the composer footer.
+
+## Side threads, branches and the turn queue
+A bot's chat is not one flat transcript. `src/lib/bots/chat-store.ts` keeps
+`threadsByBot` / `messagesByThread` / `activeThreadByBot`:
+
+- **Main** is the canonical conversation (`bot-<id>` conversation id).
+- **New side thread** starts empty with its own conversation id
+  (`bot-<id>-t-<threadId>`, `botThreadChatId`), so its memory cannot rewrite
+  main.
+- **Branch** (the branch icon on any message) copies the thread through that
+  message with NEW message ids and records `parentThreadId` /
+  `branchFromMessageId`. Editing the branch never mutates main.
+- A turn keeps writing to the thread it STARTED in (`appendTo` / `updateIn`),
+  even if the operator switches threads while it streams.
+
+Composing while a turn is running **queues** the message instead of dropping it
+(`src/lib/bots/queue-store.ts`, mirrored to `BotState` key `queue`). The
+composer shows the queue with move up/down, remove, clear, and **Steer** (stop
+the running turn and send this next). The queue drains when a turn ends,
+including after a reload; each item carries the thread it was composed in.
+Messages carry general emoji reactions (👍 🎯 ❤️ ❓) in addition to thumbs
+feedback; reactions are stored on the message payload so they survive recovery
+for both bot chats and rooms.
 
 ## Quiet runs and continuity
 

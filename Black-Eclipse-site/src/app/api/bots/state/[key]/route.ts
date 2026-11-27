@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 // newer. The server is the CONFLICT authority: a stale document (an older
 // stateUpdatedAt) is refused instead of overwriting a newer one, so an old tab
 // or a delayed push can never roll the conversation back.
-const ALLOWED_KEYS = new Set(["chat", "groups"]);
+const ALLOWED_KEYS = new Set(["chat", "groups", "queue"]);
 
 // A transcript document is JSON and grows with use. 8 MB is generous for a
 // local single-user app while keeping one request bounded.

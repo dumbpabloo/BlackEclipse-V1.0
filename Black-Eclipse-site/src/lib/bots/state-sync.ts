@@ -9,7 +9,7 @@
 
 'use client';
 
-export type BotStateKey = 'chat' | 'groups';
+export type BotStateKey = 'chat' | 'groups' | 'queue';
 
 /** The envelope written to localStorage. `version: 2` marks the mirrored form;
  *  a bare legacy document is upgraded on read with an epoch timestamp. */

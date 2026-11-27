@@ -188,15 +188,26 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
   threaded member replies (quoted parent), and a bounded shared context packet.
   Adds per-bot backup-model failover for provider-class failures and a
   privacy-safe Bots diagnostics JSON (`/api/bots/diagnostics`, sidebar Download).
+  Bots gain side threads and branch-from-message (each with its own conversation
+  id), a durable queued-turn panel with reorder/cancel/steer, and general emoji
+  reactions on bot and room messages.
+  The Bots home is reduced to two actions (Create a bot / Start a group chat);
+  desks, finance packs, the institution committee and the EUR/USD starter move
+  into Create Bot as template cards, sidebar utilities fold into one menu, the
+  conversation header collapses to Run now + status pill + scheduler + one menu,
+  and the bot/group composer becomes one capsule with an inline paperclip,
+  growing textarea and a one-line queue strip.
   Extends the ACP client with `session/load`, MCP server descriptors at session
   setup, and opt-in path-confined fs/terminal capability handling. Adds a bot
   audit trail (`AutomationAudit`, `/automations/audit`, Bots Audit section) and
   gives each bot chat the same server-owned `bot:<id>` workspace as its scheduled
   runs. Updates `docs/research/hermes-vs-eclipse/FEATURE-GAP-MATRIX.md` with the
   closed rows.
-  Verified: `npx tsc --noEmit` clean; full Vitest 5,338 passed / 1 skipped;
-  Python 14,091 passed / 70 skipped (1,224 files, exit 0); eval gates ALL PASS.
-  New tests: `test_acp_client.py`, `room-log.test.ts`, `transfer.test.ts`.
+  Verified: `npx tsc --noEmit` clean; full Vitest 5,356 passed / 1 skipped;
+  Python 14,094 passed / 70 skipped (1,225 files); eval gates ALL PASS.
+  New tests: `test_acp_client.py`, `test_automation_failover.py`,
+  `group-orchestration.test.ts`, `queue-store.test.ts`, `room-log.test.ts`,
+  `transfer.test.ts`, plus side-thread/branch coverage in `chat-store.test.ts`.
   Tests: `quiet.test.ts`, `groups-store.test.ts`, `bots-run-diff.test.ts`,
   `message-log.test.ts`, `test_automation_quiet_runs.py`,
   `test_task_budget_usage.py`; `npx tsc --noEmit` clean.

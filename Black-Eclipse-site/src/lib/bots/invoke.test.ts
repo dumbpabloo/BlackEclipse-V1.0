@@ -92,6 +92,20 @@ describe('agent bot turn — brain and model parity', () => {  beforeEach(() => 
     );
   });
 
+  it('gives a side thread its own conversation id', async () => {
+    await runBotTurn({
+      bot: agentBot({}),
+      text: 'hi',
+      prior: [],
+      threadId: 'thr_side',
+    });
+    expect(mockChat).toHaveBeenCalledWith(
+      expect.any(Array),
+      undefined,
+      expect.objectContaining({ chatId: 'bot-bot_1-t-thr_side' }),
+    );
+  });
+
   it('lets a caller model win without carrying the bot provider pin', async () => {
     await runBotTurn({
       bot: agentBot({ modelSettings: { provider: 'openai', model: 'gpt-pinned' } }),

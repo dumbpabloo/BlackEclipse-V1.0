@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useT } from '@/lib/i18n';
-import { Ghost, Loader2, Plus, Sparkles, TrendingUp, Users } from '@/lib/icons';
+import { Ghost, Plus, Users } from '@/lib/icons';
 import { Button } from '@/components/ui/button';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -28,8 +28,7 @@ import {
 import { isDesk } from '@/lib/bots/desk';
 import { duplicateBot } from '@/lib/bots/duplicate';
 import { useSeedFinancePack } from '@/lib/bots/finance-bots';
-import { useSeedEur1mBot } from '@/lib/bots/trading/eur-1m-seed';
-import { forgetBotLocally, forgetBotMemory } from '@/lib/bots/purge';
+import { useSeedEur1mBot } from '@/lib/bots/trading/eur-1m-seed';import { forgetBotLocally, forgetBotMemory } from '@/lib/bots/purge';
 import { useBotsStore } from '@/lib/bots/bots-store';
 import { useHydrateBotAvatars } from '@/lib/bots/avatar-store';
 import { useBotGroupsStore, useHydrateBotGroups } from '@/lib/bots/groups-store';
@@ -59,6 +58,8 @@ export function BotsScreen({ active = true }: { active?: boolean }) {
 
   const groups = useBotGroupsStore((s) => s.groups);
   const createGroup = useBotGroupsStore((s) => s.createGroup);
+  const financePack = useSeedFinancePack();
+  const eurBot = useSeedEur1mBot();
 
   const [busyId, setBusyId] = useState<string | null>(null);
   const [institutionOpen, setInstitutionOpen] = useState(false);
@@ -193,6 +194,30 @@ export function BotsScreen({ active = true }: { active?: boolean }) {
     [setCreateOpen, hydrate, select],
   );
 
+  // Templates render inside the Create Bot dialog (one entry point, not six
+  // buttons on an empty page). The dialog closes first so the destination
+  // surface (desk builder, committee, seeded room) is not stacked on top of it.
+  const useTemplate = useCallback(
+    (template: 'desk' | 'institution' | 'finance' | 'eur1m') => {
+      setCreateOpen(false);
+      if (template === 'desk') {
+        setEditDesk(null);
+        setDeskOpen(true);
+        return;
+      }
+      if (template === 'institution') {
+        setInstitutionOpen(true);
+        return;
+      }
+      if (template === 'finance') {
+        void financePack.seed();
+        return;
+      }
+      void eurBot.seed();
+    },
+    [financePack, eurBot, setCreateOpen],
+  );
+
   return (
     <div className="bots-text-scope flex h-full min-h-0 w-full flex-col">
       {(actionError || error) && (
@@ -243,13 +268,10 @@ export function BotsScreen({ active = true }: { active?: boolean }) {
           )
         ) : (
           <CenterEmpty
+            firstRun={bots.length === 0 && groups.length === 0}
+            loading={loading}
             onCreate={openCreate}
             onCreateGroup={openGroupCreate}
-            onInstitution={() => setInstitutionOpen(true)}
-            onCreateDesk={() => {
-              setEditDesk(null);
-              setDeskOpen(true);
-            }}
           />
         )}
       </div>
@@ -261,6 +283,7 @@ export function BotsScreen({ active = true }: { active?: boolean }) {
         existingNames={bots.map((b) => b.name)}
         bots={bots}
         onCreated={handleCreated}
+        onUseTemplate={useTemplate}
       />
 
       {/* Institution committee — seeds the seats and runs the durable pipeline. */}
@@ -321,51 +344,47 @@ function recency(bot: AutomationView): number {
 }
 
 function CenterEmpty({
-  onCreate, onCreateGroup, onInstitution, onCreateDesk,
+  firstRun, loading, onCreate, onCreateGroup,
 }: {
+  firstRun: boolean;
+  loading: boolean;
   onCreate: () => void;
   onCreateGroup: () => void;
-  onInstitution: () => void;
-  onCreateDesk: () => void;
 }) {
   const t = useT();
-  const { seed, busy, error } = useSeedFinancePack();
-  const {
-    seed: seedEur,
-    busy: eurBusy,
-    error: eurError,
-  } = useSeedEur1mBot();
+  if (loading && firstRun) {
+    return (
+      <div className="glass-card flex h-full min-h-[20rem] items-center justify-center rounded-2xl px-6 text-sm text-muted-foreground">
+        {t('common.loading')}
+      </div>
+    );
+  }
   return (
     <div className="glass-card flex h-full min-h-[20rem] flex-col items-center justify-center rounded-2xl px-6 text-center">
       <div className="glass-card-subtle flex h-14 w-14 items-center justify-center rounded-2xl text-muted-foreground">
         <Ghost size={26} />
       </div>
-      <p className="mt-4 max-w-sm text-sm text-muted-foreground">{t('bots.workspace.selectPrompt')}</p>
-      <div className="mt-4 flex flex-wrap justify-center gap-2">
-        <Button onClick={onCreate}>
-          <Plus size={14} /> {t('bots.dialog.title')}
+      <h2 className="mt-4 text-base font-semibold">
+        {firstRun ? t('bots.onboarding.title') : t('bots.workspace.selectPrompt')}
+      </h2>
+      {firstRun && (
+        <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+          {t('bots.onboarding.body')}
+        </p>
+      )}
+      <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+        <Button size="lg" onClick={onCreate}>
+          <Plus size={15} /> {t('bots.onboarding.createBot')}
         </Button>
-        <Button variant="outline" onClick={onCreateGroup}>
-          <Users size={14} /> {t('bots.groups.new')}
-        </Button>
-        <Button variant="outline" onClick={onCreateDesk}>
-          <Users size={14} /> New desk
-        </Button>
-        <Button variant="outline" onClick={() => void seed()} disabled={busy}>
-          {busy ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-          {busy ? t('bots.finance.seeding') : t('bots.finance.seed')}
-        </Button>
-        <Button variant="outline" onClick={onInstitution}>
-          <Users size={14} /> Institution committee
-        </Button>
-        <Button variant="outline" onClick={() => void seedEur()} disabled={eurBusy}>
-          {eurBusy ? <Loader2 size={14} className="animate-spin" /> : <TrendingUp size={14} />}
-          {eurBusy ? 'Preparing EUR 1m…' : 'EUR/USD 1-minute bot'}
+        <Button size="lg" variant="outline" onClick={onCreateGroup}>
+          <Users size={15} /> {t('bots.onboarding.createGroup')}
         </Button>
       </div>
-      <p className="mt-3 max-w-sm text-[11px] text-muted-foreground">{t('bots.finance.hint')}</p>
-      {error && <p className="mt-2 max-w-sm text-[11px] text-rose-300">{error}</p>}
-      {eurError && <p className="mt-2 max-w-sm text-[11px] text-rose-300">{eurError}</p>}
+      {firstRun && (
+        <p className="mt-4 max-w-sm text-[11px] text-muted-foreground">
+          {t('bots.onboarding.hint')}
+        </p>
+      )}
     </div>
   );
 }

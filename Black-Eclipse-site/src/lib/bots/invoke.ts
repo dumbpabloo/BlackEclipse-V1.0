@@ -41,6 +41,13 @@ export function botChatId(botId: string): string {
   return `bot-${botId}`;
 }
 
+/** A side thread gets its own conversation/memory id, never the main chat's. */
+export function botThreadChatId(botId: string, threadId?: string): string {
+  return !threadId || threadId === 'main'
+    ? botChatId(botId)
+    : `bot-${botId}-t-${threadId}`;
+}
+
 /** The chat id whose PRIVATE per-conversation memory a group member's turns belong to. */
 export function groupMemberChatId(groupId: string, botId: string): string {
   return `group-${groupId}-${botId}`;
@@ -154,6 +161,8 @@ export interface RunBotTurnArgs {
   onDelta?: (chunk: string) => void;
   /** Typed harness events for this turn (approvals etc.), when the caller needs them. */
   onEvent?: (event: HarnessUiEvent) => void;
+  /** `main` or a side-thread id; side threads get their own conversation. */
+  threadId?: string;
 }
 
 /**
@@ -224,7 +233,7 @@ export async function runWorkflowTurn(args: {
 }
 
 export async function runBotTurn(args: RunBotTurnArgs): Promise<string> {
-  const { bot, text, prior, model, signal, onDelta, onEvent } = args;
+  const { bot, text, prior, model, signal, onDelta, onEvent, threadId } = args;
   if (bot.action.type === 'execute_workflow') {
     return runWorkflowTurn({ bot, text, signal, onDelta, extra: { context: bot.action.workflowInput ?? {} } });
   }
@@ -241,7 +250,7 @@ export async function runBotTurn(args: RunBotTurnArgs): Promise<string> {
   if (learning) messages.splice(1, 0, { role: 'system', content: learning });
   return getAgentProvider().chat(messages, undefined, {
     agentId: bot.action.agentId || 'eclipse-agent',
-    chatId: botChatId(bot.id),
+    chatId: botThreadChatId(bot.id, threadId),
     workspaceRootId: botWorkspaceRootId(bot.id),
     memoryScope: 'conversation',
     model: model || pin.model,

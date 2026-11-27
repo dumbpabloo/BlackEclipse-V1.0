@@ -1,6 +1,6 @@
 'use client';
 
-// ── Bot chat ─────────────────────────────────────────────────────────────────
+// â”€â”€ Bot chat â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // The bot workspace's main surface: a conversation WITH the bot. You can rename
 // it and edit its purpose inline, chat with it (real agent turns through
 // `/api/harness/chat`, with the bot's identity + instructions as standing
@@ -11,8 +11,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
 import {
-  ArrowLeft, ArrowUp, CalendarDays, CheckCircle2, Copy, FileText, Loader2, Pause, Play,
-  Plus, RefreshCw, Settings, SquarePen, ThumbsDown, ThumbsUp, X,
+  ArrowLeft, CalendarDays, Check, GitBranch, Loader2, MoreHorizontal,
+  Pause, Play, Plus, Settings, SquarePen, Trash2, Type, X,
 } from '@/lib/icons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,12 +20,11 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
-import { Markdown } from '@/components/chat/markdown';
-import { TtsButton } from '@/components/chat/tts-button';
-import { ParallelAgentsPanel } from '@/components/chat/parallel-agents-panel';
-import { ApprovalCard } from '@/components/chat/approval-card';
-import { ClarificationCard } from '@/components/chat/clarification-card';
-import { TradeApprovalBanner } from '@/components/chat/trade-approval-banner';
+import { BotComposer } from '@/components/bots/bot-composer';
+import { BOTS_FONT_SCALE_OPTIONS, useBotsAppearanceStore } from '@/lib/bots/appearance';
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import type { DelegationView } from '@/lib/agent/response-model';
 import type { HarnessUiEvent } from '@/lib/agent/events';
 import {
@@ -40,6 +39,7 @@ import {
 import type { SessionFile } from '@/lib/chat/session-types';
 import { listAutomationHistory, type ExecutionView } from '@/lib/harness/clients/automation-browser';
 import { BotAvatar } from '@/components/bots/bot-avatar';
+import { ChatBubble, SuggestionChip } from '@/components/bots/bot-chat-bubble';
 import { BotDetail } from '@/components/bots/bot-detail';
 import { BotsTextSizeMenu } from '@/components/bots/bots-text-size';
 import { BreakerPill, LifecyclePill } from '@/components/bots/status-pill';
@@ -49,7 +49,8 @@ import {
 } from '@/lib/harness/clients/automation-browser';
 import { avatarFor, useBotAvatarStore, useHydrateBotAvatars } from '@/lib/bots/avatar-store';
 import { moodFromEvent, type GhostMood } from '@/lib/bots/ghost-mood';
-import { useBotChatStore, useHydrateBotChat, type BotMessage } from '@/lib/bots/chat-store';
+import { useBotChatStore, useHydrateBotChat, MAIN_THREAD, threadKey, type BotMessage } from '@/lib/bots/chat-store';
+import { useBotQueueStore, useHydrateBotQueue, type QueuedTurn } from '@/lib/bots/queue-store';
 import { useBotsStore } from '@/lib/bots/bots-store';
 import { isQuietAnswer } from '@/lib/bots/quiet';
 import { useWorkspaceStore } from '@/lib/agent-workspace/store';
@@ -79,6 +80,8 @@ function newId(): string {
 // every render, which breaks useSyncExternalStore's snapshot caching and throws
 // "Maximum update depth exceeded".
 const NO_MESSAGES: BotMessage[] = [];
+const NO_THREADS: import('@/lib/bots/chat-store').BotThread[] = [];
+const NO_QUEUE: import('@/lib/bots/queue-store').QueuedTurn[] = [];
 
 export function BotChat({
   bot, active = true, busy, refreshKey = 0, onClose, onChanged, onRunNow, onDuplicate, onDelete,
@@ -86,13 +89,33 @@ export function BotChat({
   const t = useT();
   useHydrateBotAvatars();
   useHydrateBotChat();
+  useHydrateBotQueue();
   const avatars = useBotAvatarStore((s) => s.avatars);
   const messages = useBotChatStore((s) => s.byBot[bot.id] ?? NO_MESSAGES);
   const append = useBotChatStore((s) => s.append);
+  const appendTo = useBotChatStore((s) => s.appendTo);
   const appendScheduled = useBotChatStore((s) => s.appendScheduled);
   const updateMessage = useBotChatStore((s) => s.update);
+  const updateIn = useBotChatStore((s) => s.updateIn);
   const clearMessages = useBotChatStore((s) => s.clear);
   const setMessages = useBotChatStore((s) => s.setMessages);
+  const fontScale = useBotsAppearanceStore((s) => s.appearance.fontScale);
+  const setFontScale = useBotsAppearanceStore((s) => s.setFontScale);
+  const react = useBotChatStore((s) => s.react);
+  const threads = useBotChatStore((s) => s.threadsByBot[bot.id] ?? NO_THREADS);
+  const activeThreadId = useBotChatStore((s) => s.activeThreadByBot[bot.id] ?? MAIN_THREAD);
+  const createThread = useBotChatStore((s) => s.createThread);
+  const selectThread = useBotChatStore((s) => s.selectThread);
+  const branchThread = useBotChatStore((s) => s.branchThread);
+  const renameThread = useBotChatStore((s) => s.renameThread);
+  const deleteThread = useBotChatStore((s) => s.deleteThread);
+  const queued = useBotQueueStore((s) => s.queuedByBot[bot.id] ?? NO_QUEUE);
+  const enqueue = useBotQueueStore((s) => s.enqueue);
+  const removeQueued = useBotQueueStore((s) => s.remove);
+  const moveQueued = useBotQueueStore((s) => s.move);
+  const promoteQueued = useBotQueueStore((s) => s.promote);
+  const clearQueue = useBotQueueStore((s) => s.clear);
+  const takeNextQueued = useBotQueueStore((s) => s.takeNext);
   // Clears this bot's unread dot in the sidebar once its latest run is on screen.
   const markSeen = useBotsStore((s) => s.markSeen);
   // The scheduler sits beside the bot's Settings gear in the header, opening the
@@ -101,7 +124,7 @@ export function BotChat({
   const schedulerOpen = useWorkspaceStore((s) => s.open);
   const toggleScheduler = useWorkspaceStore((s) => s.toggle);
   // Interactive turns use the bot's own brain and pinned provider/model
-  // (Details → Schedule), never the app-wide composer default. There is no
+  // (Details â†’ Schedule), never the app-wide composer default. There is no
   // inline global selector here: a bot's model must not change every other chat.
   // The pin is applied in `runBotTurn` so chat and scheduled runs agree.
 
@@ -119,11 +142,10 @@ export function BotChat({
   const [actionError, setActionError] = useState<string | null>(null);
   const [runBusy, setRunBusy] = useState(false);
   const [runNote, setRunNote] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [threadTitle, setThreadTitle] = useState('');
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  // Anchor for the approval / clarification cards (they portal above it).
-  const [composerEl, setComposerEl] = useState<HTMLDivElement | null>(null);
   // Documents attached to this bot's conversation. They live in the SAME
   // `bot-<id>` session the chat run uses, so the front door injects them exactly
   // as it does for main chat — no bot-specific attachment path.
@@ -210,8 +232,8 @@ export function BotChat({
   const pendingApproval = pendingMessage?.pendingApproval;
   const pendingClarification = pendingMessage?.pendingClarification;
 
-  // A bot whose instructions NAME a cadence ("…every 3 mins") but whose trigger
-  // is still MANUAL will never run on its own — exactly what happens to a bot
+  // A bot whose instructions NAME a cadence ("â€¦every 3 mins") but whose trigger
+  // is still MANUAL will never run on its own â€” exactly what happens to a bot
   // created before the description parser existed. Offer a one-click fix rather
   // than silently rescheduling (or leaving it dead).
   const suggested = useMemo(() => {
@@ -301,22 +323,11 @@ export function BotChat({
     return () => clearTimeout(timer);
   }, [mood]);
 
-  // Auto-grow the composer with its content, up to a cap, then scroll.
-  const resizeComposer = useCallback(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-  }, []);
-  useEffect(() => {
-    resizeComposer();
-  }, [input, resizeComposer]);
-
   // Surface AUTONOMOUS runs into the thread. The composer only ever shows turns
   // you typed; a scheduled/event/condition/"Run now" run finishes inside the
   // runtime and its answer would otherwise be invisible here (it lived only in
-  // Details → Run history and a toast). Poll the bot's execution history and
-  // append every terminal run that produced output — once each, keyed by
+  // Details â†’ Run history and a toast). Poll the bot's execution history and
+  // append every terminal run that produced output â€” once each, keyed by
   // execution id. The first sweep seeds from history WITHOUT replaying it (only
   // the latest answer is surfaced, so an old thread is not dumped into view).
   useEffect(() => {
@@ -330,7 +341,7 @@ export function BotChat({
       try {
         executions = await listAutomationHistory(bot.id);
       } catch {
-        return; // runtime down / not ready — try again on the next tick
+        return; // runtime down / not ready â€” try again on the next tick
       }
       if (cancelled) return;
       const finished = executions
@@ -388,20 +399,21 @@ export function BotChat({
     if (lastRunId) markSeen(bot.id, lastRunId);
   }, [lastRunId, bot.id, markSeen]);
 
-  const runTurn = useCallback(async (raw: string) => {
+  const runTurn = useCallback(async (raw: string, threadId: string = activeThreadId) => {
     const text = raw.trim();
-    if (!text || sending || attachBusy) return;
+    if (!text || attachBusy) return;
     // Read the FRESH thread (not the render snapshot) so an edit/regenerate that
-    // truncated the store is respected, then append the new user turn.
-    const prior = useBotChatStore.getState().byBot[bot.id] ?? [];
-    append(bot.id, { id: newId(), role: 'user', content: text, at: new Date().toISOString() });
+    // truncated the store is respected, then append the new user turn. A turn
+    // keeps writing to the thread it STARTED in even if the operator switches.
+    const prior = useBotChatStore.getState().messagesByThread[threadKey(bot.id, threadId)] ?? [];
+    appendTo(bot.id, threadId, { id: newId(), role: 'user', content: text, at: new Date().toISOString() });
     setInput('');
     setSending(true);
     setMood('thinking');
     // Placeholder the stream fills in place, so a long tool-heavy run shows the
     // answer as it is written instead of a blank wait.
     const replyId = newId();
-    append(bot.id, { id: replyId, role: 'assistant', content: '', at: new Date().toISOString() });
+    appendTo(bot.id, threadId, { id: replyId, role: 'assistant', content: '', at: new Date().toISOString() });
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -426,7 +438,7 @@ export function BotChat({
       } else {
         return;
       }
-      updateMessage(bot.id, replyId, { delegations }, false);
+      updateIn(bot.id, threadId, replyId, { delegations }, false);
     };
     try {
       // The streaming agent provider (background run + SSE), NOT the one-shot
@@ -439,6 +451,7 @@ export function BotChat({
         bot,
         text,
         prior,
+        threadId,
         signal: controller.signal,
         onEvent: (event) => {
           applyDelegation(event);
@@ -446,13 +459,13 @@ export function BotChat({
           // permission decision or a `clarify` question otherwise strands the
           // run with no way to answer it.
           if (event.kind === 'approval_request') {
-            updateMessage(bot.id, replyId, { pendingApproval: event.approval }, false);
+            updateIn(bot.id, threadId, replyId, { pendingApproval: event.approval }, false);
           } else if (event.kind === 'approval_resolved') {
-            updateMessage(bot.id, replyId, { pendingApproval: undefined }, false);
+            updateIn(bot.id, threadId, replyId, { pendingApproval: undefined }, false);
           } else if (event.kind === 'clarification_request') {
-            updateMessage(bot.id, replyId, { pendingClarification: event.clarification }, false);
+            updateIn(bot.id, threadId, replyId, { pendingClarification: event.clarification }, false);
           } else if (event.kind === 'clarification_answered') {
-            updateMessage(bot.id, replyId, { pendingClarification: undefined }, false);
+            updateIn(bot.id, threadId, replyId, { pendingClarification: undefined }, false);
           }
           const next = moodFromEvent(event);
           if (next) setMood(next);
@@ -462,7 +475,7 @@ export function BotChat({
           setMood('speaking');
           // Streaming frames update memory only; the terminal update below
           // persists the finished thread once instead of on every token.
-          updateMessage(bot.id, replyId, { content: streamed }, false);
+          updateIn(bot.id, threadId, replyId, { content: streamed }, false);
         },
       });
       const final = reply || streamed;
@@ -476,13 +489,13 @@ export function BotChat({
       setMood(final ? 'happy' : 'sad');
     } catch (err) {
       if (controller.signal.aborted) {
-        updateMessage(bot.id, replyId, {
+        updateIn(bot.id, threadId, replyId, {
           ...(streamed ? { content: streamed } : { content: '(cancelled)', error: true }),
           pendingApproval: undefined,
           pendingClarification: undefined,
         });
       } else {
-        updateMessage(bot.id, replyId, {
+        updateIn(bot.id, threadId, replyId, {
           content: err instanceof Error ? err.message : 'network error',
           error: true,
           pendingApproval: undefined,
@@ -494,16 +507,45 @@ export function BotChat({
       abortRef.current = null;
       setSending(false);
     }
-  }, [sending, attachBusy, append, updateMessage, bot]);
+  }, [attachBusy, appendTo, updateIn, bot]);
 
   const send = useCallback(() => {
-    void runTurn(input);
-  }, [runTurn, input]);
+    const text = input.trim();
+    if (!text) return;
+    // A message composed during a run is QUEUED, never silently dropped.
+    if (sending) {
+      enqueue({ botId: bot.id, threadId: activeThreadId, text });
+      setInput('');
+      return;
+    }
+    void runTurn(text);
+  }, [runTurn, input, sending, enqueue, bot.id, activeThreadId]);
+
+  // Drain the durable queue whenever a turn ends (including a resumed queue
+  // after reload). Each item carries its own thread, so it lands where it was
+  // composed even if the operator moved on.
+  useEffect(() => {
+    if (sending || !active) return;
+    const next = takeNextQueued(bot.id);
+    if (!next) return;
+    void runTurn(next.text, next.threadId);
+  }, [sending, active, bot.id, takeNextQueued, runTurn]);
 
   /** Stop the in-flight reply (keeps whatever streamed so far). */
   const stop = useCallback(() => {
     abortRef.current?.abort();
   }, []);
+
+  /** Steer: the queued message jumps the line; the running turn is stopped. */
+  const steerQueued = useCallback((turn: QueuedTurn) => {
+    promoteQueued(bot.id, turn.id);
+    if (sending) {
+      abortRef.current?.abort();
+      return;
+    }
+    const next = takeNextQueued(bot.id);
+    if (next) void runTurn(next.text, next.threadId);
+  }, [promoteQueued, bot.id, sending, takeNextQueued, runTurn]);
 
   /** Answer a blocking approval raised by this bot's turn. */
   const decideApproval = useCallback(async (approve: boolean, remember?: boolean) => {
@@ -555,7 +597,9 @@ export function BotChat({
       if (idx < 0) return;
       setMessages(bot.id, messages.slice(0, idx));
       setInput(messages[idx].content);
-      requestAnimationFrame(() => textareaRef.current?.focus());
+      requestAnimationFrame(() => {
+        document.querySelector<HTMLTextAreaElement>('[data-bot-composer="true"]')?.focus();
+      });
     },
     [messages, setMessages, bot.id],
   );
@@ -587,7 +631,7 @@ export function BotChat({
 
   return (
     <div className="glass-card flex h-full min-h-0 flex-col rounded-2xl">
-      {/* Header — bot identity + autonomous controls (compact banner). */}
+      {/* Header â€” bot identity + autonomous controls (compact banner). */}
       <div className="flex items-center gap-2.5 border-b border-border/10 px-3 py-2">
         <button
           type="button"
@@ -660,29 +704,42 @@ export function BotChat({
             >
               {runBusy ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />} {t('bots.runNow')}
             </Button>
-            {bot.state === 'active' ? (
-              <Button
-                size="icon-sm"
-                variant="outline"
-                disabled={actionBusy}
-                title={t('bots.pause')}
-                aria-label={t('bots.pause')}
-                onClick={() => doAction(() => pauseAutomation(bot.id))}
+
+            {/* One status pill owns pause/resume instead of a second button. */}
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <button
+                    type="button"
+                    disabled={actionBusy || (bot.state !== 'active' && bot.state !== 'paused')}
+                    className={cn(
+                      'flex h-8 items-center gap-1.5 rounded-full border border-border/50 px-2.5 text-[11px] text-muted-foreground transition-colors hover:border-border hover:text-foreground disabled:opacity-50',
+                      bot.state === 'active' && 'border-emerald-500/30 text-emerald-300/90',
+                      bot.state === 'paused' && 'border-amber-500/30 text-amber-300/90',
+                    )}
+                    aria-label={t('bots.status')}
+                  />
+                }
               >
-                <Pause size={14} />
-              </Button>
-            ) : bot.state === 'paused' ? (
-              <Button
-                size="icon-sm"
-                variant="outline"
-                disabled={actionBusy}
-                title={t('bots.resume')}
-                aria-label={t('bots.resume')}
-                onClick={() => doAction(() => resumeAutomation(bot.id))}
-              >
-                <Play size={14} />
-              </Button>
-            ) : null}
+                <span className={cn(
+                  'h-1.5 w-1.5 rounded-full',
+                  bot.state === 'active' ? 'bg-emerald-400' : bot.state === 'paused' ? 'bg-amber-400' : 'bg-muted-foreground',
+                )} />
+                {bot.state === 'active' ? t('bots.state.active') : bot.state === 'paused' ? t('bots.state.paused') : bot.state}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-40">
+                {bot.state === 'active' ? (
+                  <DropdownMenuItem onClick={() => void doAction(() => pauseAutomation(bot.id))}>
+                    <Pause size={13} /> {t('bots.pause')}
+                  </DropdownMenuItem>
+                ) : (
+                  <DropdownMenuItem onClick={() => void doAction(() => resumeAutomation(bot.id))}>
+                    <Play size={13} /> {t('bots.resume')}
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+
             <Button
               size="icon-sm"
               variant="ghost"
@@ -694,16 +751,58 @@ export function BotChat({
             >
               <CalendarDays size={14} />
             </Button>
-            <BotsTextSizeMenu className="p-1.5" />
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              title={t('bots.detail.settings')}
-              aria-label={t('bots.detail.settings')}
-              onClick={() => setDetailsOpen(true)}
-            >
-              <Settings size={14} />
-            </Button>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button size="icon-sm" variant="ghost" title={t('bots.more')} aria-label={t('bots.more')} />
+                }
+              >
+                <MoreHorizontal size={15} />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem onClick={() => setDetailsOpen(true)}>
+                  <Settings size={13} /> {t('bots.detail.settings')}
+                </DropdownMenuItem>
+                {activeThreadId !== MAIN_THREAD && (
+                  <>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        setThreadTitle(threads.find((thread) => thread.id === activeThreadId)?.title ?? '');
+                        setRenaming(true);
+                      }}
+                    >
+                      <SquarePen size={13} /> {t('bots.threads.rename')}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => deleteThread(bot.id, activeThreadId)}>
+                      <Trash2 size={13} /> {t('bots.threads.delete')}
+                    </DropdownMenuItem>
+                  </>
+                )}
+                <DropdownMenuSeparator />
+                <div className="px-1.5 py-1 text-[10px] text-muted-foreground">
+                  <span className="inline-flex items-center gap-1"><Type size={11} /> {t('bots.textSize')}</span>
+                </div>
+                {BOTS_FONT_SCALE_OPTIONS.map((option) => {
+                  const activeScale = Math.abs(option.value - fontScale) < 0.001;
+                  return (
+                    <DropdownMenuItem key={option.label} onClick={() => setFontScale(option.value)}>
+                      <span className="flex-1">{option.label}</span>
+                      <span className="text-[10px] text-muted-foreground">{Math.round(option.value * 100)}%</span>
+                      <Check size={13} className={activeScale ? 'text-primary' : 'opacity-0'} />
+                    </DropdownMenuItem>
+                  );
+                })}
+                {messages.length > 0 && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => clearMessages(bot.id)}>
+                      <X size={13} /> {t('bots.chat.clear')}
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
           {actionError && <span className="text-[10px] text-rose-300">{actionError}</span>}
         </div>
@@ -732,6 +831,49 @@ export function BotChat({
           </div>
         )}
 
+        {/* Side threads / branches. `main` is the canonical conversation; a
+            branch copies the messages through its fork point and gets its OWN
+            conversation id, so experimenting cannot rewrite the main thread. */}
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+          <GitBranch size={12} />
+          {renaming ? (
+            <input
+              autoFocus
+              value={threadTitle}
+              onChange={(e) => setThreadTitle(e.target.value)}
+              onBlur={() => {
+                if (threadTitle.trim()) renameThread(bot.id, activeThreadId, threadTitle);
+                setRenaming(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') e.currentTarget.blur();
+                if (e.key === 'Escape') setRenaming(false);
+              }}
+              className="min-w-0 rounded border border-border/40 bg-transparent px-1 py-px text-[11px]"
+              aria-label={t('bots.threads.rename')}
+            />
+          ) : (
+            <select
+              value={activeThreadId}
+              onChange={(e) => selectThread(bot.id, e.target.value)}
+              className="max-w-[16rem] rounded border border-border/40 bg-transparent px-1 py-px text-[11px] text-foreground"
+              aria-label={t('bots.threads.label')}
+            >
+              {threads.map((thread) => (
+                <option key={thread.id} value={thread.id}>{thread.title}</option>
+              ))}
+              {threads.length === 0 && <option value={MAIN_THREAD}>Main</option>}
+            </select>
+          )}
+          <button
+            type="button"
+            onClick={() => createThread(bot.id)}
+            className="rounded p-0.5 hover:bg-white/10 hover:text-foreground"
+            title={t('bots.threads.new')}
+            aria-label={t('bots.threads.new')}
+          ><Plus size={12} /></button>
+        </div>
+
         {/* Oldest first: the question is on top, its answer below it. */}
         {messages.map((m, i) => {
           return !m.error && m.role === 'assistant' && !m.content ? null : (
@@ -743,6 +885,8 @@ export function BotChat({
               spec={spec}
               onEdit={editMessage}
               onFeedback={setFeedback}
+              onReact={(emoji) => react(bot.id, m.id, emoji)}
+              onBranch={() => branchThread(bot.id, m.id)}
               onRegenerate={
                 i === messages.length - 1 && m.role === 'assistant' && !m.error && !m.scheduled
                   ? regenerate
@@ -760,147 +904,61 @@ export function BotChat({
         {sending && (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Loader2 size={14} className="animate-spin" />
-            {bot.name} is thinking…
+            {bot.name} is thinkingâ€¦
           </div>
         )}
       </div>
 
-      {/* Composer */}
-      <div ref={setComposerEl} className="border-t border-border/10 p-3">
-        {/* The SAME trade approval surface the main chat composer mounts: a
-            pending `order_preview` is the operator's half of the order contract,
-            and a bot conversation must be able to complete it in place rather
-            than sending the user to another screen. Store-driven and
-            self-polling, so a scheduled run's proposal appears here too. */}
-        <TradeApprovalBanner automationId={bot.id} />
-        {pendingApproval && (
-          <ApprovalCard
-            approval={pendingApproval}
-            anchor={composerEl}
-            onDecide={(approve, remember) => { void decideApproval(approve, remember); }}
-          />
-        )}
-        {pendingClarification && (
-          <ClarificationCard
-            clarification={pendingClarification}
-            anchor={composerEl}
-            onAnswer={(value) => { void answerClarification(value); }}
-          />
-        )}
-        <input
-          ref={attachInputRef}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={(e) => void attachFiles(e.target.files)}
-        />
-        {(contextFiles.length > 0 || attachError) && (
-          <div className="mb-2 flex flex-wrap items-center gap-1.5">
-            {contextFiles.map((file) => (
-              <span
-                key={file.name}
-                className="inline-flex max-w-full items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[10px] text-foreground/80"
-                title={file.name}
-              >
-                <FileText size={11} className="shrink-0 text-primary/80" />
-                <span className="max-w-[12rem] truncate">{file.name}</span>
-                <button
-                  type="button"
-                  onClick={() => void removeAttachment(file.name)}
-                  className="shrink-0 rounded-full p-0.5 text-muted-foreground hover:text-foreground"
-                  aria-label={`Remove ${file.name}`}
-                >
-                  <X size={10} />
-                </button>
-              </span>
-            ))}
-            {attachBusy && <Loader2 size={12} className="animate-spin text-muted-foreground" />}
-            {attachError && <span className="text-[10px] text-rose-300">{attachError}</span>}
-          </div>
-        )}
-        {suggested && (
-          <div className="mb-2 flex items-center gap-2 rounded-xl border border-primary/25 bg-primary/[0.06] px-3 py-2 text-[11px] text-foreground/90">
-            <CalendarDays size={13} className="shrink-0 text-primary" />
-            <span className="min-w-0 flex-1">
-              {t('bots.scheduleSuggestion', { schedule: suggested.summary })}
-            </span>
-            <Button
-              size="sm"
-              disabled={actionBusy}
-              onClick={() => void applySuggestedSchedule()}
-            >
-              {t('bots.scheduleApply')}
-            </Button>
-          </div>
-        )}
-        <div className="relative flex w-full items-end gap-1.5 rounded-3xl border border-white/10 glass-composer px-1.5 py-1 shadow-lg shadow-black/20 transition-colors focus-within:border-primary sm:px-2 dark:border-white/5">
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault();
-                send();
-              }
-            }}
-            rows={1}
-            data-bot-composer="true"
-            placeholder={`Message ${bot.name}…`}
-            aria-label={`Message ${bot.name}`}
-            wrap={input.length === 0 ? 'off' : 'soft'}
-            className="chat-composer-scroll min-w-0 flex-1 resize-none self-center overflow-x-hidden overflow-y-auto border-0 bg-transparent px-3 py-2 text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground focus:outline-none focus:ring-0"
-          />
-          <div className="mb-0.5 flex shrink-0 items-center gap-1 sm:gap-2">
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => attachInputRef.current?.click()}
-              disabled={attachBusy || sending}
-              title="Attach a document"
-              aria-label="Attach a document"
-            >
-              <Plus size={14} />
-            </Button>
-            {sending ? (
-              <Button
-                size="icon"
-                onClick={stop}
-                title={t('bots.chat.stop')}
-                aria-label={t('bots.chat.stop')}
-                className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full border-0 bg-foreground p-1.5 text-background transition-colors hover:bg-foreground/90 focus-visible:outline-none focus-visible:ring-0"
-              >
-                <Pause size={15} fill="currentColor" />
-              </Button>
-            ) : (
-              <Button
-                size="icon"
-                onClick={send}
-                disabled={!input.trim() || attachBusy}
-                aria-label={`Message ${bot.name}`}
-                className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full bg-primary p-1.5 text-primary-foreground transition-opacity hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-0 disabled:opacity-40 disabled:hover:bg-primary"
-              >
-                <ArrowUp size={16} />
-              </Button>
-            )}
-          </div>
+      {/* Optional schedule fix and the hidden attachment input live here, so
+          the composer itself stays one clean capsule. */}
+      <input
+        ref={attachInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(e) => void attachFiles(e.target.files)}
+      />
+      {suggested && (
+        <div className="mx-3 mb-1 flex items-center gap-2 rounded-xl border border-primary/25 bg-primary/[0.06] px-3 py-2 text-[11px] text-foreground/90">
+          <CalendarDays size={13} className="shrink-0 text-primary" />
+          <span className="min-w-0 flex-1">
+            {t('bots.scheduleSuggestion', { schedule: suggested.summary })}
+          </span>
+          <Button
+            size="sm"
+            disabled={actionBusy}
+            onClick={() => void applySuggestedSchedule()}
+          >
+            {t('bots.scheduleApply')}
+          </Button>
         </div>
-        <div className="mt-1.5 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
-          <span className="truncate">{t('bots.schedule')}: {scheduleSummary(bot.trigger)}</span>
-          <span className="hidden shrink-0 sm:inline">{t('bots.chat.hint')}</span>
-          {messages.length > 0 && (
-            <button
-              type="button"
-              onClick={() => clearMessages(bot.id)}
-              className="hover:text-foreground"
-            >
-              {t('bots.chat.clear')}
-            </button>
-          )}
-        </div>
-      </div>
+      )}
+      <BotComposer
+        botId={bot.id}
+        botName={bot.name}
+        input={input}
+        onInput={setInput}
+        sending={sending}
+        attachBusy={attachBusy}
+        attachError={attachError}
+        contextFiles={contextFiles}
+        onAttach={() => attachInputRef.current?.click()}
+        onRemoveAttachment={(name) => void removeAttachment(name)}
+        onSend={send}
+        onStop={stop}
+        pendingApproval={pendingApproval}
+        pendingClarification={pendingClarification}
+        onDecideApproval={(approve, remember) => { void decideApproval(approve, remember); }}
+        onAnswerClarification={(value) => { void answerClarification(value); }}
+        queued={queued}
+        onQueueMove={(id, direction) => moveQueued(bot.id, id, direction)}
+        onQueueRemove={(id) => removeQueued(bot.id, id)}
+        onQueueClear={() => clearQueue(bot.id)}
+        onQueueSteer={steerQueued}
+      />
 
-      {/* Details drawer — schedule, capabilities, memory, history, settings. */}
+
+      {/* Details drawer â€” schedule, capabilities, memory, history, settings. */}
       <Sheet open={detailsOpen} onOpenChange={setDetailsOpen}>
         <SheetContent side="right" className="w-full gap-0 p-0 sm:max-w-3xl">
           <div className="h-full p-4">
@@ -918,7 +976,7 @@ export function BotChat({
         </SheetContent>
       </Sheet>
 
-      {/* Edit bot — a proper dialog for identity, not an inline header form. */}
+      {/* Edit bot â€” a proper dialog for identity, not an inline header form. */}
       <Dialog open={editOpen} onOpenChange={(open) => { if (!savingIdentity) setEditOpen(open); }}>
         <DialogContent>
           <DialogHeader>
@@ -968,208 +1026,5 @@ export function BotChat({
         </DialogContent>
       </Dialog>
     </div>
-  );
-}
-
-function SuggestionChip({ label, onPick }: { label: string; onPick: (v: string) => void }) {
-  return (
-    <button
-      type="button"
-      onClick={() => onPick(label)}
-      className="rounded-full border border-border/50 px-3 py-1 text-[11px] text-muted-foreground hover:border-border hover:text-foreground"
-    >
-      {label}
-    </button>
-  );
-}
-
-/** A small tag marking an assistant turn that came from an autonomous run
- *  (schedule/event/condition/"Run now") rather than the interactive composer. */
-function ScheduledTag() {
-  const t = useT();
-  return (
-    <span className="rounded-full border border-border/40 px-1.5 py-px text-[9px] font-normal uppercase tracking-wide text-muted-foreground/70">
-      {t('bots.chat.autoRun')}
-    </span>
-  );
-}
-
-function ChatBubble({
-  message,
-  botId,
-  botName,
-  spec,
-  onEdit,
-  onRegenerate,
-  onRetry,
-  onFeedback,
-}: {
-  message: BotMessage;
-  botId: string;
-  botName: string;
-  spec: import('@/lib/bots/ghost').GhostSpec;
-  onEdit: (id: string) => void;
-  onRegenerate?: () => void;
-  onRetry?: () => void;
-  onFeedback?: (id: string, fb: 'up' | 'down') => void;
-}) {
-  const isUser = message.role === 'user';
-  // A bot reply is the room's/main content: it reads as a full-width document
-  // with no glass surface. Only the user's own turns (and honest error turns)
-  // are framed as bubbles.
-  if (!isUser && !message.error) {
-    return (
-      <div className="group flex gap-2.5">
-        <BotAvatar botId={botId} spec={spec} size={28} className="mt-0.5 shrink-0" />
-        <div className="min-w-0 flex-1">
-          <div className="mb-0.5 flex items-center gap-1.5 text-[10px] font-semibold text-muted-foreground">
-            <span>{botName}</span>
-            {message.scheduled && <ScheduledTag />}
-          </div>
-          {message.delegations && message.delegations.length > 0 && (
-            <ParallelAgentsPanel delegations={message.delegations} compact />
-          )}
-          <Markdown content={message.content} compact className="w-full" />
-          <div className="mt-1 flex items-center gap-2 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-            <span>{formatDateTime(message.at)}</span>
-            <MessageActions
-              content={message.content}
-              isUser={false}
-              feedback={message.feedback}
-              onFeedback={onFeedback ? (fb) => onFeedback(message.id, fb) : undefined}
-              onRegenerate={onRegenerate}
-            />
-          </div>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className={cn('group flex gap-2.5', isUser ? 'flex-row-reverse' : 'flex-row')}>
-      {!isUser && <BotAvatar botId={botId} spec={spec} size={28} className="mt-0.5 shrink-0" />}
-      <div className={cn('flex min-w-0 max-w-[80%] flex-col gap-1', isUser ? 'items-end' : 'items-start')}>
-        <div
-          className={cn(
-            'rounded-2xl px-3.5 py-2 text-sm',
-            isUser
-              ? 'chat-bubble text-foreground'
-              : 'border border-rose-500/30 bg-rose-500/5 text-rose-200',
-          )}
-        >
-          {!isUser && (
-            <div className="mb-0.5 flex items-center gap-1.5 text-[10px] font-semibold text-muted-foreground">
-              <span>{botName}</span>
-              {message.scheduled && <ScheduledTag />}
-            </div>
-          )}
-          <div className="whitespace-pre-wrap break-words">{message.content}</div>
-        </div>
-        {/* Time + actions sit below the bubble (not inside it, which made the
-            bubble tall) and only appear on hover/focus. */}
-        <div className="flex items-center gap-2 px-1 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-          <span>{formatDateTime(message.at)}</span>
-          {isUser && !message.error ? (
-            <MessageActions content={message.content} isUser onEdit={() => onEdit(message.id)} />
-          ) : (
-            <MessageActions content={message.content} isUser={false} onRetry={onRetry} />
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function MessageActions({
-  content,
-  isUser,
-  feedback,
-  onEdit,
-  onRegenerate,
-  onRetry,
-  onFeedback,
-}: {
-  content: string;
-  isUser: boolean;
-  feedback?: 'up' | 'down';
-  onEdit?: () => void;
-  onRegenerate?: () => void;
-  onRetry?: () => void;
-  onFeedback?: (fb: 'up' | 'down') => void;
-}) {
-  const t = useT();
-  const [copied, setCopied] = useState(false);
-  const btn =
-    'flex h-5 w-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-white/10 hover:text-foreground';
-  const copy = () => {
-    if (typeof navigator === 'undefined' || !navigator.clipboard) return;
-    void navigator.clipboard.writeText(content).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    }).catch(() => { /* clipboard unavailable */ });
-  };
-  return (
-    <span className="flex items-center gap-0.5">
-      <button
-        type="button"
-        onClick={copy}
-        className={btn}
-        title={copied ? t('bots.chat.copied') : t('bots.chat.copy')}
-        aria-label={t('bots.chat.copy')}
-      >
-        {copied ? <CheckCircle2 size={12} /> : <Copy size={12} />}
-      </button>
-      {!isUser && <TtsButton content={content} />}
-      {!isUser && onFeedback && (
-        <>
-          <button
-            type="button"
-            onClick={() => onFeedback('up')}
-            className={cn(btn, feedback === 'up' && 'text-emerald-300')}
-            title={t('bots.chat.good')}
-            aria-label={t('bots.chat.good')}
-            aria-pressed={feedback === 'up'}
-          >
-            <ThumbsUp size={12} weight={feedback === 'up' ? 'fill' : 'regular'} />
-          </button>
-          <button
-            type="button"
-            onClick={() => onFeedback('down')}
-            className={cn(btn, feedback === 'down' && 'text-rose-300')}
-            title={t('bots.chat.bad')}
-            aria-label={t('bots.chat.bad')}
-            aria-pressed={feedback === 'down'}
-          >
-            <ThumbsDown size={12} weight={feedback === 'down' ? 'fill' : 'regular'} />
-          </button>
-        </>
-      )}
-      {isUser && onEdit && (
-        <button type="button" onClick={onEdit} className={btn} title={t('bots.edit')} aria-label={t('bots.edit')}>
-          <SquarePen size={12} />
-        </button>
-      )}
-      {!isUser && onRegenerate && (
-        <button
-          type="button"
-          onClick={onRegenerate}
-          className={btn}
-          title={t('bots.chat.regenerate')}
-          aria-label={t('bots.chat.regenerate')}
-        >
-          <RefreshCw size={12} />
-        </button>
-      )}
-      {!isUser && onRetry && (
-        <button
-          type="button"
-          onClick={onRetry}
-          className={btn}
-          title={t('bots.chat.retry')}
-          aria-label={t('bots.chat.retry')}
-        >
-          <RefreshCw size={12} />
-        </button>
-      )}
-    </span>
   );
 }

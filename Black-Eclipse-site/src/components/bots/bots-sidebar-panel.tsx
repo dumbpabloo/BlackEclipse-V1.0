@@ -9,9 +9,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
-import { Archive, CalendarDays, Copy, Download, MoreHorizontal, Pencil, Pin, PinOff, Plus, RefreshCw, Search, Trash2, Upload, Users } from '@/lib/icons';
+import { Archive, CalendarDays, Check, Copy, Download, MoreHorizontal, Pencil, Pin, PinOff, Plus, RefreshCw, Search, Trash2, Type, Upload, Users } from '@/lib/icons';
 import { BotAvatar } from '@/components/bots/bot-avatar';
-import { BotsTextSizeMenu } from '@/components/bots/bots-text-size';
 import { GhostAvatar } from '@/components/bots/ghost-avatar';
 import { Button } from '@/components/ui/button';
 import {
@@ -19,13 +18,15 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator,
+  DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useBotsStore } from '@/lib/bots/bots-store';
 import { avatarFor, useBotAvatarStore, useHydrateBotAvatars } from '@/lib/bots/avatar-store';
 import { useBotChatStore } from '@/lib/bots/chat-store';
 import { isDesk } from '@/lib/bots/desk';
 import { useBotGroupsStore, useHydrateBotGroups } from '@/lib/bots/groups-store';
+import { BOTS_FONT_SCALE_OPTIONS, useBotsAppearanceStore, useHydrateBotsAppearance } from '@/lib/bots/appearance';
 import { useWorkspaceStore } from '@/lib/agent-workspace/store';
 import { duplicateBot } from '@/lib/bots/duplicate';
 import { importBotInput } from '@/lib/bots/transfer';
@@ -34,18 +35,16 @@ import { ghostSpecFromId } from '@/lib/bots/ghost';
 import { botMatchesSearch, executionLabel, isTerminalExecution } from '@/lib/bots/state';
 import { archiveAutomation, createAutomation, deleteAutomation, updateAutomation } from '@/lib/harness/clients/automation-browser';
 import type { AutomationStatusSummaryView, AutomationView } from '@/lib/harness/clients/automation-browser';
-import type { BotMessage } from '@/lib/bots/chat-store';
 
 /** Most-recent activity for a bot: its last chat message, else its last run,
  *  else its last edit. Used to sort the list newest-first. */
 function lastActivityMs(
   botId: string,
   fallback: string | undefined | null,
-  byBot: Record<string, BotMessage[]>,
+  latestMessageMs: Record<string, number>,
   statusById: Record<string, AutomationStatusSummaryView>,
 ): number {
-  const msgs = byBot[botId];
-  const lastMsg = msgs && msgs.length > 0 ? Date.parse(msgs[msgs.length - 1].at) : 0;
+  const lastMsg = latestMessageMs[botId] ?? 0;
   const last = statusById[botId]?.lastExecution;
   const runAt = last ? Date.parse(last.finishedAt ?? last.startedAt) : 0;
   const edited = fallback ? Date.parse(fallback) : 0;
@@ -83,7 +82,10 @@ export function BotsSidebarPanel({ collapsed, onActivate }: BotsSidebarPanelProp
   const schedulerOpen = useWorkspaceStore((s) => s.open);
   const toggleScheduler = useWorkspaceStore((s) => s.toggle);
   const statusLoaded = useBotsStore((s) => s.statusLoaded);
-  const byBot = useBotChatStore((s) => s.byBot);
+  const messagesByThread = useBotChatStore((s) => s.messagesByThread);
+  useHydrateBotsAppearance();
+  const fontScale = useBotsAppearanceStore((s) => s.appearance.fontScale);
+  const setFontScale = useBotsAppearanceStore((s) => s.setFontScale);
   const [deleteTarget, setDeleteTarget] = useState<AutomationView | null>(null);
   const [query, setQuery] = useState('');
   const importRef = useRef<HTMLInputElement>(null);
@@ -118,6 +120,13 @@ export function BotsSidebarPanel({ collapsed, onActivate }: BotsSidebarPanelProp
   // Pinned bots first (newest pin first), then most-recent activity.
   const sortedBots = useMemo(() => {
     const rank = new Map(pinnedIds.map((id, index) => [id, index]));
+    // Latest message across ALL of a bot's threads (a side thread is still activity).
+    const latestMessageMs: Record<string, number> = {};
+    for (const [key, list] of Object.entries(messagesByThread)) {
+      const botId = key.split('::')[0];
+      const last = list.length > 0 ? Date.parse(list[list.length - 1].at) : 0;
+      if (Number.isFinite(last)) latestMessageMs[botId] = Math.max(latestMessageMs[botId] ?? 0, last);
+    }
     return [...bots].sort((a, b) => {
       const ar = rank.get(a.id);
       const br = rank.get(b.id);
@@ -127,11 +136,11 @@ export function BotsSidebarPanel({ collapsed, onActivate }: BotsSidebarPanelProp
         return ar - br;
       }
       return (
-        lastActivityMs(b.id, b.lastRunAt ?? b.updatedAt, byBot, statusById)
-        - lastActivityMs(a.id, a.lastRunAt ?? a.updatedAt, byBot, statusById)
+        lastActivityMs(b.id, b.lastRunAt ?? b.updatedAt, latestMessageMs, statusById)
+        - lastActivityMs(a.id, a.lastRunAt ?? a.updatedAt, latestMessageMs, statusById)
       );
     });
-  }, [bots, byBot, statusById, pinnedIds]);
+  }, [bots, messagesByThread, statusById, pinnedIds]);
 
   const visibleBots = useMemo(
     () => sortedBots.filter((bot) => botMatchesSearch(bot, query)),
@@ -364,7 +373,6 @@ export function BotsSidebarPanel({ collapsed, onActivate }: BotsSidebarPanelProp
           {t('bots.title')} · {bots.length}
         </span>
         <div className="flex items-center gap-0.5">
-          <BotsTextSizeMenu />
           <button
             type="button"
             onClick={toggleScheduler}
@@ -385,17 +393,49 @@ export function BotsSidebarPanel({ collapsed, onActivate }: BotsSidebarPanelProp
             title={t('bots.dialog.title')}
             aria-label={t('bots.dialog.title')}
           >
-            <Plus size={13} />
+            <Plus size={14} />
           </button>
-          <button
-            type="button"
-            onClick={() => importRef.current?.click()}
-            className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-            title={t('bots.import')}
-            aria-label={t('bots.import')}
-          >
-            <Upload size={13} />
-          </button>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <button
+                  type="button"
+                  className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  title={t('bots.more')}
+                  aria-label={t('bots.more')}
+                />
+              }
+            >
+              <MoreHorizontal size={14} />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuItem onClick={() => importRef.current?.click()}>
+                <Upload size={13} /> {t('bots.import')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => void downloadDiagnostics()}>
+                <Download size={13} /> {t('bots.diagnostics')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => void hydrate()}>
+                <RefreshCw size={13} /> {t('common.refresh')}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel className="flex items-center gap-1.5 text-[10px] font-normal text-muted-foreground">
+                <Type size={11} /> {t('bots.textSize')}
+              </DropdownMenuLabel>
+              {BOTS_FONT_SCALE_OPTIONS.map((option) => {
+                const active = Math.abs(option.value - fontScale) < 0.001;
+                return (
+                  <DropdownMenuItem key={option.label} onClick={() => setFontScale(option.value)}>
+                    <span className="flex-1">{option.label}</span>
+                    <span className="text-[10px] text-muted-foreground">
+                      {Math.round(option.value * 100)}%
+                    </span>
+                    <Check size={13} className={active ? 'text-primary' : 'opacity-0'} />
+                  </DropdownMenuItem>
+                );
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
           <input
             ref={importRef}
             type="file"
@@ -403,24 +443,6 @@ export function BotsSidebarPanel({ collapsed, onActivate }: BotsSidebarPanelProp
             className="hidden"
             onChange={(e) => void importFile(e.target.files?.[0])}
           />
-          <button
-            type="button"
-            onClick={() => void downloadDiagnostics()}
-            className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-            title={t('bots.diagnostics')}
-            aria-label={t('bots.diagnostics')}
-          >
-            <Download size={13} />
-          </button>
-          <button
-            type="button"
-            onClick={() => void hydrate()}
-            className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-            title={t('common.refresh')}
-            aria-label={t('common.refresh')}
-          >
-            <RefreshCw size={13} />
-          </button>
         </div>
       </div>
 
@@ -444,13 +466,7 @@ export function BotsSidebarPanel({ collapsed, onActivate }: BotsSidebarPanelProp
       {loading && bots.length === 0 ? (
         <p className="px-2 py-1 text-xs text-muted-foreground">{t('common.loading')}</p>
       ) : bots.length === 0 ? (
-        <button
-          type="button"
-          onClick={startCreate}
-          className="mx-1 rounded-xl border border-dashed border-border/50 px-3 py-4 text-left text-xs text-muted-foreground hover:border-border hover:text-foreground"
-        >
-          {t('bots.empty')}
-        </button>
+        <p className="px-2 py-1 text-[10px] text-muted-foreground">{t('bots.sidebar.empty')}</p>
       ) : (
         <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto scrollbar-hide">
           {visibleBots.map((bot) => {
@@ -544,13 +560,9 @@ export function BotsSidebarPanel({ collapsed, onActivate }: BotsSidebarPanelProp
           </button>
         </div>
         {groups.length === 0 ? (
-          <button
-            type="button"
-            onClick={startGroupCreate}
-            className="mx-1 w-[calc(100%-0.5rem)] rounded-xl border border-dashed border-border/40 px-2 py-2 text-left text-[10px] text-muted-foreground hover:border-border hover:text-foreground"
-          >
-            {t('bots.groups.empty')}
-          </button>
+          <p className="px-2 py-1 text-[10px] text-muted-foreground">
+            {t('bots.groups.sidebarEmpty')}
+          </p>
         ) : (
           <ul className="space-y-0.5">
             {visibleGroups.map((g) => {

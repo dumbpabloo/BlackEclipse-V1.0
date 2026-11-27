@@ -1271,6 +1271,8 @@ model BotState {
 model BotChatMessage {
   id        String   @id
   botId     String
+  /// `main` or a side-thread id. Null on rows written before side threads.
+  threadId  String?  @default("main")
   role      String
   content   String
   at        String
@@ -1283,7 +1285,7 @@ model BotChatMessage {
   revision  Int      @default(1)
   updatedAt DateTime @updatedAt
 
-  @@index([botId, at])
+  @@index([botId, threadId, at])
   @@map("BotChatMessage")
 }
 

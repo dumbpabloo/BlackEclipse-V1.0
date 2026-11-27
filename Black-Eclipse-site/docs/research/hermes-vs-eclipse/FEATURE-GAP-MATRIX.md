@@ -162,8 +162,8 @@ Hermes repository root.
 | | Hermes | Eclipse |
 |---|---|---|
 | Status | ✅ | ✅ |
-| Evidence | `hermes_state*.py`, FTS5+trigram, admissions, lineage | `BE/persistence.py`, `BE/session_index.py`, `BE/routers/sessions.py`; per-bot/per-room transcripts `BotChatMessage`/`BotGroupMessage` + `BotRoom` |
-| Strength | Canonical writer, admission ledger, recovery | Run lineage, filters, per-run index, durable bot transcripts |
+| Evidence | `hermes_state*.py`, FTS5+trigram, admissions, lineage | `BE/persistence.py`, `BE/session_index.py`, `BE/routers/sessions.py`; per-bot/per-room transcripts `BotChatMessage`/`BotGroupMessage` + `BotRoom`; bot side threads/branches and a durable turn queue (`chat-store.ts`, `queue-store.ts`, `BotState` key `queue`) |
+| Strength | Canonical writer, admission ledger, recovery | Run lineage, filters, per-run index, durable bot transcripts, isolated side-thread conversations, queued-turn reorder/cancel/steer |
 | Gap | **I** — Eclipse summary not injected; no canonical writer rule | **I** — Hermes no run lineage |
 | Priority | — | P2 |
 

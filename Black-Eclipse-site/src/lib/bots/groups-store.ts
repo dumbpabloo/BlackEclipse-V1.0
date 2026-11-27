@@ -79,6 +79,8 @@ export interface GroupMessage {
   error?: boolean;
   /** Optional thumbs feedback on an assistant turn. */
   feedback?: 'up' | 'down';
+  /** General reactions on a message (emoji → count). */
+  reactions?: Record<string, number>;
   /** Parallel fan-outs this member ran, for the live agent card. */
   delegations?: import('@/lib/agent/response-model').DelegationView[];
   /** A blocking permission decision raised by this member's turn. */
@@ -130,6 +132,8 @@ interface BotGroupsStore {
   /** Patch one message in place — used to fill the live streaming reply. A
    *  streaming caller passes `persist=false`; the terminal patch persists. */
   updateMessage: (groupId: string, id: string, patch: Partial<GroupMessage>, persist?: boolean) => void;
+  /** Bump one emoji reaction on a message (persisted with the message). */
+  react: (groupId: string, id: string, emoji: string) => void;
   clearMessages: (groupId: string) => void;
 }
 
@@ -217,6 +221,7 @@ function groupMessagePayload(message: GroupMessage): Record<string, unknown> | u
   if (message.delegations?.length) payload.delegations = message.delegations;
   if (message.pendingApproval) payload.pendingApproval = message.pendingApproval;
   if (message.pendingClarification) payload.pendingClarification = message.pendingClarification;
+  if (message.reactions && Object.keys(message.reactions).length) payload.reactions = message.reactions;
   return Object.keys(payload).length ? payload : undefined;
 }
 
@@ -241,6 +246,9 @@ function groupMessageFromRow(row: MessageLogRow): GroupMessage {
       : {}),
     ...(payload?.pendingClarification
       ? { pendingClarification: payload.pendingClarification as GroupMessage['pendingClarification'] }
+      : {}),
+    ...(payload?.reactions
+      ? { reactions: payload.reactions as Record<string, number> }
       : {}),
   };
 }
@@ -469,6 +477,22 @@ export const useBotGroupsStore = create<BotGroupsStore>((set, get) => {
       delete byGroup[groupId];
       commit(get().groups, byGroup);
       void clearBotMessages('groups', groupId);
+    },
+
+    react: (groupId, id, emoji) => {
+      const list = get().byGroup[groupId];
+      if (!list) return;
+      const updated = list.map((message) => {
+        if (message.id !== id) return message;
+        const reactions = { ...(message.reactions ?? {}) };
+        reactions[emoji] = (reactions[emoji] ?? 0) + 1;
+        return { ...message, reactions };
+      });
+      commit(get().groups, { ...get().byGroup, [groupId]: updated });
+      const message = updated.find((item) => item.id === id);
+      if (message) {
+        void appendBotMessage('groups', groupId, message, groupMessagePayload(message));
+      }
     },
   };
 });

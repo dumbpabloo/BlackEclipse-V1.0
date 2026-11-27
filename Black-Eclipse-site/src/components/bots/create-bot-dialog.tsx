@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
-import { ChevronDown, ImagePlus, Lock, Shuffle, Sparkles } from '@/lib/icons';
+import { ChevronDown, Briefcase, ImagePlus, Landmark, Lock, Shuffle, Sparkles, TrendingUp } from '@/lib/icons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -60,9 +60,20 @@ export interface CreateBotDialogProps {
   /** The user's bots — a new bot can start from one of them. */
   bots?: AutomationView[];
   onCreated: (bot: AutomationView) => void;
+  /** Optional ready-made starters. Kept here so the empty page has two actions. */
+  onUseTemplate?: (template: 'desk' | 'institution' | 'finance' | 'eur1m') => void;
 }
 
-export function CreateBotDialog({ open, onOpenChange, existingNames, bots = [], onCreated }: CreateBotDialogProps) {
+const TEMPLATES = [
+  { id: 'finance', icon: Sparkles, titleKey: 'bots.templates.finance', bodyKey: 'bots.templates.financeBody' },
+  { id: 'eur1m', icon: TrendingUp, titleKey: 'bots.templates.eur1m', bodyKey: 'bots.templates.eur1mBody' },
+  { id: 'institution', icon: Landmark, titleKey: 'bots.templates.institution', bodyKey: 'bots.templates.institutionBody' },
+  { id: 'desk', icon: Briefcase, titleKey: 'bots.templates.desk', bodyKey: 'bots.templates.deskBody' },
+] as const;
+
+export function CreateBotDialog({
+  open, onOpenChange, existingNames, bots = [], onCreated, onUseTemplate,
+}: CreateBotDialogProps) {
   const t = useT();
   const setAvatar = useBotAvatarStore((s) => s.setAvatar);
   const setAvatarImage = useBotAvatarStore((s) => s.setImage);
@@ -416,6 +427,34 @@ export function CreateBotDialog({ open, onOpenChange, existingNames, bots = [], 
           <DialogTitle>{t('bots.dialog.title')}</DialogTitle>
           <DialogDescription>{t('bots.dialog.subtitle')}</DialogDescription>
         </DialogHeader>
+
+        {/* Ready-made starters. They replace the six buttons that used to crowd
+            the empty Bots page; the page now offers only Create bot / Group chat. */}
+        {onUseTemplate && (
+          <div>
+            <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">
+              {t('bots.templates.title')}
+            </div>
+            <div className="grid gap-1.5 sm:grid-cols-2">
+              {TEMPLATES.map(({ id, icon: Icon, titleKey, bodyKey }) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => onUseTemplate(id)}
+                  className="group flex items-start gap-2 rounded-xl border border-white/10 bg-white/[0.02] px-2.5 py-2 text-left transition-colors hover:border-white/20 hover:bg-white/[0.05]"
+                >
+                  <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white/[0.06] text-primary">
+                    <Icon size={14} />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block truncate text-[12px] font-semibold">{t(titleKey)}</span>
+                    <span className="block text-[10px] leading-snug text-muted-foreground">{t(bodyKey)}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Start from an existing bot (a copy — the original is untouched). */}
         {bots.length > 0 && (

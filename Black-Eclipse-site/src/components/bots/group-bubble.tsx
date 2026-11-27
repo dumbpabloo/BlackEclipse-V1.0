@@ -33,6 +33,7 @@ export interface GroupBubbleProps {
   onRegenerate?: (id: string) => void;
   onRetry?: (id: string) => void;
   onFeedback?: (id: string, fb: 'up' | 'down') => void;
+  onReact?: (emoji: string) => void;
 }
 
 export function GroupBubble({
@@ -48,6 +49,7 @@ export function GroupBubble({
   onRegenerate,
   onRetry,
   onFeedback,
+  onReact,
 }: GroupBubbleProps) {
   const t = useT();
   const avatars = useBotAvatarStore((s) => s.avatars);
@@ -122,8 +124,36 @@ export function GroupBubble({
           <MessageSquareText size={12} />
         </button>
       )}
+      {onReact && ['👍', '🎯', '❤️', '❓'].map((emoji) => (
+        <button
+          key={emoji}
+          type="button"
+          onClick={() => onReact(emoji)}
+          className={btn}
+          title={`${t('bots.chat.react')} ${emoji}`}
+          aria-label={`${t('bots.chat.react')} ${emoji}`}
+        >
+          <span className="text-[11px] leading-none">{emoji}</span>
+        </button>
+      ))}
     </div>
   );
+  const reactions = message.reactions && Object.keys(message.reactions).length
+    ? (
+      <div className="mt-1 flex flex-wrap items-center gap-1">
+        {Object.entries(message.reactions).map(([emoji, count]) => (
+          <button
+            key={emoji}
+            type="button"
+            onClick={() => onReact?.(emoji)}
+            className="rounded-full border border-border/40 bg-white/[0.04] px-1.5 py-px text-[10px] hover:border-border"
+            title={`${emoji} ${count}`}
+          >
+            {emoji} {count}
+          </button>
+        ))}
+      </div>
+    ) : null;
   const quote = replyParent ? (
     <div className="mb-1 rounded-lg border-l-2 border-primary/40 bg-white/[0.03] px-2 py-1 text-[10px] text-muted-foreground">
       <span className="font-semibold text-foreground/80">
@@ -173,6 +203,7 @@ export function GroupBubble({
           </div>
           {quote}
           {task}
+          {reactions}
           {message.delegations && message.delegations.length > 0 && (
             <ParallelAgentsPanel delegations={message.delegations} compact />
           )}
@@ -206,6 +237,7 @@ export function GroupBubble({
           )}
           {quote}
           {task}
+          {reactions}
           <div className="whitespace-pre-wrap break-words">{message.content}</div>
         </div>
         {timeRow}

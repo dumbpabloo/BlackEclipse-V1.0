@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
 import {
   ArrowUp, CalendarDays, CheckCircle2, ChevronDown, Copy, FileText, Loader2, MessageSquareText,
-  Pause, Play, Plus, RefreshCw, Settings, SquarePen, ThumbsDown, ThumbsUp, Trash2, Users, X,
+  Pause, Paperclip, Play, Plus, RefreshCw, Settings, SquarePen, ThumbsDown, ThumbsUp, Trash2, Users, X,
 } from '@/lib/icons';
 import { Button } from '@/components/ui/button';
 import {
@@ -83,6 +83,7 @@ export function GroupChatRoom({ group, bots, active = true, onDeleted, onChanged
   const setMessages = useBotGroupsStore((s) => s.setMessages);
   const updateMessage = useBotGroupsStore((s) => s.updateMessage);
   const clearMessages = useBotGroupsStore((s) => s.clearMessages);
+  const setGroupReaction = useBotGroupsStore((s) => s.react);
   const deleteGroup = useBotGroupsStore((s) => s.deleteGroup);
   // The right-docked scheduled-jobs rail is the shared Agent Workspace dock.
   const schedulerOpen = useWorkspaceStore((s) => s.open);
@@ -934,6 +935,7 @@ export function GroupChatRoom({ group, bots, active = true, onDeleted, onChanged
                   : undefined
               }
               onFeedback={setGroupFeedback}
+              onReact={(emoji) => setGroupReaction(group.id, m.id, emoji)}
             />
           );
         })}
@@ -1051,60 +1053,72 @@ export function GroupChatRoom({ group, bots, active = true, onDeleted, onChanged
           </DropdownMenu>
           <span className="truncate text-[10px] text-muted-foreground">{t('bots.groups.audienceHint')}</span>
         </div>
-        <div className="relative flex items-end gap-2">
-          {mentionQuery !== null && mentionMatches.length > 0 && (
-            <ul className="glass-card-strong absolute bottom-full left-0 z-30 mb-2 max-h-48 w-56 overflow-y-auto rounded-xl border border-border/40 p-1 shadow-xl shadow-black/40">
-              {mentionMatches.map((b) => (
-                <li key={b.id}>
-                  <button
-                    type="button"
-                    onClick={() => pickMention(b)}
-                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-white/[0.06]"
-                  >
-                    <BotAvatar botId={b.id} spec={avatarFor(avatars, b.id)} size={18} title={b.name} />
-                    <span className="truncate">{b.name}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => onInputChange(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); }
-              if (e.key === 'Escape' && mentionQuery !== null) { e.preventDefault(); setMentionQuery(null); }
-            }}
-            rows={1}
-            placeholder={t('bots.groups.composer')}
-            aria-label={t('bots.groups.composer')}
-            className="glass-composer max-h-[200px] min-h-10 flex-1 resize-none overflow-y-auto rounded-xl border border-white/10 px-3 py-2 text-sm outline-none dark:border-white/5"
-          />
-          {!sending && (
-            <Button
-              size="icon"
-              variant="ghost"
+        <div className="glass-composer rounded-2xl border border-white/10 px-2 py-1.5 shadow-sm shadow-black/10 transition-colors focus-within:border-primary/60 focus-within:ring-1 focus-within:ring-primary/25 dark:border-white/5">
+          <div className="relative flex items-end gap-1">
+            {mentionQuery !== null && mentionMatches.length > 0 && (
+              <ul className="glass-card-strong absolute bottom-full left-0 z-30 mb-2 max-h-48 w-56 overflow-y-auto rounded-xl border border-border/40 p-1 shadow-xl shadow-black/40">
+                {mentionMatches.map((b) => (
+                  <li key={b.id}>
+                    <button
+                      type="button"
+                      onClick={() => pickMention(b)}
+                      className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-white/[0.06]"
+                    >
+                      <BotAvatar botId={b.id} spec={avatarFor(avatars, b.id)} size={18} title={b.name} />
+                      <span className="truncate">{b.name}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => onInputChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); }
+                if (e.key === 'Escape' && mentionQuery !== null) { e.preventDefault(); setMentionQuery(null); }
+              }}
+              rows={1}
+              placeholder={t('bots.groups.composer')}
+              aria-label={t('bots.groups.composer')}
+              className="chat-composer-scroll min-h-9 min-w-0 flex-1 resize-none self-center overflow-y-auto border-0 bg-transparent px-2 py-1.5 text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground focus:outline-none focus:ring-0"
+            />
+            <button
+              type="button"
               onClick={() => attachInputRef.current?.click()}
-              disabled={attachBusy}
-              title="Attach a document"
-              aria-label="Attach a document"
+              disabled={attachBusy || sending}
+              className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-white/10 hover:text-foreground disabled:opacity-40"
+              title={t('bots.composer.attach')}
+              aria-label={t('bots.composer.attach')}
             >
-              <Plus size={15} />
-            </Button>
-          )}
-          {sending ? (
-            <Button size="icon" variant="outline" onClick={stop} title={t('bots.groups.stop')} aria-label={t('bots.groups.stop')}>
-              <Pause size={15} />
-            </Button>
-          ) : (
-            <Button size="icon" onClick={() => void send()} disabled={!input.trim() || attachBusy} aria-label={t('bots.groups.composer')}>
-              <ArrowUp size={15} />
-            </Button>
-          )}
+              <Paperclip size={15} />
+            </button>
+            {sending ? (
+              <button
+                type="button"
+                onClick={stop}
+                title={t('bots.groups.stop')}
+                aria-label={t('bots.groups.stop')}
+                className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full bg-foreground text-background transition-colors hover:bg-foreground/90"
+              >
+                <Pause size={14} fill="currentColor" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void send()}
+                disabled={!input.trim() || attachBusy}
+                aria-label={t('bots.groups.composer')}
+                className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full bg-primary text-primary-foreground transition-opacity hover:bg-primary/90 disabled:opacity-40 disabled:hover:bg-primary"
+              >
+                <ArrowUp size={16} />
+              </button>
+            )}
+          </div>
         </div>
-        <div className="mt-1.5 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
-          <span className="truncate">{t('bots.groups.membersTitle')}: {members.map((m) => m.name).join(', ') || 'â€”'}</span>
+        <div className="mt-1.5 flex items-center justify-between gap-2 px-1 text-[10px] text-muted-foreground">
+          <span className="truncate">{t('bots.groups.membersTitle')}: {members.map((m) => m.name).join(', ') || '—'}</span>
           {messages.length > 0 && (
             <button type="button" onClick={() => clearMessages(group.id)} className="shrink-0 hover:text-foreground">
               {t('bots.groups.clear')}

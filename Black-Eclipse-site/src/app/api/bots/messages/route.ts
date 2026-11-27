@@ -32,6 +32,7 @@ function isMessage(value: unknown): value is {
   feedback?: "up" | "down" | null;
   authorId?: string | null;
   authorName?: string | null;
+  threadId?: string | null;
   payload?: unknown;
 } {
   if (!value || typeof value !== "object") return false;
@@ -117,8 +118,17 @@ export async function POST(request: Request) {
     if (kind === "chat") {
       await prisma.botChatMessage.upsert({
         where: { id: message.id },
-        create: { id: message.id, botId: scopeId, ...common },
-        update: { ...common, revision: { increment: 1 } },
+        create: {
+          id: message.id,
+          botId: scopeId,
+          threadId: message.threadId || "main",
+          ...common,
+        },
+        update: {
+          ...common,
+          ...(message.threadId ? { threadId: message.threadId } : {}),
+          revision: { increment: 1 },
+        },
       });
     } else {
       await prisma.botGroupMessage.upsert({
@@ -154,9 +164,17 @@ export async function PUT(request: Request) {
   } catch {
     return badRequest("invalid JSON body");
   }
-  const input = (body ?? {}) as { kind?: unknown; scopeId?: unknown; messages?: unknown };
+  const input = (body ?? {}) as {
+    kind?: unknown;
+    scopeId?: unknown;
+    messages?: unknown;
+    threadId?: unknown;
+  };
   const kind = parseKind(input.kind);
   const scopeId = typeof input.scopeId === "string" ? input.scopeId.trim() : "";
+  const threadId = typeof input.threadId === "string" && input.threadId.trim()
+    ? input.threadId.trim().slice(0, 120)
+    : null;
   if (!kind) return badRequest("kind must be chat or groups");
   if (!scopeId) return badRequest("scopeId is required");
   if (!Array.isArray(input.messages)) return badRequest("messages must be an array");
@@ -167,12 +185,20 @@ export async function PUT(request: Request) {
   try {
     await prisma.$transaction(async (tx) => {
       if (kind === "chat") {
-        await tx.botChatMessage.deleteMany({ where: { botId: scopeId } });
+        await tx.botChatMessage.deleteMany({
+          where: {
+            botId: scopeId,
+            ...(threadId === "main"
+              ? { OR: [{ threadId: "main" }, { threadId: null }] }
+              : threadId ? { threadId } : {}),
+          },
+        });
         for (const message of messages) {
           await tx.botChatMessage.create({
             data: {
               id: message.id,
               botId: scopeId,
+              threadId: threadId || message.threadId || "main",
               role: message.role,
               content: message.content,
               at: message.at,

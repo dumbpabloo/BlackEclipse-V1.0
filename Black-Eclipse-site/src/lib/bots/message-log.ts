@@ -20,6 +20,8 @@ export interface LoggedMessage {
   feedback?: 'up' | 'down' | null;
   authorId?: string | null;
   authorName?: string | null;
+  /** Bot chat side thread id (`main` or a branch id). */
+  threadId?: string | null;
   /** Structured UI extras (delegations, pending approval/clarification). */
   payload?: unknown;
 }
@@ -73,6 +75,7 @@ export async function replaceBotMessages(
   scopeId: string,
   messages: LoggedMessage[],
   payloadFor?: (message: LoggedMessage) => unknown,
+  threadId?: string,
 ): Promise<boolean> {
   if (typeof window === 'undefined') return false;
   try {
@@ -82,6 +85,7 @@ export async function replaceBotMessages(
       body: JSON.stringify({
         kind,
         scopeId,
+        ...(threadId ? { threadId } : {}),
         messages: messages.map((m) => ({
           ...m,
           payload: payloadFor ? payloadFor(m) : m.payload,

@@ -62,3 +62,19 @@ describe('group room mode', () => {
     expect(useBotGroupsStore.getState().groups[0].leadId).toBeNull();
   });
 });
+
+describe('group message reactions', () => {
+  beforeEach(() => {
+    useBotGroupsStore.setState({ groups: [], byGroup: {}, hydrated: true });
+  });
+
+  it('counts reactions on the specific message', () => {
+    const group = useBotGroupsStore.getState().createGroup({ name: 'Room', memberIds: ['a'] });
+    useBotGroupsStore.getState().appendMessage(group.id, {
+      id: 'm1', role: 'assistant', content: 'answer', at: '2026-01-01T00:00:00Z',
+    });
+    useBotGroupsStore.getState().react(group.id, 'm1', '👍');
+    useBotGroupsStore.getState().react(group.id, 'm1', '👍');
+    expect(useBotGroupsStore.getState().byGroup[group.id][0].reactions).toEqual({ '👍': 2 });
+  });
+});
