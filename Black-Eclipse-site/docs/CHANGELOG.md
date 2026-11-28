@@ -6,6 +6,15 @@ Older entries are **moved, never deleted** into [`docs/changelog/`](./changelog/
 
 ## 2026-11-27
 
+- **docs(updates): record the published v0.4.31 manifest.** `desktop-release.yml`
+  built the Windows installer (`195,555,083` bytes, sha256 `622d4216…`) and the
+  prebuilt archive (`80,522,912` bytes, sha256 `60c3f211…`, buildId
+  `O858p8KbVNOQMn_Mme_xm`, lockHash `78c740b8…`) into a draft; `stable.json` was
+  signed locally with key id `47e545f302249385`, uploaded to the draft, and the
+  release published. `node scripts/update.js --check` reports
+  `latest signed release: v0.4.31`. docs updated: `docs/UPDATES.md` (release
+  state), `docs/CHANGELOG.md`.
+
 - **release: v0.4.31.** Version bumped in `package.json`, `package-lock.json`,
   `pyproject.toml`, `python/harness/__init__.py` and the README's current-version
   line; SBOM and published benchmarks regenerated. Ships the Self-Improvement
